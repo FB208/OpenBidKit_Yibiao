@@ -68,13 +68,15 @@ async function checkTask(directory, outputDir) {
   let pauseConversion = false;
   let pauseGeneration = false;
   const args = {
+    layoutDocument: async () => ({ pages: [], destinations: [] }),
+    templateStore: { getTemplate: () => ({ config: { page: { size: 'A4' } } }) },
     aiService: { chat: async ({ logTitle }) => logTitle.includes('交付') ? body.replace('施工准备与检查', '交付准备与检查') : body },
     workspaceStore: { loadTechnicalPlan: () => state, getContentWordOutputDir: () => outputDir },
     taskControl: { signal: new AbortController().signal, isPauseRequested: () => pauseRequested },
     updateTask: checkpoint, checkpointTask: checkpoint,
     agentService: {
       hasPersistentTaskSession: () => true, updatePersistentTask() {},
-      loadPersistentTask: () => ({ state: {} }),
+      loadPersistentTask: () => ({ paths: { workspaceDir: directory }, state: {} }),
       async runTask(payload) {
         aiRuns++;
         const tools = payload.create_tools({ Type, workspaceDir: directory });
@@ -120,6 +122,7 @@ async function checkTask(directory, outputDir) {
       assert.equal(options.copyAssets, true);
       assert.equal(options.assetRoot, directory);
       assert.equal(config.page.size, 'A4');
+      if (options?.wholeDocument) return { bytes: Buffer.from('自检 Word') };
       conversions++;
       assert.ok([body, body.replace('施工准备与检查', '交付准备与检查')].includes(html), '小节转换应直接使用正文，不附加目录标题');
       if (conversions === 2 && failConversion) throw new Error('模拟转换失败');
@@ -135,7 +138,7 @@ async function checkTask(directory, outputDir) {
     assert.equal(state.contentGenerationSections[targets[1].id].status, 'idle');
     assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, [targets[1].id]);
     assert.equal(state.contentGenerationTask.stats.content.current_words, 32);
-    assert.equal(state.contentGenerationTask.progress, 88);
+    assert.equal(state.contentGenerationTask.progress, 94);
     assert.equal(state.contentGenerationRuntime.html_output.word_output_dir, outputDir);
     assert.equal(fs.readFileSync(path.join(outputDir, 'f0000000-0000-4000-8000-000000000012.docx'), 'utf8'), '准备 Word', '成功覆盖原结果');
     assert.equal(fs.readFileSync(path.join(outputDir, 'a0000000-0000-4000-8000-000000000010.docx'), 'utf8'), '第二节原结果', '失败保留原结果');
@@ -206,7 +209,7 @@ async function checkTask(directory, outputDir) {
       state.contentGenerationTask = { status: 'paused' };
       const failure = new Error(`模拟${stage}最终失败`);
       const retryAgent = { ...args.agentService,
-        loadPersistentTask: () => ({ state: persistentState }),
+        loadPersistentTask: () => ({ paths: { workspaceDir: directory }, state: persistentState }),
         updatePersistentTask(_key, partial) { Object.assign(persistentState, partial); },
         async runTask() { throw failure; },
       };
@@ -240,7 +243,7 @@ async function checkTask(directory, outputDir) {
       retainedFiles.forEach((file, index) => assert.deepEqual(fs.readFileSync(path.join(directory, file)), retainedBytes[index], file));
       assert.equal(timers.size, 0);
     }
-    for (const [phase, target, label] of [['generating', targets[0].id, '重试小节修改'], ['auditing', '', '继续一致性审计'], ['word-converting', '', '重试 Word 转换']]) {
+    for (const [phase, target, label] of [['generating', targets[0].id, '重试小节修改'], ['auditing', '', '继续一致性审计'], ['word-converting', '', '重试 Word 转换'], ['layout-checking', '', '重试格式自检']]) {
       await checkGenerationRetryButton({ status: 'error', stats: { content: { phase } } }, { target_item_id: target }, label);
     }
     console.log('全文写作、配图、扩缩写失败后，页面原会话重试、输入及文件保留、图片保护恢复检查通过。');
@@ -255,7 +258,7 @@ async function checkTask(directory, outputDir) {
     state.contentGenerationTask = { status: 'running', progress: 0 };
     await runContentGenerationTask({ ...args, previousState: previous, payload: { retryFailedSections: true }, agentService: {
       hasPersistentTaskSession: () => true,
-      loadPersistentTask: () => ({ state: persistent }),
+      loadPersistentTask: () => ({ paths: { workspaceDir: directory }, state: persistent }),
       updatePersistentTask(_key, partial) { Object.assign(persistent, partial); },
       async runTask(payload) {
         resumedAudit = true;
@@ -272,6 +275,40 @@ async function checkTask(directory, outputDir) {
     assert.equal(resumedAudit, true);
     assert.equal(state.contentGenerationTask.status, 'success');
     assert.equal(timers.size, 0);
+    // 自检已补写、尚未复查：失败与暂停恢复均只重建临时 Word，不重新生成或补写。
+    const layoutState = { layout_check: { status: 'rechecking', jobs: targets.map(section => ({ section_id: section.id })), completed_section_ids: targets.map(section => section.id) } };
+    let layoutMode = 'fail';
+    let tempWord;
+    const layoutArgs = { ...args, agentService: { ...args.agentService,
+      loadPersistentTask: () => ({ paths: { workspaceDir: directory }, state: layoutState }),
+      updatePersistentTask(_key, patch) { Object.assign(layoutState, patch); },
+      async runTask() { throw new Error('格式复查不应调用 Agent'); },
+    }, layoutDocument: async file => {
+      tempWord = file;
+      assert.ok(fs.existsSync(file));
+      assert.ok(!file.startsWith(directory), '临时 Word 不进入正文工作区');
+      if (layoutMode === 'fail') throw new Error('模拟格式自检解析失败');
+      if (layoutMode === 'pause') { pauseRequested = true; throw Object.assign(new Error('暂停自检'), { name: 'AbortError' }); }
+      return { pages: [], destinations: [] };
+    } };
+    state.contentGenerationRuntime.phase = 'layout-checking';
+    state.contentGenerationRuntime.target_item_id = '';
+    state.contentGenerationTask = { status: 'paused' };
+    await assert.rejects(runContentGenerationTask({ ...layoutArgs, previousState: structuredClone(state), payload: { resume: true } }), /模拟格式自检/);
+    assert.equal(state.contentGenerationRuntime.phase, 'layout-checking');
+    assert.equal(fs.existsSync(path.dirname(tempWord)), false, '失败也要清理临时 Word');
+    const retryLayout = await checkGenerationRetryButton(state.contentGenerationTask, state.contentGenerationRuntime, '重试格式自检');
+    layoutMode = 'pause';
+    await runContentGenerationTask({ ...layoutArgs, previousState: structuredClone(state), payload: retryLayout });
+    assert.equal(state.contentGenerationTask.status, 'paused');
+    assert.equal(fs.existsSync(path.dirname(tempWord)), false);
+    layoutMode = 'success';
+    pauseRequested = false;
+    await runContentGenerationTask({ ...layoutArgs, previousState: structuredClone(state), payload: { resume: true } });
+    assert.equal(state.contentGenerationTask.status, 'success');
+    assert.equal(layoutState.layout_check.status, 'completed');
+    assert.equal(timers.size, 0);
+    console.log('格式自检 runner：失败按钮、暂停续接、原 HTML 复用、无重复补写、临时产物清理通过。');
     // 仅一个小节待生成：已完成小节即使数据库正文为空，也不重新进入目标。
     state.contentGenerationRuntime = { generation_started: true, phase: 'planning', completed_stages: ['planning'],
       pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 16 },
@@ -404,11 +441,13 @@ async function checkTableCleanupTask(directory, outputDir) {
     state = { ...state, ...structuredClone(patch || {}), contentGenerationTask: { ...state.contentGenerationTask, ...structuredClone(task) } };
   };
   const args = {
+    layoutDocument: async () => ({ pages: [], destinations: [] }),
+    templateStore: { getTemplate: () => ({ config: { page: { size: 'A4' } } }) },
     aiService: {}, workspaceStore: { loadTechnicalPlan: () => state, getContentWordOutputDir: () => outputDir },
     updateTask: save, checkpointTask: save,
     taskControl: { signal: new AbortController().signal, isPauseRequested: () => pauseRequested },
     agentService: {
-      hasPersistentTaskSession: () => true, loadPersistentTask: () => ({ state: persistent }),
+      hasPersistentTaskSession: () => true, loadPersistentTask: () => ({ paths: { workspaceDir: directory }, state: persistent }),
       updatePersistentTask(_key, patch) { persistent = { ...persistent, ...structuredClone(patch) }; },
       async runTask(payload) {
         if (!payload.primary_session) {
@@ -441,10 +480,11 @@ async function checkTableCleanupTask(directory, outputDir) {
         return { workspace_dir: directory };
       },
     },
-    openXmlHelperService: { async createRestrictedHtmlDocx(html) {
+    openXmlHelperService: { async createRestrictedHtmlDocx(html, _config, options) {
       assert.equal(persistent.table_cleanup.status, 'completed');
       assert.doesNotMatch(html, /<table/);
       assert.match(html, /本节责任由项目组承担/);
+      if (options?.wholeDocument) return { bytes: Buffer.from('自检 Word') };
       conversions++;
       return { bytes: Buffer.from('已去表格 Word') };
     } },
@@ -479,7 +519,7 @@ async function checkGenerationRetryButton(task, contentGenerationRuntime, expect
   const ts = require('typescript');
   const source = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/ContentEditPage.tsx'), 'utf8');
   const ast = ts.createSourceFile('page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ['retryingWordConversion', 'retryingConsistency', 'retryingSectionModification', 'retryingBodyGeneration', 'retryingTableCleanup', 'generationButtonLabel', 'retryFailedSections', 'handleGenerationButtonClick'];
+  const names = ['retryingWordConversion', 'retryingConsistency', 'retryingSectionModification', 'retryingBodyGeneration', 'retryingTableCleanup', 'retryingLayoutCheck', 'generationButtonLabel', 'retryFailedSections', 'handleGenerationButtonClick'];
   const statements = new Map();
   function visit(node) {
     if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) statements.set(node.name.getText(ast), `const ${node.getText(ast)};`);

@@ -11,8 +11,10 @@ const {
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { CONTENT_PLANNING_AGENT_TASK_KEY } = require('./contentPlanningAgentConfig.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
-const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, runContentGenerationAgent, readContentGenerationResult } = require('./contentGenerationAgent.cjs');
+const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, runContentGenerationAgent, runContentLayoutAgent, readContentGenerationResult } = require('./contentGenerationAgent.cjs');
 const { scanGeneratedSections, convertContentSections } = require('./contentGenerationOutput.cjs');
+const { createTechnicalPlanExport } = require('./technicalPlanExport.cjs');
+const { runContentLayoutCheck, readWordLayout } = require('./contentGenerationLayout.cjs');
 
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
@@ -1176,13 +1178,14 @@ const CONTENT_PHASE_LABELS = {
   'word-completed': '转换完成',
   auditing: '全文一致性检查',
   'table-cleaning': '表格清理',
+  'layout-checking': '格式自检',
   done: '已完成',
 };
 
 const CONTENT_PROGRESS_PROFILES = {
   html: {
-    planning: [0, 12], restoring: [12, 18], generating: [18, 70], auditing: [70, 80], 'table-cleaning': [80, 85],
-    'sections-completed': [85, 85], 'word-converting': [85, 90], 'word-completed': [90, 90],
+    planning: [0, 12], restoring: [12, 18], generating: [18, 70], auditing: [70, 80], 'table-cleaning': [80, 83], 'layout-checking': [83, 88],
+    'sections-completed': [88, 88], 'word-converting': [88, 99], 'word-completed': [99, 99],
   },
   'html-single': {
     planning: [0, 15], restoring: [15, 25], generating: [25, 70], auditing: [70, 80], 'table-cleaning': [80, 85],
@@ -1259,6 +1262,13 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     total = stats.table_cleanup_total;
     phaseProgress = percentageFor(completed, total);
     step = 'cleaning';
+  } else if (phase === 'layout-checking') {
+    completed = stats.layout_completed;
+    total = stats.layout_total;
+    phaseProgress = stats.layout_status === 'completed' ? 100 : stats.layout_status === 'rechecking' ? 90
+      : stats.layout_status === 'supplementing' ? 20 + percentageFor(completed, total) * 0.6 : 0;
+    step = stats.layout_status || 'checking';
+    stepLabel = ({ checking: '正在导出并检测页栏留白', supplementing: '正在并发补写', rechecking: '正在重新导出复查', completed: '格式自检完成' })[step];
   } else if (phase === 'done') {
     completed = 1;
     total = 1;
@@ -1320,7 +1330,7 @@ function withSection(sections, item, partial) {
   };
 }
 
-async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState }) {
+async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState, layoutDocument = readWordLayout }) {
   const resume = Boolean(payload.resume);
   const loadedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const continuing = resume || ['retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections'].some(field => payload[field]);
@@ -1365,6 +1375,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let contentRuntime = normalizeContentGenerationRuntime(storedPlan.contentGenerationRuntime || previousState?.contentGenerationRuntime);
   const continuingConsistency = Boolean((resume || retryFailedSections) && contentRuntime.phase === 'auditing');
   const continuingTableCleanup = Boolean((resume || retryFailedSections) && contentRuntime.phase === 'table-cleaning');
+  const continuingLayout = Boolean((resume || retryFailedSections) && contentRuntime.phase === 'layout-checking');
   const continuingBody = Boolean((resume || retryFailedSections) && ['generating', 'auditing', 'table-cleaning'].includes(contentRuntime.phase));
   const continuingConversion = Boolean((resume || retryFailedSections)
     && ['sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase) && contentRuntime.html_output);
@@ -1397,7 +1408,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
   const contentStats = {
-    phase: continuingTableCleanup ? 'table-cleaning' : continuingConsistency ? 'auditing' : 'planning',
+    phase: continuingLayout ? 'layout-checking' : continuingTableCleanup ? 'table-cleaning' : continuingConsistency ? 'auditing' : 'planning',
     planning_total: 0,
     planning_completed: 0,
     restoration_total: 0,
@@ -1477,7 +1488,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     regenerate_requirement: regenerateRequirement,
   });
 
-  if (continuingConsistency || continuingTableCleanup) tasksToRun = [];
+  if (continuingConsistency || continuingTableCleanup || continuingLayout) tasksToRun = [];
 
   for (const { item } of tasksToRun) {
     const existing = sections[item.id] || {};
@@ -1534,7 +1545,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const htmlWorkflow = !retryContentCorrection
-    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'auditing', 'table-cleaning', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
+    && (!resume || !contentRuntime.phase || ['planning', 'restoring', 'generating', 'auditing', 'table-cleaning', 'layout-checking', 'sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase));
   const progressMode = resume && storedPlan.contentGenerationTask?.progress_detail?.mode
     ? storedPlan.contentGenerationTask.progress_detail.mode
         : retryContentCorrection
@@ -1542,7 +1553,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           : targetItemId
             ? (htmlWorkflow ? 'html-single' : 'single')
             : (htmlWorkflow ? 'html' : 'full');
-  let lastTaskProgress = resume || (retryFailedSections && (contentRuntime.html_output || continuingConsistency || continuingTableCleanup))
+  let lastTaskProgress = resume || (retryFailedSections && (contentRuntime.html_output || continuingConsistency || continuingTableCleanup || continuingLayout))
     ? Math.max(0, Number(previousState?.contentGenerationTask?.progress) || 0) : 0;
 
   // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
@@ -2323,7 +2334,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       if (continuingConversion) {
         result = readContentGenerationResult(contentRuntime.html_output.workspace_dir);
       } else {
-        result = await runContentGenerationAgent({
+        result = continuingLayout
+          ? readContentGenerationResult(agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).paths.workspaceDir)
+          : await runContentGenerationAgent({
           agentService, aiService, resume: continuingBody,
           hasKnowledgeBase: referenceKnowledgeDocumentIds.length > 0,
           hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
@@ -2394,6 +2407,30 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           },
         });
         clearInterval(scanTimer);
+        if (!targetItemId) {
+          await runContentLayoutCheck({
+            exporter: createTechnicalPlanExport({ technicalPlanStore: workspaceStore, templateStore, agentService, openXmlHelperService }),
+            taskKey: CONTENT_GENERATION_AGENT_TASK_KEY, agentService, result, signal, resume: continuingLayout, layoutDocument,
+            supplement: layout => runContentLayoutAgent({ agentService, signal, layout,
+              onCheckpoint: checkpoint => updateContentAgentState({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY }),
+              onActivity(event = {}) {
+                if (event.visible !== false && event.message) publishTaskUpdate({ status: 'running', logs: [...logs, `格式自检 Agent：${event.message}`], stats: statsSnapshot() });
+              },
+            }),
+            onProgress(state) {
+              contentStats.phase = 'layout-checking';
+              contentStats.layout_status = state.status;
+              contentStats.layout_total = state.jobs.length;
+              contentStats.layout_completed = state.completed_section_ids.length;
+              if (state.status === 'completed') logs = [...logs, state.remaining_gaps.length
+                ? `格式自检补写后仍有 ${state.remaining_gaps.length} 处明显留白，本轮不再补写：${state.remaining_gaps.map(gap => `第${gap.page}页第${gap.column}栏约${gap.gap_cm}cm`).join('；')}`
+                : '格式自检完成，未发现本次目标小节中需要补写的明显页栏留白。'];
+              checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'layout-checking' }) });
+            },
+          });
+          // 补写后只刷新实际字数，不再次启动字数调整或一致性审计。
+          result = readContentGenerationResult(result.workspaceDir);
+        }
         contentRuntime.html_output = {
           workspace_dir: result.workspaceDir,
           word_output_dir: workspaceStore.getContentWordOutputDir(),
@@ -2464,6 +2501,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         }
         persistPausedContentGeneration(['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase)
           ? 'Word 转换已暂停，已完成文件保留，继续时只转换剩余小节。'
+          : contentStats.phase === 'layout-checking'
+            ? '格式自检已暂停，补写进度已保留，继续后只处理未完成任务并复查。'
           : contentStats.phase === 'table-cleaning'
             ? '去表格已暂停，正文和处理进度已保留，继续后在原会话中接着处理。'
           : contentStats.phase === 'auditing'
@@ -2480,7 +2519,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   try {
-    if (continuingConsistency || continuingTableCleanup) {
+    if (continuingConsistency || continuingTableCleanup || continuingLayout) {
       await runContentGeneration([]);
       return;
     }

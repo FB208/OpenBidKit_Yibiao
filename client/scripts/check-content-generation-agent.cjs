@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
+const { buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, runContentLayoutAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { createContentGenerationImageTools } = require('../electron/services/contentGenerationImageTools.cjs');
 
 // 用真实文本队列核对源码并发、独立落盘和渲染交接，不请求外部模型。
@@ -741,6 +741,7 @@ async function main() {
     }
     await checkImageProtectionLifecycle({ Type, workspaceDir, files, signal });
     await checkTableCleanup({ Type, workspaceDir: path.join(workspaceDir, '去表格'), fileOptions, signal });
+    await checkLayoutSupplement({ Type, workspaceDir, signal });
     fs.unlinkSync(firstFile);
     assert.throws(() => readContentGenerationResult(workspaceDir), /ENOENT/);
     console.log('正文 Agent：还原底稿及原图、知识库有无选择、页面图片设置联动、配图需求传递、输入、并发、暂停恢复、三类图片工具及最终图片引用检查通过。');
@@ -1036,6 +1037,61 @@ async function checkLocalRendering(workspaceDir) {
   assert.ok(mermaid.width > 24 && mermaid.height > 24);
   assert.deepEqual(nativeImage.createFromPath(path.join(workspaceDir, mermaid.asset_ref)).getSize(), { width: mermaid.width, height: mermaid.height });
   console.log('固定画布越界、隐藏溢出裁切与Mermaid原有转图检查通过。');
+}
+
+// 格式自检沿用主会话；两个编辑任务真正并发，成功项不重做，图片修改在写入前拒绝。
+async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
+  const targets = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8')).targets;
+  let state = { status: 'supplementing', jobs: targets.map(section => ({ section_id: section.id, file: section.file, gaps: [{ figure_ids: ['图'], suggested_words: 50 }] })), completed_section_ids: [] };
+  const layout = { get: () => state, save: next => { state = next; } };
+  let running = 0;
+  let peak = 0;
+  let failFirst = true;
+  const calls = [];
+  const agentService = { updatePersistentTask() {}, async runTask(payload) {
+    if (!payload.primary_session) {
+      assert.equal(payload.failure_handled_by_parent, true);
+      assert.deepEqual(payload.active_tools, ['read', 'edit', 'report-failure']);
+      running++;
+      peak = Math.max(peak, running);
+      calls.push(payload.output_file);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 15));
+        if (payload.output_file === targets[0].file && failFirst) throw new Error('可恢复的补写失败');
+        const file = path.join(workspaceDir, payload.output_file);
+        const original = fs.readFileSync(file, 'utf8');
+        assert.throws(() => payload.before_file_write({ filePath: file, originalContent: original, content: original + '<figure><img></figure>', toolName: 'edit' }), /受保护图片/);
+        const html = original + '\n<!-- yibiao:block -->\n<p>补充现场复核工作安排。</p>';
+        payload.before_file_write({ filePath: file, originalContent: original, content: html, toolName: 'edit' });
+        fs.writeFileSync(file, html, 'utf8');
+        payload.validateOutput({ output_content: html });
+        return {};
+      } finally { running--; }
+    }
+    assert.equal(payload.persistent_task.mode, 'resume');
+    assert.equal(payload.initial_stage, 'layout-checking');
+    assert.deepEqual(payload.files, []);
+    assert.ok(!payload.active_tools.includes('write'));
+    assert.match(payload.prompt, /不再调整全文字数/);
+    const tools = payload.create_tools({ Type, workspaceDir });
+    const supplement = tools.find(tool => tool.name === 'supplement-layout-sections');
+    const complete = tools.find(tool => tool.name === 'complete-layout-supplement');
+    let results = (await supplement.execute('batch', { section_ids: targets.map(section => section.id) })).details.results;
+    assert.equal(results.filter(item => item.status === 'error').length, 1);
+    assert.throws(() => complete.execute(), /未完成/);
+    await assert.rejects(supplement.execute('again', { section_ids: [targets[1].id] }), /未完成的格式补写/);
+    failFirst = false;
+    await supplement.execute('retry', { section_ids: [targets[0].id] });
+    complete.execute();
+    assert.deepEqual(payload.continueTask(), { complete: true });
+    payload.validateOutput({}, { workspace_dir: workspaceDir });
+    return { workspace_dir: workspaceDir };
+  } };
+  await runContentLayoutAgent({ agentService, signal, layout });
+  assert.equal(peak, 2);
+  assert.equal(calls.filter(file => file === targets[1].file).length, 1);
+  assert.equal(state.status, 'rechecking');
+  console.log('格式补写：原会话续接、真实并发、Pi edit 图片保护、失败重试与成功项复用通过。');
 }
 
 if (process.argv.includes('--original-store')) {

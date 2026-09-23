@@ -8,6 +8,7 @@ const { countHtmlWords, checkWordCount, createContentGenerationWordTools } = req
 const { createContentImageProtection } = require('./contentGenerationEditTools.cjs');
 const { CONSISTENCY_TOOLS, buildConsistencyPrompt, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
 const { TABLE_CLEANUP_TOOLS, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
+const { LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools } = require('./contentGenerationLayoutTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
 const RESULT_FILE = '正文生成结果.json';
@@ -305,7 +306,7 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
   const runId = crypto.randomUUID();
   if (reuseSession) agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
     run_id: runId, status: 'running', agent_connection: 'running', error: null,
-    ...(!resuming ? { phase: 'generating', word_adjustment_started: false, consistency: null, table_cleanup: null } : {}),
+    ...(!resuming ? { phase: 'generating', word_adjustment_started: false, consistency: null, table_cleanup: null, layout_check: null } : {}),
   });
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false,
@@ -376,4 +377,27 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
   return output;
 }
 
-module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult, checkSectionHtml };
+// 正文完成后续接原主会话，主 Agent 分配补写，子 Agent 用已有 edit 能力直接修改各自文件。
+async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoint, onActivity }) {
+  agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'running', phase: 'layout-checking', agent_connection: 'running' });
+  await agentService.runTask({
+    task_id: crypto.randomUUID(), title: '正文格式自检补写', primary_session: true, summary_enabled: false,
+    persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: 'resume' },
+    initial_stage: 'layout-checking', active_tools: LAYOUT_TOOLS, files: [],
+    prompt: buildLayoutPrompt(layout.get()), output_file: RESULT_FILE,
+    signal, max_retries: 1, timeout_ms: 30 * 60 * 1000,
+    create_tools: context => createContentGenerationLayoutTools({
+      agentService, signal, layout, onActivity,
+      validateHtml(root, html) { checkSectionHtml(html); validateContentImageReferences(root, html); },
+      validateResult: () => readContentGenerationResult(context.workspaceDir),
+    }, context),
+    validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
+    continueTask: () => layout.get().status === 'rechecking' ? { complete: true }
+      : { stage: 'layout-checking', prompt: buildLayoutPrompt(layout.get()) },
+    onCheckpoint, onActivity,
+  });
+  signal.throwIfAborted();
+  agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'success', phase: 'completed', agent_connection: 'idle' });
+}
+
+module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, runContentLayoutAgent, readContentGenerationResult, checkSectionHtml };

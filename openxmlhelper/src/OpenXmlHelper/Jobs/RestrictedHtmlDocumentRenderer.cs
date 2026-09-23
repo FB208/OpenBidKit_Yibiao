@@ -131,6 +131,7 @@ static class RestrictedHtmlDocumentRenderer
                 var prepared = PrepareHtml(range.InnerHtml, rangeFormat, outlineOnly: true);
                 blockCount += RestrictedHtmlWordInserter.InsertIntoContent(assetRoot, mainPart, body,
                     rangeFormat.Number(rangeFormat.Section("image"), "max_width_percent", 90), prepared.Document, cacheAssets: true);
+                ApplyLayoutBookmarks(body, result.Concat(pageElements).SelectMany(item => item.Descendants<Wp.BookmarkStart>()).Count());
                 ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
                 foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
                 {
@@ -172,6 +173,24 @@ static class RestrictedHtmlDocumentRenderer
         foreach (var part in mainPart.HeaderParts) part.Header.Save();
         foreach (var part in mainPart.FooterParts) part.Footer.Save();
         return new RenderResult(blockCount, CollectParagraphRoles(document));
+    }
+
+    /// <summary>自检副本的定位段落转为零宽书签，不进入可见正文或改变分页。</summary>
+    static void ApplyLayoutBookmarks(Wp.Body body, int bookmarkId)
+    {
+        const string prefix = "YIBIAOLAYOUT:yb_layout_";
+        foreach (var marker in body.Elements<Wp.Paragraph>().Where(p => p.InnerText.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+        {
+            var next = marker.NextSibling();
+            var target = next as Wp.Paragraph ?? next?.Descendants<Wp.Paragraph>().FirstOrDefault();
+            if (target is null) throw new InvalidOperationException("格式自检书签缺少对应正文块");
+            var id = (bookmarkId++).ToString(CultureInfo.InvariantCulture);
+            var start = new Wp.BookmarkStart { Id = id, Name = marker.InnerText["YIBIAOLAYOUT:".Length..] };
+            if (target.ParagraphProperties is { } properties) target.InsertAfter(start, properties);
+            else target.PrependChild(start);
+            target.InsertAfter(new Wp.BookmarkEnd { Id = id }, start);
+            marker.Remove();
+        }
     }
 
     /// <summary>无装饰范围明确引用空页眉页脚，避免 Word 自动沿用上一节。</summary>
@@ -1851,6 +1870,8 @@ static class RestrictedHtmlDocumentRenderer
         }
 
         if (headings.Count == 0) return;
+        // 一级标题之后的双栏正文仍属于连续分节，默认 nextPage 会将最后一章正文推到下一页。
+        SetSingleChild(finalSection, new Wp.SectionType { Val = Wp.SectionMarkValues.Continuous });
         finalSection.RemoveAllChildren<Wp.TitlePage>();
         finalSection.RemoveAllChildren<Wp.PageNumberType>();
     }

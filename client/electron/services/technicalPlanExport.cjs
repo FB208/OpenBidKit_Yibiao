@@ -29,10 +29,17 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
     },
 
     /** 按当前目录顺序组装全文，统一套用当前模板并转换一次。 */
-    async build(snapshot, { onProgress, stats, developerLogger }) {
+    async build(snapshot, { onProgress, stats, developerLogger, layoutCheck = false }) {
       const entries = collectOutlineExportEntries(snapshot.outline, snapshot.export_template_scope === 'ai-only');
       const assets = new Map();
       const ranges = [];
+      const layoutSources = [];
+      // 仅自检副本携带定位标记，转换器会将其替换为不可见书签。
+      const mark = (html, source) => {
+        const name = `yb_layout_${layoutSources.length}`;
+        layoutSources.push({ name, ...source });
+        return `<p>YIBIAOLAYOUT:${name}</p>\n${html}`;
+      };
       // 合并相邻同样式范围，完整章节只排版一次；混合父标题跟随首个子节点的页面。
       const append = (html, useTemplate, sectionTemplate) => {
         const previous = ranges.at(-1);
@@ -59,6 +66,15 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
                 if (!reference) throw new Error('图片缺少 data-yb-asset-ref');
                 fs.accessSync(path.join(snapshot.workspaceDir, reference));
               }
+              if (layoutCheck) {
+                const blocks = $.root().children().toArray();
+                body = blocks.map((node, blockIndex) => mark($.html(node), {
+                  section_id: item.id, file, block_index: blockIndex,
+                  image: node.name === 'figure' || $(node).find('figure').length > 0,
+                  figure_ids: $(node).find('figure').addBack('figure').map((_i, figure) => $(figure).attr('id')).get(),
+                  text: $(node).text().slice(0, 160),
+                })).join('\n');
+              }
             } else if (String(item.content || '').trim()) {
               body = await renderMarkdownForRestrictedHtml(item.content, assets, { baseDir: snapshot.workspaceDir, developerLogger });
             } else {
@@ -70,7 +86,8 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
           throw new Error(`小节 ${label} 导出失败：${error.message}`, { cause: error });
         }
         // 显式记录目录编号，正文内部标题不能改变后续目录编号。
-        append(`<h${level} data-yb-outline-number="${item.number}">${escapeHtml(item.title)}</h${level}>\n${body}`, useTemplate, sectionTemplate);
+        const heading = `<h${level} data-yb-outline-number="${item.number}">${escapeHtml(item.title)}</h${level}>`;
+        append(`${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}`, useTemplate, sectionTemplate);
         onProgress?.({ phase: 'running', progress: 10 + Math.round((index + 1) / entries.length * 40), message: `正在读取正文 ${index + 1}/${entries.length}：${label}`, warnings: [], ...stats });
       }
       const html = ranges.map(range => `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.sectionTemplate}">${range.html}</section>`).join('\n');
@@ -79,7 +96,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       const result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
         assetRoot: snapshot.workspaceDir, copyAssets: true, assets, wholeDocument: true,
       });
-      return { buffer: Buffer.from(result.bytes), warnings: [], stats };
+      return { buffer: Buffer.from(result.bytes), warnings: [], stats, ...(layoutCheck ? { layoutSources } : {}) };
     },
   };
 }

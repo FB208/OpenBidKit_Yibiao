@@ -237,6 +237,7 @@ function ContentEditPage({
   const restoring = phaseVisible && contentStats?.phase === 'restoring';
   const auditing = phaseVisible && contentStats?.phase === 'auditing';
   const tableCleaning = phaseVisible && contentStats?.phase === 'table-cleaning';
+  const layoutChecking = phaseVisible && contentStats?.phase === 'layout-checking';
   const contentCorrecting = auditing || tableCleaning;
   const sectionWords = contentGenerationRuntime?.section_words;
   const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning, sectionWords) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections, sectionWords]);
@@ -262,6 +263,7 @@ function ContentEditPage({
   const maximumWords = contentStats?.maximum_words ?? outlineWordControlSnapshot?.maximumWords ?? 0;
   const currentWords = contentStats?.current_words ?? totalWords;
   const retryingTableCleanup = taskFailed && contentStats?.phase === 'table-cleaning';
+  const retryingLayoutCheck = taskFailed && contentStats?.phase === 'layout-checking';
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
@@ -304,6 +306,8 @@ function ContentEditPage({
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
     ? taskErrorMessage
+    : layoutChecking
+    ? `${paused ? '已暂停：' : ''}${currentProgressDetail?.step_label || '正在检测页栏留白'}，补写 ${contentStats?.layout_completed || 0}/${contentStats?.layout_total || 0} 个小节。`
     : htmlOutputProgress && currentProgressDetail && ['generating', 'sections-completed', 'word-converting', 'word-completed'].includes(currentProgressDetail.phase)
     ? `${paused ? '已暂停：' : ''}${currentProgressDetail.phase_label}，${currentProgressDetail.phase === 'generating' ? '已保存' : '已完成'} ${currentProgressDetail.completed}/${currentProgressDetail.total} 个小节。`
     : planning
@@ -342,6 +346,8 @@ function ContentEditPage({
           ? '重试 Word 转换'
         : retryingTableCleanup
           ? '重试去表格'
+        : retryingLayoutCheck
+          ? '重试格式自检'
           : completedCount === leaves.length && leaves.length
               ? '重新生成正文'
               : completedCount > 0
@@ -470,11 +476,11 @@ function ContentEditPage({
 
   // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup)) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck)) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -489,7 +495,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck) {
       void retryFailedSections();
       return;
     }
