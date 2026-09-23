@@ -374,28 +374,50 @@ async function main() {
     assert.match(input.image_requirements, /Mermaid 图片（mermaid）不允许/);
     assert.match(input.image_requirements, /甘特图、风险矩阵/);
     assert.match(input.image_requirements, /各小节及全文均无须覆盖全部已开启类型/);
+    assert.match(input.image_requirements, /AI 图片目标占比为 60%/);
+    assert.match(input.image_requirements, /单张图片和图片表格各 1 张，三列图片 3 张，四宫格 4 张/);
+    assert.match(input.image_requirements, /原方案图片不计入分子或分母，即使格式属性为 aiImage/);
+    assert.match(input.image_requirements, /局部生成只统计本轮新增图片，单节修改不追补全文比例/);
     assert.match(files.find(file => file.path === '知识库/doc.md').content, /未选中条目全文/);
     assert.equal(JSON.parse(files.find(file => file.path === '知识库/索引.json').content)[0].file, '知识库/doc.md');
     assert.match(files.find(file => file.path === '全局事实设定.md').content, /六十天/);
 
     // 各档位和单独类型开关只改变模型需求，不裁剪工具；并发正文模型收到同一份需求。
-    for (const [imageQuantity, enabled, expected] of [['none', true, /无图：不安排配图、不留图片占位、不调用配图工具/], ['light', false, /少图：按本轮布局名额/], ['heavy', true, /多图：按本轮布局名额/]]) {
-      const scenarioFiles = buildContentGenerationFiles({ ...fileOptions, generationOptions: { ...fileOptions.generationOptions, imageQuantity, useAiImages: enabled, useHtmlImages: enabled, useMermaidImages: enabled } });
+    for (const [imageQuantity, enabled, expected, otherEnabled = enabled] of [
+      ['none', true, /无图：不安排配图、不留图片占位、不调用配图工具/],
+      ['light', false, /少图：按本轮布局名额/], ['light', false, /少图：按本轮布局名额/, true],
+      ['light', true, /少图：按本轮布局名额/], ['heavy', true, /多图：按本轮布局名额/],
+    ]) {
+      const scenarioFiles = buildContentGenerationFiles({ ...fileOptions, generationOptions: { ...fileOptions.generationOptions, imageQuantity, useAiImages: enabled, useHtmlImages: otherEnabled, useMermaidImages: otherEnabled } });
       const decisionFile = scenarioFiles.find(file => file.path === '正文编排决策.json');
       const decisions = JSON.parse(decisionFile.content);
       assert.match(decisions.image_requirements, expected);
       assert.match(decisions.image_requirements, /不用于取消本轮名额/);
       assert.doesNotMatch(decisions.image_requirements, /1～3|1～6|建议张数|张数范围仅作建议/);
       assert.match(decisions.image_requirements, /查阅配图类型对照表.md.*用途、结构相近.*仍无法归类时，使用 AI 生图/);
-      if (!enabled) assert.match(decisions.image_requirements, /AI 图片（aiImage）不允许；HTML 图片（htmlImage）不允许；Mermaid 图片（mermaid）不允许/);
+      if (!enabled && !otherEnabled) assert.match(decisions.image_requirements, /AI 图片（aiImage）不允许；HTML 图片（htmlImage）不允许；Mermaid 图片（mermaid）不允许/);
+      if (enabled && imageQuantity !== 'none') {
+        assert.match(decisions.image_requirements, /AI 图片目标占比为 60%/);
+        assert.match(decisions.image_requirements, /优先从正文中寻找适合实物、场景、效果、物理结构、工艺、操作/);
+        assert.match(decisions.image_requirements, /并发写作模型只执行本节分配，不独立承担占比目标/);
+      } else {
+        assert.doesNotMatch(decisions.image_requirements, /60%/);
+        assert.match(decisions.image_requirements, /本轮不应用 AI 图片占比目标/);
+      }
+      assert.doesNotMatch(decisions.image_requirements, /不规定必须使用的类型或比例/);
       fs.writeFileSync(path.join(workspaceDir, decisionFile.path), decisionFile.content, 'utf8');
       let received = false;
-      const allocation = decisions.image_layout_quota.total_groups ? '本节布局：四宫格1组，表达四个施工阶段' : '本节不新增配图';
+      const allocation = !decisions.image_layout_quota.total_groups ? '本节不新增配图'
+        : imageQuantity === 'heavy' ? '本节布局：四宫格1组，四张均为操作示意图，表达四个施工阶段，生成方式 aiImage'
+        : enabled ? '本节布局：单张图片1组，场景示意图，表达实施现场，生成方式 aiImage'
+        : '本节布局：单张图片1组，甘特图，表达施工进度，生成方式 htmlImage';
       const scenarioTools = createContentGenerationTools({ signal, aiService: { async chat(request) {
         received = true;
         assert.ok(request.messages[0].content.includes(decisions.image_requirements));
         assert.ok(request.messages[1].content.includes(allocation));
         assert.match(request.messages[1].content, /不自行分配全局名额/);
+        assert.match(request.messages[1].content, /不自行改变生成方式/);
+        assert.match(request.messages[1].content, /不自行分配全局名额或独立承担 AI 图片占比目标/);
         assert.ok(!JSON.stringify(request.messages).includes('"total_groups"'), '并发小节不接收整轮名额数值');
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
@@ -461,19 +483,22 @@ async function main() {
       const method = kind === 'html' ? 'renderHtmlToPng' : 'renderMermaidToPng';
       const pause = new AbortController();
       const renderTool = createContentGenerationImageTools({ aiService: {}, signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(tool => tool.name === `render-${kind}-image`);
+      const renderParams = { source_file: sourceFile, ...(kind === 'html' ? { frame_size: 'wide' } : {}) };
+      assert.equal(renderTool.parameters.required.includes('frame_size'), kind === 'html');
       renderer[method] = async (text, options) => {
         assert.equal(text, source);
         assert.equal(options.isPauseRequested(), false);
+        assert.equal(options.frameSize, kind === 'html' ? 'wide' : undefined);
         return { buffer: Buffer.from('PNG'), width: 100, height: 80, layout_issues: [] };
       };
-      const rendered = (await renderTool.execute('render', { source_file: sourceFile })).details;
+      const rendered = (await renderTool.execute('render', renderParams)).details;
       assert.equal(rendered.width, 100);
       assert.equal(rendered.height, 80);
       assert.equal(rendered.source_file, sourceFile);
       assert.equal(fs.readFileSync(path.join(workspaceDir, rendered.asset_ref), 'utf8'), 'PNG');
       const renderError = new Error('模拟渲染错误');
       renderer[method] = async () => { throw renderError; };
-      await assert.rejects(renderTool.execute('error', { source_file: sourceFile }), error => error === renderError);
+      await assert.rejects(renderTool.execute('error', renderParams), error => error === renderError);
       assert.equal(fs.readFileSync(path.join(workspaceDir, sourceFile), 'utf8'), source);
       const savedFiles = fs.readdirSync(path.join(workspaceDir, '图片'));
       renderer[method] = async (_text, options) => {
@@ -482,7 +507,7 @@ async function main() {
         assert.equal(options.createPauseError(), pause.signal.reason);
         return { buffer: Buffer.from('未完成图片') };
       };
-      await assert.rejects(renderTool.execute('cancel', { source_file: sourceFile }, pause.signal), /停止转图/);
+      await assert.rejects(renderTool.execute('cancel', renderParams, pause.signal), /停止转图/);
       assert.deepEqual(fs.readdirSync(path.join(workspaceDir, '图片')), savedFiles, '取消后不得保存新图片');
     }
 
@@ -561,6 +586,9 @@ async function main() {
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
             assert.match(payload.prompt, /image_layout_quota（本轮新增布局名额）/);
             assert.match(payload.prompt, /在各节 instructions 中写明布局、组数和每组表达目的/);
+            assert.match(payload.prompt, /并逐图指定图片类型和生成方式/);
+            assert.match(payload.prompt, /在并发写作前规划每张图的表达目的、图片类型及生成方式/);
+            assert.match(payload.prompt, /核对本轮新增图片的生成方式分布/);
             assert.match(payload.prompt, /暂停、失败重试沿用本轮名额，已完成的布局计入完成数量/);
             assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
@@ -816,23 +844,59 @@ async function checkRestrictedHtml() {
 async function checkLocalRendering(workspaceDir) {
   const { Type } = await import('typebox');
   const { nativeImage } = require('electron');
+  const renderer = require('../electron/services/localImageRenderService.cjs').getLocalImageRenderService();
   const tools = createContentGenerationImageTools({ aiService: {}, signal: new AbortController().signal }, { Type, workspaceDir });
-  for (const [kind, source] of [
-    ['html', '<!DOCTYPE html><html><head><style>body{font:32px sans-serif}main{padding:40px;background:#dfeafb}</style></head><body><main>项目实施流程：准备 → 实施 → 交付</main></body></html>'],
-    ['mermaid', 'flowchart LR\nA["准备"] --> B["实施"] --> C["交付"]'],
-  ]) {
-    const sourceFile = `实施流程.${kind === 'html' ? 'html' : 'mmd'}`;
-    fs.writeFileSync(path.join(workspaceDir, sourceFile), source, 'utf8');
-    const result = (await tools.find(tool => tool.name === `render-${kind}-image`).execute(kind, { source_file: sourceFile })).details;
+  const htmlTool = tools.find(tool => tool.name === 'render-html-image');
+  const styles = `<style>
+    *{box-sizing:border-box}body{margin:0;padding:88px;background:#f8fafc;font:28px "Microsoft YaHei",sans-serif;color:#24344b;display:flex;flex-direction:column}
+    header{flex:none;border-bottom:3px solid #2563eb;padding-bottom:20px;margin-bottom:24px;font-size:38px;font-weight:bold}
+    main{flex:1;min-height:0;display:flex;flex-direction:column}
+    .grid{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:24px}
+    .card{background:#e8f0fe;border:2px solid #bed0ed;border-radius:12px;padding:24px;display:flex;flex-direction:column;justify-content:center}
+    h2{font-size:30px;margin:0 0 18px;color:#2457a6}p{margin:0;line-height:1.5}
+  </style>`;
+  const content = `<header>项目实施管理体系</header><main><div class="grid">${[
+    ['准备与核查','明确实施条件、责任分工和交付要求。'],['组织与实施','按计划开展工作，协调现场资源。'],
+    ['质量与验收','核对成果和验收标准，记录检查结果。'],['交付与维护','完成资料归档，落实持续维护责任。'],
+  ].map(([title, text]) => `<section class="card"><h2>${title}</h2><p>${text}</p></section>`).join('')}</div></main>`;
+  for (const [frameSize, height] of Object.entries({ square: 1240, wide: 827, tall: 1653, panorama: 698 })) {
+    // 同一Flex/Grid结构同时覆盖完整文档和HTML片段，source中的88px边距应由画布统一为40px。
+    const html = frameSize === 'panorama' ? styles + content
+      : `<!DOCTYPE html><html><head><meta charset="utf-8">${styles}</head><body>${content}</body></html>`;
+    const sourceFile = `布局-${frameSize}.html`;
+    fs.writeFileSync(path.join(workspaceDir, sourceFile), html, 'utf8');
+    const result = (await htmlTool.execute(frameSize, { source_file: sourceFile, frame_size: frameSize })).details;
     const png = fs.readFileSync(path.join(workspaceDir, result.asset_ref));
-    assert.equal(png.subarray(1, 4).toString(), 'PNG');
-    const size = nativeImage.createFromBuffer(png).getSize();
-    assert.ok(size.width > 24 && size.height > 24);
-    assert.deepEqual(size, { width: result.width, height: result.height });
-    assert.equal(fs.readFileSync(path.join(workspaceDir, sourceFile), 'utf8'), source);
-    if (kind === 'html') assert.deepEqual(result.layout_issues, []);
-    console.log(`${kind} 本地转图通过：${size.width}×${size.height}，PNG 及源码保留。`);
+    const image = nativeImage.createFromBuffer(png);
+    assert.deepEqual(image.getSize(), { width: 2480, height: height * 2 });
+    assert.deepEqual({ width: result.width, height: result.height }, image.getSize());
+    assert.deepEqual(result.layout_issues, [], JSON.stringify(result.layout_issues));
+    const bitmap = image.toBitmap();
+    const pixel = (x, y) => [...bitmap.subarray(((y * 2) * 2480 + x * 2) * 4, ((y * 2) * 2480 + x * 2) * 4 + 3)];
+    assert.deepEqual(pixel(20, 20), [252, 250, 248], '保留源码的背景与顶部边距');
+    assert.deepEqual(pixel(20, height - 60), [252, 250, 248], '左侧40px边距');
+    assert.deepEqual(pixel(1220, height - 60), [252, 250, 248], '右侧40px边距');
+    assert.deepEqual(pixel(100, height - 20), [252, 250, 248], '底部40px边距');
+    assert.deepEqual(pixel(100, height - 50), [254, 240, 232], '卡片延伸到主体底部，不因包装打断flex而留下空白');
+    assert.deepEqual(pixel(50, height - 60), [254, 240, 232], '主体从40px边距内开始，未重复添加外层边距');
+    assert.equal(fs.readFileSync(path.join(workspaceDir, sourceFile), 'utf8'), html);
+    fs.writeFileSync(path.join(workspaceDir, `预览-${frameSize}.png`), png);
+    const probe = await renderer.probeHtmlLayoutOnly(html, { frameSize });
+    assert.deepEqual(probe, { width: 1240, height, layout_issues: [] });
+    console.log(`HTML ${frameSize}：${result.width}×${result.height}，边距、背景、Flex/Grid铺满及质检通过。`);
   }
+  const overflow = styles + content + '<div style="position:absolute;left:40px;top:1300px;width:100px;height:80px;background:red"></div>';
+  const overflowResult = await renderer.renderHtmlToPng(overflow, { frameSize: 'square' });
+  assert.deepEqual({ width: overflowResult.width, height: overflowResult.height }, { width: 2480, height: 2480 });
+  assert.ok(overflowResult.layout_issues.some(issue => issue.includes('元素超出画布内容区域')), '无文字图形的纵向越界也应反馈，且不扩大截图');
+  const clipped = '<div style="height:32px;overflow:hidden;font-size:32px">第一行<br>第二行</div>';
+  const clippedResult = await renderer.probeHtmlLayoutOnly(clipped, { frameSize: 'wide' });
+  assert.ok(clippedResult.layout_issues.some(issue => issue.includes('裁切')), '隐藏溢出的文字仍应反馈裁切');
+  fs.writeFileSync(path.join(workspaceDir, '实施流程.mmd'), 'flowchart LR\nA["准备"] --> B["实施"] --> C["交付"]', 'utf8');
+  const mermaid = (await tools.find(tool => tool.name === 'render-mermaid-image').execute('mermaid', { source_file: '实施流程.mmd' })).details;
+  assert.ok(mermaid.width > 24 && mermaid.height > 24);
+  assert.deepEqual(nativeImage.createFromPath(path.join(workspaceDir, mermaid.asset_ref)).getSize(), { width: mermaid.width, height: mermaid.height });
+  console.log('固定画布越界、隐藏溢出裁切与Mermaid原有转图检查通过。');
 }
 
 if (process.argv.includes('--original-store')) {

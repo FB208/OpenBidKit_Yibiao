@@ -46,7 +46,7 @@ const defaultOutlineWordControlOptions = Object.freeze({
   sectionWords: 0,
 });
 const defaultHtmlImageTypes = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
-const defaultExportTemplateId = '';
+const defaultExportTemplateId = 'tpl-system-standard-bid';
 const defaultContentGenerationOptions = Object.freeze({
   imageQuantity: 'light',
   useAiImages: true,

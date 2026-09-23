@@ -13,6 +13,9 @@ const WORD_FRIENDLY_RENDER_WIDTH = 680;
 const MERMAID_CAPTURE_SCALE = 3;
 /** HTML 配图设计宽度，与生成 Prompt 一致；导出 Word 时再等比缩小 */
 const HTML_DESIGN_WIDTH = 1240;
+/** HTML 画布沿用正文画框比例，尺寸包含四周内边距 */
+const HTML_FRAME_HEIGHTS = { square: 1240, wide: 827, tall: 1653, panorama: 698 };
+const HTML_CANVAS_PADDING = 40;
 /** HTML 使用 2 倍像素输出，兼顾清晰度和长图内存占用 */
 const HTML_CAPTURE_SCALE = 2;
 /** HTML 中可见文字的最小设计字号，缩入 Word 后仍保持可读 */
@@ -296,14 +299,16 @@ async function probeLayoutMetrics(webContents, minWidth, contentOnly = false) {
 // 只检查文字的 transform；writing-mode 不在检查范围内，竖排文字保持允许。
 function buildHtmlLayoutProbeScript() {
   return `(() => {
-    const root=document.getElementById('yibiao-capture-root')||document.body||document.documentElement;
+    const root=document.body;
     if(!root)return ['未找到截图画布'];
     const issues=[];
     const add=(value)=>{if(value&&!issues.includes(value)&&issues.length<12)issues.push(value)};
     const visible=(element)=>{const style=getComputedStyle(element);return style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity||1)>0};
     const label=(element)=>{const tag=(element.tagName||'元素').toLowerCase();const className=String(element.className||'').trim().split(/\\s+/).filter(Boolean).slice(0,2).join('.');return className?tag+'.'+className:tag};
     const related=(left,right)=>left===right||left.contains(right)||right.contains(left);
-    const rootRect=root.getBoundingClientRect();
+    const canvasRect=root.getBoundingClientRect();
+    const padding=getComputedStyle(root);
+    const rootRect={left:canvasRect.left+parseFloat(padding.paddingLeft),right:canvasRect.right-parseFloat(padding.paddingRight),top:canvasRect.top+parseFloat(padding.paddingTop),bottom:canvasRect.bottom-parseFloat(padding.paddingBottom)};
     const minFontSize=${HTML_MIN_TEXT_FONT_SIZE};
     const textEntries=[];
     const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
@@ -334,7 +339,7 @@ function buildHtmlLayoutProbeScript() {
       if(fontSize>0&&fontSize<minFontSize)add('文字字号过小：'+label(entry.element)+' 为 '+fontSize+'px，至少需要 '+minFontSize+'px');
       for(const rect of entry.rects){
         if(rect.left<rootRect.left-1||rect.right>rootRect.right+1||rect.top<rootRect.top-1||rect.bottom>rootRect.bottom+1){add('文字超出截图画布：'+label(entry.element));break}
-        for(let element=entry.element.parentElement;element&&element!==root.parentElement;element=element.parentElement){
+        for(let element=entry.element;element&&element!==root.parentElement;element=element.parentElement){
           const style=getComputedStyle(element);
           const clipsX=['hidden','clip','scroll','auto'].includes(style.overflowX);
           const clipsY=['hidden','clip','scroll','auto'].includes(style.overflowY);
@@ -371,7 +376,7 @@ function buildHtmlLayoutProbeScript() {
     for(const element of root.querySelectorAll('*')){
       if(!visible(element))continue;
       const rect=element.getBoundingClientRect();
-      if(rect.width>0&&rect.height>0&&(rect.left<rootRect.left-1||rect.right>rootRect.right+1)){add('元素横向超出截图画布：'+label(element));}
+      if(rect.width>0&&rect.height>0&&(rect.left<rootRect.left-1||rect.right>rootRect.right+1||rect.top<rootRect.top-1||rect.bottom>rootRect.bottom+1)){add('元素超出画布内容区域：'+label(element));}
     }
     if(!textEntries.length&&!root.querySelector('img,svg,canvas,video'))add('截图画布没有可见内容');
     return issues;
@@ -415,68 +420,31 @@ async function waitForLayoutReady(webContents, timeoutMs, minWidth = 1, options 
   throw new Error('等待页面布局稳定超时');
 }
 
-// 包装 HTML：按设计宽度 1240 渲染，完整保留内容，导出时再缩放。
-function buildHtmlDocument(html) {
+// body 本身作为固定画布，保留生成源码的 Flex/Grid 父子关系。
+function buildHtmlDocument(html, height) {
   const source = String(html || '').trim();
-  const baseStyles = `
+  const styleTag = `<style id="yibiao-capture-style">
 html, body {
   margin: 0 !important;
-  padding: 0 !important;
-  background: #ffffff !important;
   width: ${HTML_DESIGN_WIDTH}px !important;
   min-width: ${HTML_DESIGN_WIDTH}px !important;
-  overflow-x: visible !important;
+  max-width: ${HTML_DESIGN_WIDTH}px !important;
+  height: ${height}px !important;
+  min-height: ${height}px !important;
+  max-height: ${height}px !important;
+  overflow: visible !important;
   box-sizing: border-box !important;
 }
+html { padding: 0 !important; background: #ffffff; }
+body { padding: ${HTML_CANVAS_PADDING}px !important; }
 *, *::before, *::after { box-sizing: border-box; }
-#yibiao-capture-root {
-  display: block;
-  width: ${HTML_DESIGN_WIDTH}px;
-  min-width: ${HTML_DESIGN_WIDTH}px;
-  margin: 0;
-  padding: 0;
-  background: #ffffff;
-  overflow: visible;
-}
 img, svg, canvas, video { max-width: 100%; height: auto; }
-`;
-  const styleTag = `<style id="yibiao-capture-style">${baseStyles}</style>`;
-  const wrapScript = `<script>
-(() => {
-  const body = document.body;
-  if (!body || document.getElementById('yibiao-capture-root')) return;
-  const root = document.createElement('div');
-  root.id = 'yibiao-capture-root';
-  while (body.firstChild) root.appendChild(body.firstChild);
-  body.appendChild(root);
-})();
-</script>`;
-
+</style>`;
   if (/<html[\s>]/i.test(source)) {
-    let next = source;
-    if (/<head[\s>]/i.test(next)) {
-      next = next.replace(/<head([^>]*)>/i, `<head$1><meta charset="utf-8">${styleTag}`);
-    } else {
-      next = next.replace(/<html([^>]*)>/i, `<html$1><head><meta charset="utf-8">${styleTag}</head>`);
-    }
-    if (/<\/body>/i.test(next)) {
-      next = next.replace(/<\/body>/i, `${wrapScript}</body>`);
-    } else {
-      next = `${next}${wrapScript}`;
-    }
-    return next;
+    if (/<\/head>/i.test(source)) return source.replace(/<\/head>/i, `<meta charset="utf-8">${styleTag}</head>`);
+    return source.replace(/<html([^>]*)>/i, `<html$1><head><meta charset="utf-8">${styleTag}</head>`);
   }
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  ${styleTag}
-</head>
-<body>
-  <div id="yibiao-capture-root">${source}</div>
-</body>
-</html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">${styleTag}</head><body>${source}</body></html>`;
 }
 
 function buildExactHtmlDocument(html, width, height) {
@@ -769,8 +737,10 @@ function createLocalImageRenderService({ configStore } = {}) {
   async function probeHtmlLayoutOnly(html, options = {}) {
     return runHtml(async () => {
       throwIfPaused(options, 'HTML 质检已暂停');
-      const documentHtml = buildHtmlDocument(html);
-      const win = createRenderWindow(HTML_DESIGN_WIDTH, 900);
+      const width = HTML_DESIGN_WIDTH;
+      const height = HTML_FRAME_HEIGHTS[options.frameSize];
+      const documentHtml = buildHtmlDocument(html, height);
+      const win = createRenderWindow(width, height);
       try {
         await withTimeout(
           loadHtmlDocument(win, documentHtml, HTML_RENDER_TIMEOUT_MS, options),
@@ -778,14 +748,12 @@ function createLocalImageRenderService({ configStore } = {}) {
           'HTML 页面加载超时',
         );
         throwIfPaused(options, 'HTML 质检已暂停');
-        await setDeviceMetrics(win.webContents, HTML_DESIGN_WIDTH, 900);
-        const metrics = await withTimeout(
+        await setDeviceMetrics(win.webContents, width, height);
+        await withTimeout(
           waitForLayoutReady(win.webContents, HTML_RENDER_TIMEOUT_MS, HTML_DESIGN_WIDTH, options),
           HTML_RENDER_TIMEOUT_MS,
           'HTML 布局等待超时',
         );
-        const width = Math.max(HTML_DESIGN_WIDTH, Math.ceil(metrics.width || 0));
-        const height = Math.max(1, Math.ceil(metrics.height || 0));
         const layoutIssues = await probeHtmlLayoutIssues(win.webContents);
         return { width, height, layout_issues: layoutIssues };
       } finally {
@@ -794,12 +762,14 @@ function createLocalImageRenderService({ configStore } = {}) {
     });
   }
 
-  // 本地将 HTML 按设计宽度完整截取为 PNG（导出 Word 时再缩放）。
+  // 按固定画布截图，溢出通过 layout_issues 反馈，不扩展截图或缩小内容。
   async function renderHtmlToPng(html, options = {}) {
     return runHtml(async () => {
       throwIfPaused(options, 'HTML 转图已暂停');
-      const documentHtml = buildHtmlDocument(html);
-      const win = createRenderWindow(HTML_DESIGN_WIDTH, 900);
+      const width = HTML_DESIGN_WIDTH;
+      const height = HTML_FRAME_HEIGHTS[options.frameSize];
+      const documentHtml = buildHtmlDocument(html, height);
+      const win = createRenderWindow(width, height);
       try {
         await withTimeout(
           loadHtmlDocument(win, documentHtml, HTML_RENDER_TIMEOUT_MS, options),
@@ -807,15 +777,13 @@ function createLocalImageRenderService({ configStore } = {}) {
           'HTML 页面加载超时',
         );
         throwIfPaused(options, 'HTML 转图已暂停');
-        // 先按设计宽设置视口，避免窄窗把 1240 布局挤乱。
-        await setDeviceMetrics(win.webContents, HTML_DESIGN_WIDTH, 900);
-        const metrics = await withTimeout(
+        // 布局和截图使用相同视口，避免百分比或视口单位在截图时发生重排。
+        await setDeviceMetrics(win.webContents, width, height);
+        await withTimeout(
           waitForLayoutReady(win.webContents, HTML_RENDER_TIMEOUT_MS, HTML_DESIGN_WIDTH, options),
           HTML_RENDER_TIMEOUT_MS,
           'HTML 布局等待超时',
         );
-        const width = Math.max(HTML_DESIGN_WIDTH, Math.ceil(metrics.width || 0));
-        const height = Math.max(1, Math.ceil(metrics.height || 0));
         const layoutIssues = await probeHtmlLayoutIssues(win.webContents);
         throwIfPaused(options, 'HTML 转图已暂停');
         const captured = await captureFullContent(win.webContents, width, height, {

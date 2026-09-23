@@ -57,18 +57,21 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     },
   }, ...['html', 'mermaid'].map(kind => ({
     name: `render-${kind}-image`, label: kind === 'html' ? 'HTML 转图片' : 'Mermaid 转图片',
-    description: `读取 Agent 已写入的 ${kind === 'html' ? '独立配图 HTML' : 'Mermaid'} 源文件，用主程序本地组件转为 PNG。返回 asset_ref、像素尺寸和源码路径；渲染失败时修改源码后重新调用。`,
+    description: `读取 Agent 已写入的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，用主程序本地组件转为 PNG。返回 asset_ref、像素尺寸和源码路径；渲染失败时修改源码后重新调用。`,
     executionMode: 'sequential',
-    parameters: Type.Object({ source_file: Type.String({ minLength: 1, description: '当前工作区内的源码相对路径，如 图片/实施流程.html 或 图片/实施流程.mmd；使用 UTF-8，不带 Markdown 围栏。' }) }, { additionalProperties: false }),
+    parameters: Type.Object({
+      source_file: Type.String({ minLength: 1, description: '当前工作区内的源码相对路径，如 图片/实施流程.html 或 图片/实施流程.mmd；使用 UTF-8，不带 Markdown 围栏。' }),
+      ...(kind === 'html' ? { frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698；尺寸包含四周40px内边距。按此尺寸编写HTML，程序以2倍像素输出。' }) } : {}),
+    }, { additionalProperties: false }),
     // 适配原转图接口的暂停回调，渲染结束后再次检查取消状态再保存。
-    async execute(_callId, { source_file }, toolSignal) {
+    async execute(_callId, { source_file, frame_size }, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
       const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, source_file), 'utf8');
       const renderer = localImageRenderService || require('./localImageRenderService.cjs').getLocalImageRenderService();
       const pauseOptions = { isPauseRequested: () => combinedSignal.aborted, createPauseError: () => combinedSignal.reason };
       const result = kind === 'html'
-        ? await renderer.renderHtmlToPng(source, pauseOptions)
+        ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: frame_size })
         : await renderer.renderMermaidToPng(source, pauseOptions);
       combinedSignal.throwIfAborted();
       return toolResult({ success: true, source_file, asset_ref: saveImage(result.buffer, '.png'), width: result.width, height: result.height, ...(kind === 'html' ? { layout_issues: result.layout_issues } : {}) });
