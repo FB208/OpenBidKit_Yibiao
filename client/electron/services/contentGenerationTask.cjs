@@ -392,7 +392,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds) {
 
 // 按全文 AI 小节数确定配图名额；稳定排序保留同分小节的目录顺序，0 分不入选。
 function selectContentImageTargets(leaves, plans, imageQuantity) {
-  const ratio = imageQuantity === 'heavy' ? 0.5 : imageQuantity === 'light' ? 0.2 : 0;
+  const ratio = imageQuantity === 'heavy' ? 0.6 : imageQuantity === 'light' ? 0.3 : 0;
   const limit = Math.floor(leaves.length * ratio);
   const candidates = leaves
     .filter(({ item }) => plans[item.id]?.plan?.image_suitability_score > 0)

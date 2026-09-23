@@ -5,6 +5,35 @@ const path = require('node:path');
 const { buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { createContentGenerationImageTools } = require('../electron/services/contentGenerationImageTools.cjs');
 
+// 经实际输入构建检查布局名额、确定性取整和本轮目标范围，不调用模型。
+function checkImageLayoutQuota(fileOptions) {
+  const items = Array.from({ length: 12 }, (_, index) => ({ id: `layout-${index}`, number: String(index + 1), title: '配图小节', content_mode: 'ai-generate' }));
+  const plans = Object.fromEntries(items.map(item => [item.id, { plan: { image_needed: true } }]));
+  const quota = overrides => JSON.parse(buildContentGenerationFiles({ ...fileOptions, outline: items, plans,
+    targets: items.map(item => ({ item })), documentIds: [], ...overrides,
+  }).find(file => file.path === '正文编排决策.json').content).image_layout_quota;
+  for (const [count, mode, expected] of [
+    [0, 'light', [0, 0, 0, 0]], [1, 'light', [1, 0, 0, 0]], [2, 'light', [1, 1, 0, 0]],
+    [3, 'light', [1, 1, 1, 0]], [7, 'light', [3, 3, 1, 0]], [10, 'light', [4, 4, 2, 0]],
+    [1, 'heavy', [0, 0, 1, 0]], [2, 'heavy', [0, 0, 1, 1]], [5, 'heavy', [1, 1, 2, 1]],
+    [7, 'heavy', [2, 1, 2, 2]], [10, 'heavy', [2, 2, 3, 3]],
+  ]) {
+    const result = quota({ targets: items.slice(0, count).map(item => ({ item })),
+      generationOptions: { ...fileOptions.generationOptions, imageQuantity: mode } });
+    assert.deepEqual(result, { total_groups: count, single: expected[0], imageText: expected[1], threeImages: expected[2], fourImages: expected[3] });
+  }
+  const zero = { total_groups: 0, single: 0, imageText: 0, threeImages: 0, fourImages: 0 };
+  assert.deepEqual(quota({ generationOptions: { ...fileOptions.generationOptions, imageQuantity: 'none' } }), zero);
+  assert.deepEqual(quota({ generationOptions: { imageQuantity: 'heavy', useAiImages: false, useHtmlImages: false, useMermaidImages: false } }), zero);
+  for (const enabledType of ['useAiImages', 'useHtmlImages', 'useMermaidImages']) {
+    const result = quota({ generationOptions: { imageQuantity: 'heavy', [enabledType]: true },
+      targets: items.slice(0, 3).map(item => ({ item })),
+      plans: { ...plans, 'layout-1': { plan: { image_needed: false } }, 'layout-2': { plan: {} } } });
+    assert.deepEqual(result, { total_groups: 1, single: 0, imageText: 0, threeImages: 1, fourImages: 0 });
+  }
+  console.log('布局名额：少图/多图比例、余数和同分取整、零名额、类型开关及局部目标检查通过。');
+}
+
 // 三种事实模式经真实输入构建与工具调用传给并发写作和扩缩写，不依赖主 Agent 手动转述。
 async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal }) {
   for (const [mode, expected] of [['fabricate', /允许结合项目背景补充设定/], ['omit', /不依赖未知具体值的概括性表述/], ['placeholder', /以“【待填写】”标记/]]) {
@@ -275,6 +304,7 @@ async function main() {
         return [{ document: { id: 'doc', file_name: '完整知识库' }, markdown: '选中条目和未选中条目全文', items: [{ id: 'k1', title: '准备工作', resume: '准备摘要' }] }];
       } },
     };
+    checkImageLayoutQuota(fileOptions);
     await checkRestoredContent({ Type, workspaceDir, fileOptions, signal });
     await checkFactsRequirements({ Type, workspaceDir, fileOptions, signal });
     // 未选知识库：不读取服务、不创建目录，主会话和并发正文提示只保留全局事实。
@@ -339,7 +369,8 @@ async function main() {
     assert.match(input.word_requirements, /1000.*2000/);
     assert.match(input.word_requirements, /建议约 800 字.*不设小节硬性上下限/);
     assert.equal(input.targets[0].content_plan.image_suitability_score, 8);
-    assert.match(input.image_requirements, /少图.*1～3/);
+    assert.match(input.image_requirements, /少图：按本轮布局名额/);
+    assert.deepEqual(input.image_layout_quota, { total_groups: 2, single: 1, imageText: 1, threeImages: 0, fourImages: 0 });
     assert.match(input.image_requirements, /Mermaid 图片（mermaid）不允许/);
     assert.match(input.image_requirements, /甘特图、风险矩阵/);
     assert.match(input.image_requirements, /各小节及全文均无须覆盖全部已开启类型/);
@@ -348,23 +379,28 @@ async function main() {
     assert.match(files.find(file => file.path === '全局事实设定.md').content, /六十天/);
 
     // 各档位和单独类型开关只改变模型需求，不裁剪工具；并发正文模型收到同一份需求。
-    for (const [imageQuantity, enabled, expected] of [['none', true, /无图：不安排配图、不留图片占位、不调用配图工具/], ['light', false, /少图.*1～3/], ['heavy', true, /多图.*1～6/]]) {
+    for (const [imageQuantity, enabled, expected] of [['none', true, /无图：不安排配图、不留图片占位、不调用配图工具/], ['light', false, /少图：按本轮布局名额/], ['heavy', true, /多图：按本轮布局名额/]]) {
       const scenarioFiles = buildContentGenerationFiles({ ...fileOptions, generationOptions: { ...fileOptions.generationOptions, imageQuantity, useAiImages: enabled, useHtmlImages: enabled, useMermaidImages: enabled } });
       const decisionFile = scenarioFiles.find(file => file.path === '正文编排决策.json');
       const decisions = JSON.parse(decisionFile.content);
       assert.match(decisions.image_requirements, expected);
-      assert.match(decisions.image_requirements, /不代表必须生成图片/);
+      assert.match(decisions.image_requirements, /不用于取消本轮名额/);
+      assert.doesNotMatch(decisions.image_requirements, /1～3|1～6|建议张数|张数范围仅作建议/);
       assert.match(decisions.image_requirements, /查阅配图类型对照表.md.*用途、结构相近.*仍无法归类时，使用 AI 生图/);
       if (!enabled) assert.match(decisions.image_requirements, /AI 图片（aiImage）不允许；HTML 图片（htmlImage）不允许；Mermaid 图片（mermaid）不允许/);
       fs.writeFileSync(path.join(workspaceDir, decisionFile.path), decisionFile.content, 'utf8');
       let received = false;
+      const allocation = decisions.image_layout_quota.total_groups ? '本节布局：四宫格1组，表达四个施工阶段' : '本节不新增配图';
       const scenarioTools = createContentGenerationTools({ signal, aiService: { async chat(request) {
         received = true;
         assert.ok(request.messages[0].content.includes(decisions.image_requirements));
+        assert.ok(request.messages[1].content.includes(allocation));
+        assert.match(request.messages[1].content, /不自行分配全局名额/);
+        assert.ok(!JSON.stringify(request.messages).includes('"total_groups"'), '并发小节不接收整轮名额数值');
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
       assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
-      const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: '落实责任', references: '' }] });
+      const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: allocation, references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
       fs.unlinkSync(path.join(workspaceDir, input.targets[0].file));
@@ -523,6 +559,9 @@ async function main() {
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/索引.json定位参考文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
+            assert.match(payload.prompt, /image_layout_quota（本轮新增布局名额）/);
+            assert.match(payload.prompt, /在各节 instructions 中写明布局、组数和每组表达目的/);
+            assert.match(payload.prompt, /暂停、失败重试沿用本轮名额，已完成的布局计入完成数量/);
             assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
             return { workspace_dir: workspaceDir };

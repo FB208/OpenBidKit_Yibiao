@@ -63,9 +63,9 @@ checkContentPlanning();
 function checkImageSelection() {
   for (const [scores, quantity, expected] of [
     [[0, 8, 10, 8, 3, 0, 9], 'none', []],
-    [[0, 8, 10, 8, 3, 0, 9], 'light', [2]],
-    [[0, 8, 10, 8, 3, 0, 9], 'heavy', [2, 6, 1]],
-    [[8, 8, 8, 8, 8], 'heavy', [0, 1]],
+    [[0, 8, 10, 8, 3, 0, 9], 'light', [2, 6]],
+    [[0, 8, 10, 8, 3, 0, 9], 'heavy', [2, 6, 1, 3]],
+    [[8, 8, 8, 8, 8], 'heavy', [0, 1, 2]],
     [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 'heavy', [0]],
     [[0, 0, 0, 0, 0], 'heavy', []],
     [[10], 'light', []],
