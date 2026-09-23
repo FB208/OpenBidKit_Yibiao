@@ -84,6 +84,7 @@ async function main() {
       assert.equal(payload.task_id, persistent.run_id);
       assert.equal(payload.output_file, file);
       assert.match(payload.prompt, /1.2 改名后的目标/);
+      assert.match(payload.prompt, /generate-image-sources 的 images 列表并发生成/);
       assert.ok(!payload.prompt.includes('其他小节正文'));
       assert.equal(payload.continueTask, undefined);
       if (behavior === 'fail') throw new Error('模拟修改失败');
@@ -92,19 +93,35 @@ async function main() {
       try {
         assert.equal(created.sessionFile, sessionFile);
         assert.ok(created.session.agent.state.messages.some(message => JSON.stringify(message).includes('原正文生成任务')));
-        for (const name of ['generate-image', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
+        for (const name of ['generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
         assert.ok(!created.session.getActiveToolNames().includes('adjust-sections'));
         const original = fs.readFileSync(path.join(workspaceDir, file), 'utf8').match(/<p>(.*?)<\/p>/)[1];
-        created.session.agent.streamFn = () => response([{ type: 'toolCall', id: `edit-${runs}`, name: 'edit', arguments: {
-          path: file, edits: [{ oldText: original, newText: `修改后的说明${runs}` }], task_complete: true,
-        } }], 'toolUse');
+        let sourceRequested = false;
+        created.session.agent.streamFn = () => {
+          if (!sourceRequested) {
+            sourceRequested = true;
+            return response([{ type: 'toolCall', id: `source-${runs}`, name: 'generate-image-sources', arguments: {
+              images: [{ image_id: '单节流程图', kind: 'mermaid', prompt: '流程图：准备后实施' }],
+            } }], 'toolUse');
+          }
+          const result = created.session.agent.state.messages.findLast(message => message.role === 'toolResult' && message.toolName === 'generate-image-sources');
+          const source = JSON.parse(result.content[0].text).results[0];
+          assert.equal(source.status, 'success');
+          assert.equal(fs.readFileSync(path.join(workspaceDir, source.source_file), 'utf8'), 'flowchart LR\nA["准备"] --> B["实施"]');
+          return response([{ type: 'toolCall', id: `edit-${runs}`, name: 'edit', arguments: {
+            path: file, edits: [{ oldText: original, newText: `修改后的说明${runs}` }], task_complete: true,
+          } }], 'toolUse');
+        };
         await created.session.prompt(payload.prompt, { expandPromptTemplates: false });
         payload.validateOutput();
       } finally { created.session.dispose(); }
       return { workspace_dir: workspaceDir };
     },
   };
-  const service = createTaskService({ agentService, aiService: {}, autoConfirmationService: { unregister() {} },
+  const service = createTaskService({ agentService, aiService: { async chat(request) {
+    assert.equal(request.messages[1].content, '流程图：准备后实施');
+    return 'flowchart LR\nA["准备"] --> B["实施"]';
+  } }, autoConfirmationService: { unregister() {} },
     technicalPlanStore: {
       loadTechnicalPlan: () => structuredClone(state), getContentWordOutputDir: () => outputDir,
       updateTechnicalPlanWithoutReload(patch) {

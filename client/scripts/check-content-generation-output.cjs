@@ -601,10 +601,46 @@ function checkExportNumbering() {
   assert.equal(scope.module.exports.formatOutlineTitle(entries[1].item.number, '乙', { numbering_format: 'custom', numbering_template: '{full}' }), '1.1 乙');
 }
 
+// 执行真实启动入口，确认只读取已保存状态，拦截发生在运行态准备和会话清理前。
+function checkImageModelStartup() {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/services/taskService.cjs'), 'utf8');
+  const start = source.indexOf('    startContentGeneration(payload) {');
+  const end = source.indexOf('    pauseContentGeneration()', start);
+  assert.ok(start >= 0 && end > start);
+  for (const status of ['available', 'unavailable', 'untested', undefined]) {
+    for (const [imageQuantity, useAiImages] of [['light', true], ['heavy', true], ['light', false], ['none', true]]) {
+      const calls = [];
+      const plan = { outlineWordControlSnapshot: {}, contentGenerationOptions: { imageQuantity, useAiImages } };
+      const scope = {
+        technicalPlanStore: { loadTechnicalPlan: () => plan },
+        aiService: { getConfig() { calls.push('config'); return { image_model: { status } }; } },
+        prepareContentGenerationStart() { calls.push('prepare'); return {}; },
+        runContentGenerationTask() {}, runContentSectionRegenerationTask() {},
+        startManagedTask() { calls.push('start'); },
+        activeTasks: new Map(), isActiveTaskStatus: () => false,
+      };
+      require('node:vm').runInNewContext(`this.service = {${source.slice(start, end)}};`, scope);
+      for (const payload of [{}, { regenerate: true }, { targetItemId: 'section' }, { resume: true }, { retryFailedSections: true }]) {
+        calls.length = 0;
+        if (imageQuantity !== 'none' && useAiImages && status !== 'available') {
+          assert.throws(() => scope.service.startContentGeneration(payload), /已开启 AI 生图.*去设置-生图模型中点击测试，并配置可用渠道/);
+          assert.deepEqual(calls, ['config']);
+        } else {
+          scope.service.startContentGeneration(payload);
+          assert.equal(calls.at(-1), 'start');
+          assert.equal(calls.includes('config'), imageQuantity !== 'none' && useAiImages);
+        }
+      }
+    }
+  }
+  console.log('正文启动：读取已保存生图状态、不可用提前拦截、可用及关闭 AI/无图放行检查通过。');
+}
+
 // 所有产物位于独立中文临时目录，不读取或修改用户项目数据。
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '正文转Word检查-'));
   try {
+    checkImageModelStartup();
     checkRetiredStageCleanup();
     checkExportNumbering();
     const agentDir = path.join(directory, 'agent-runtime', '正文会话');

@@ -21,9 +21,24 @@ function validateContentImageReferences(workspaceDir, html) {
   });
 }
 
-// 三类图片均返回当前工作区资源路径；HTML、Mermaid 源码由主 Agent 自行编写。
+// 并发源码模型只处理当前图片；布局规范随请求提供，不依赖主会话上下文。
+function buildImageSourcePrompt(kind, frameSize) {
+  const common = '你负责生成投标文件中一张独立配图的源码。只返回源码，不输出 Markdown 围栏或解释。仅使用本次请求提供的内容和数据，不虚构事实、数值或承诺；你没有检索、文件写入或渲染工具，不负责正文编排、生成其他图片或回填正文。';
+  if (kind === 'mermaid') {
+    return `${common}\n生成 Mermaid 源码：流程图使用 flowchart，思维导图使用 mindmap，实体关系图使用 erDiagram。使用合法语法，正确处理中文标签，节点与连线清晰，避免过度密集。不要生成 HTML。`;
+  }
+  const height = { square: 1240, wide: 827, tall: 1653, panorama: 698 }[frameSize];
+  if (!height) throw new Error('HTML 配图必须提供合法的 frame_size：square、wide、tall 或 panorama');
+  return `${common}
+生成完整独立 HTML 文档，可用 HTML/CSS/SVG 绘图，不受正文受限 HTML 标签限制；不使用脚本、外部资源或网络依赖。
+画布比例为 ${frameSize}，固定设计尺寸为1240×${height}px，以 body 为画布，宽高包含程序统一设置的四周40px内边距，内部可用区域为1160×${height - 80}px；程序按2倍像素输出。保持 body 的 Flex/Grid 布局，不额外包一层画布或重复添加外层边距。
+采用正式简洁的配色、清晰层次、统一字体和线条，正文及节点文字不小于24px。标题和主体共同利用可用空间，主体用 Flex/Grid 分配剩余高度，卡片、节点及图形均衡分布，不在底部留下大块空白。
+内容不得侵入边距或超出画布，不通过无意义文字、拉伸图形、空卡片或整体缩小内容填满版面，不用隐藏溢出来掩盖裁切。`;
+}
+
+// 图片与独立源码均保存在当前工作区；源码生成使用文本队列，转图继续复用本地渲染。
 function createContentGenerationImageTools({ aiService, signal, localImageRenderService }, { Type, workspaceDir }) {
-  // 每次生成独立文件，失败或重新生成不会破坏此前已被正文引用的图片。
+  // 图片和源码每次生成独立文件，失败或重新生成不会覆盖已有产物。
   function saveImage(buffer, extension) {
     const assetRef = `图片/${crypto.randomUUID()}${extension}`;
     fs.mkdirSync(path.join(workspaceDir, '图片'), { recursive: true });
@@ -38,26 +53,74 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
 
   return [{
     name: 'generate-image', label: 'AI 生图',
-    description: '使用主程序生图配置生成单张图片，复制到当前工作区图片目录；返回原始结果及 asset_ref，供正文 img 的 data-yb-asset-ref 使用。',
+    description: '将已确定且相互独立的 AI 配图需求通过 images 一次批量提交，内部按主程序生图并发设置生成。每项 image_id 在批内唯一，用于对应正文中的具体图片。返回 results 中各项的状态及 asset_ref；只重试失败项。单张也通过只有一项的 images 提交。',
     executionMode: 'sequential',
     parameters: Type.Object({
-      prompt: Type.String({ minLength: 1, description: '描述图片的表达目的、主体、场景或结构关系，并给出必要的构图、风格及文字要求。提示词应与本节正文和对应图片用途一致。' }),
-      title: Type.Optional(Type.String({ description: '图片标题' })),
-      style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: 'engineering_diagram：工程图示风格，适用于示意、结构及原理表达；realistic_photo：写实照片风格，适用于实物和场景表达。省略时使用工程图示风格。' })),
-      size: Type.Optional(Type.String({ description: '仅在明确当前生图服务支持的尺寸值时填写 size；否则省略该参数，使用主程序配置。正文中的 data-yb-size 表示排版画框比例，不可直接作为生图尺寸参数。' })),
+      images: Type.Array(Type.Object({
+        image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，用于将结果对应到正文中的具体图片；图组内每张图使用不同标识。' }),
+        prompt: Type.String({ minLength: 1, description: '描述图片的表达目的、主体、场景或结构关系，并给出必要的构图、风格及文字要求。提示词应与本节正文和对应图片用途一致。' }),
+        title: Type.Optional(Type.String({ description: '图片标题' })),
+        style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: 'engineering_diagram：工程图示风格，适用于示意、结构及原理表达；realistic_photo：写实照片风格，适用于实物和场景表达。省略时使用工程图示风格。' })),
+        size: Type.Optional(Type.String({ description: '仅在明确当前生图服务支持的尺寸值时填写 size；否则省略该参数，使用主程序配置。正文中的 data-yb-size 表示排版画框比例，不可直接作为生图尺寸参数。' })),
+      }, { additionalProperties: false }), { minItems: 1 }),
     }, { additionalProperties: false }),
-    // 沿用现有生图队列、重试及统计，只增加工作区内的图片副本。
-    async execute(_callId, params, toolSignal) {
+    // 批内并发交给现有生图队列，逐项保留结果；取消时等待整批退出再向主会话抛出。
+    async execute(_callId, { images }, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
-      const result = await aiService.generateImage({ ...params, signal: combinedSignal });
+      if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批生图的 image_id 不能重复');
+      const results = await Promise.all(images.map(async ({ image_id, ...params }) => {
+        try {
+          combinedSignal.throwIfAborted();
+          const result = await aiService.generateImage({ ...params, signal: combinedSignal });
+          combinedSignal.throwIfAborted();
+          const assetRef = saveImage(fs.readFileSync(result.file_path), path.extname(result.file_path));
+          return { ...result, image_id, status: 'success', asset_ref: assetRef };
+        } catch (error) {
+          return { image_id, status: 'error', error: error.message };
+        }
+      }));
       combinedSignal.throwIfAborted();
-      const assetRef = saveImage(fs.readFileSync(result.file_path), path.extname(result.file_path));
-      return toolResult({ ...result, asset_ref: assetRef });
+      return toolResult({ results });
+    },
+  }, {
+    name: 'generate-image-sources', label: '批量生成配图源码',
+    description: '通过 images 批量提交相互独立的 HTML/Mermaid 配图需求，使用现有文本模型队列并发生成源码并保存为图片目录下的新文件。每项 prompt 必须提供准确的表达内容及所需数据，模型无法读取主会话或检索资料。返回 results 中的 image_id、kind、status、source_file（HTML 含 frame_size）或 error；仅重试失败项。源码成功不表示渲染完成，随后调用对应 render 工具，修复反馈后再回填正文图片引用。',
+    executionMode: 'sequential',
+    parameters: Type.Object({
+      images: Type.Array(Type.Object({
+        image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，用于对应正文中的具体图片。' }),
+        kind: Type.Union([Type.Literal('html'), Type.Literal('mermaid')]),
+        prompt: Type.String({ minLength: 1, description: '图片的类型、表达目的、准确内容和数据，以及必要的设计要求；不能只给文件路径或让模型自行查找资料。' }),
+        frame_size: Type.Optional(Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: 'HTML 必填，与对应正文 figure 的 data-yb-size 一致；Mermaid 不需要。' })),
+      }, { additionalProperties: false }), { minItems: 1 }),
+    }, { additionalProperties: false }),
+    // 每图独立请求和落盘，部分失败不丢弃成功源码，取消后不再保存新文件。
+    async execute(_callId, { images }, toolSignal) {
+      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
+      combinedSignal.throwIfAborted();
+      if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批配图源码的 image_id 不能重复');
+      const results = await Promise.all(images.map(async ({ image_id, kind, prompt, frame_size }) => {
+        try {
+          combinedSignal.throwIfAborted();
+          const source = (await aiService.chat({
+            signal: combinedSignal, logTitle: `Agent 配图源码-${kind}-${image_id}`,
+            messages: [{ role: 'system', content: buildImageSourcePrompt(kind, frame_size) }, { role: 'user', content: prompt }],
+          })).trim();
+          combinedSignal.throwIfAborted();
+          if (!source || source.startsWith('```')) throw new Error('配图源码不能为空或包含 Markdown 围栏，请只返回源码');
+          const sourceFile = saveImage(Buffer.from(source, 'utf8'), kind === 'html' ? '.html' : '.mmd');
+          return { image_id, kind, status: 'success', source_file: sourceFile, ...(kind === 'html' ? { frame_size } : {}) };
+        } catch (error) {
+          return { image_id, kind, status: 'error', error: error.message };
+        }
+      }));
+      combinedSignal.throwIfAborted();
+      return toolResult({ results });
     },
   }, ...['html', 'mermaid'].map(kind => ({
     name: `render-${kind}-image`, label: kind === 'html' ? 'HTML 转图片' : 'Mermaid 转图片',
-    description: `读取 Agent 已写入的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，用主程序本地组件转为 PNG。返回 asset_ref、像素尺寸和源码路径；渲染失败时修改源码后重新调用。`,
+    description: `读取工作区中已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，用主程序本地组件转为 PNG。返回 asset_ref、像素尺寸和源码路径；渲染失败时修改源码后重新调用。`,
     executionMode: 'sequential',
     parameters: Type.Object({
       source_file: Type.String({ minLength: 1, description: '当前工作区内的源码相对路径，如 图片/实施流程.html 或 图片/实施流程.mmd；使用 UTF-8，不带 Markdown 围栏。' }),
