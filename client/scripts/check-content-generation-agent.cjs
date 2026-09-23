@@ -167,7 +167,11 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     assert.match(rules, /省略时 Word 转换默认按 cover/);
     assert.match(rules, /需要完整保留的原方案图片应明确使用 contain/);
     assert.match(rules, /流程图使用 flowchart，思维导图使用 mindmap，实体关系图使用 erDiagram/);
-    assert.match(tools.find(tool => tool.name === 'generate-image').parameters.properties.images.items.properties.size.description, /仅在明确.*否则省略.*不可直接作为生图尺寸/);
+    const imageSchema = tools.find(tool => tool.name === 'generate-image').parameters.properties.images.items;
+    assert.ok(imageSchema.required.includes('size'));
+    assert.match(imageSchema.properties.size.description, /逐图依据.*data-yb-size.*768x1024/);
+    assert.match(imageSchema.properties.prompt.description, /保留.*比例.*构图/);
+    assert.match(rules, /size 必填.*768x1024/);
     assert.match(rules, /通过 images 列表批量提交/);
   }
   console.log('事实模式：三种中文要求、并发正文与扩缩写传递，以及图片比例、裁剪和尺寸说明检查通过。');
@@ -544,6 +548,12 @@ async function main() {
     assert.deepEqual(savedImage, { ...imageResult, image_id: '现场图', status: 'success', asset_ref: savedImage.asset_ref });
     assert.deepEqual(JSON.parse(imageOutput.content[0].text), imageOutput.details);
     assert.deepEqual(fs.readFileSync(path.join(workspaceDir, savedImage.asset_ref)), fs.readFileSync(imageResult.file_path));
+    imageService.generateImage = async () => assert.fail('缺少尺寸时不得请求生图或使用默认方图');
+    for (const size of [undefined, '', '   ']) {
+      const missing = await imageTool.execute('image-missing-size', { images: [{ ...imageBatch.images[0], size }] });
+      assert.equal(missing.details.results[0].status, 'error');
+      assert.match(missing.details.results[0].error, /补充.*size/);
+    }
     const imageError = new Error('生图模型不可用');
     imageService.generateImage = async () => { throw imageError; };
     assert.deepEqual((await imageTool.execute('image-error', imageBatch)).details.results,
@@ -554,13 +564,13 @@ async function main() {
     const imageQueue = createAiRequestQueue({ getLimit: () => 2 });
     const imagePending = new Map();
     const imageRequests = [];
-    imageService.generateImage = ({ signal: requestSignal, prompt }) => {
-      imageRequests.push(prompt);
+    imageService.generateImage = ({ signal: requestSignal, prompt, size }) => {
+      imageRequests.push({ prompt, size });
       return imageQueue.enqueue(() => new Promise((resolve, reject) => imagePending.set(prompt, { resolve, reject })), { signal: requestSignal, maxAttempts: 1 });
     };
-    const concurrentImages = { images: ['甲', '乙', '丙'].map(id => ({ image_id: id, prompt: id })) };
+    const concurrentImages = { images: ['甲', '乙', '丙'].map((id, index) => ({ image_id: id, prompt: id, size: ['768x1024', '1024x1024', '1536x1024'][index] })) };
     const batchPromise = imageTool.execute('image-batch', concurrentImages);
-    assert.deepEqual(imageRequests, ['甲', '乙', '丙'], '工具应一次提交整批需求');
+    assert.deepEqual(imageRequests, concurrentImages.images.map(({ prompt, size }) => ({ prompt, size })), '整批提交且逐张透传独立尺寸');
     assert.deepEqual([...imagePending.keys()], ['甲', '乙'], '实际并发由现有队列限制');
     imagePending.get('乙').reject(imageError);
     await new Promise(resolve => setImmediate(resolve));
@@ -703,6 +713,8 @@ async function main() {
             assert.equal(payload.files.length, resume ? 0 : files.length);
             assert.match(payload.prompt, /三个文件必须完整阅读/);
             assert.match(payload.prompt, /配图前完整阅读配图类型对照表.md/);
+            assert.match(payload.prompt, /size 必填.*768x1024/);
+            assert.match(payload.prompt, /prompt 中保留.*比例.*构图方向/);
             assert.match(payload.prompt, /HTML\/Mermaid 图使用 generate-image-sources/);
             assert.match(payload.prompt, /工具只生成并保存源码，不渲染、不回填正文/);
             assert.match(payload.prompt, /通过 images 列表一次提交已确定且相互独立的多张配图需求/);

@@ -58,10 +58,10 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     parameters: Type.Object({
       images: Type.Array(Type.Object({
         image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，用于将结果对应到正文中的具体图片；图组内每张图使用不同标识。' }),
-        prompt: Type.String({ minLength: 1, description: '描述图片的表达目的、主体、场景或结构关系，并给出必要的构图、风格及文字要求。提示词应与本节正文和对应图片用途一致。' }),
+        prompt: Type.String({ minLength: 1, description: '描述图片的表达目的、主体、场景或结构关系，并保留与正文画框和 size 一致的宽高比例及横向/竖向构图要求，不得在整理提示词时省略比例。' }),
         title: Type.Optional(Type.String({ description: '图片标题' })),
         style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: 'engineering_diagram：工程图示风格，适用于示意、结构及原理表达；realistic_photo：写实照片风格，适用于实物和场景表达。省略时使用工程图示风格。' })),
-        size: Type.Optional(Type.String({ description: '仅在明确当前生图服务支持的尺寸值时填写 size；否则省略该参数，使用主程序配置。正文中的 data-yb-size 表示排版画框比例，不可直接作为生图尺寸参数。' })),
+        size: Type.String({ minLength: 1, pattern: '\\S', description: '必填。逐图依据正文 figure 的 data-yb-size 选择对应比例的具体生图尺寸：square=1:1、wide=3:2、tall=3:4、panorama=16:9。当前金龙 gpt-image-2-1k 的 tall 可使用已验证的 768x1024。不能把 tall 等画框名称当尺寸，不得省略尺寸或统一沿用默认方图；prompt 同步写明比例和构图方向。' }),
       }, { additionalProperties: false }), { minItems: 1 }),
     }, { additionalProperties: false }),
     // 批内并发交给现有生图队列，逐项保留结果；取消时等待整批退出再向主会话抛出。
@@ -72,6 +72,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       const results = await Promise.all(images.map(async ({ image_id, ...params }) => {
         try {
           combinedSignal.throwIfAborted();
+          if (!params.size?.trim()) throw new Error('请补充本张 AI 图片的 size，尺寸比例应与正文画框一致');
           const result = await aiService.generateImage({ ...params, signal: combinedSignal });
           combinedSignal.throwIfAborted();
           const assetRef = saveImage(fs.readFileSync(result.file_path), path.extname(result.file_path));
