@@ -225,7 +225,7 @@ async function checkTask(directory, outputDir) {
           assert.equal(payload.initial_stage, 'generating');
           assert.deepEqual(payload.files, [], '重试不得重写输入快照');
           assert.match(payload.prompt, /本次继续原会话/);
-          assert.doesNotMatch(payload.prompt, /新一轮局部生成/);
+          assert.doesNotMatch(payload.prompt, /目录变更后的局部生成任务/);
           assert.equal(persistentState.word_adjustment_started, stage === '扩缩写', '重试不得重置扩缩写保护状态');
           if (stage === '扩缩写') assert.match(payload.prompt, /本次恢复时已处于图片保护阶段/);
           const tools = payload.create_tools({ Type, workspaceDir: directory });
@@ -291,7 +291,7 @@ async function checkTask(directory, outputDir) {
       templateStore: { getTemplate: () => ({ config: { page: { size: 'A4' } } }) }, agentService: {
       ...args.agentService, async runTask(payload) {
         assert.equal(payload.persistent_task.mode, 'resume');
-        assert.match(payload.prompt, /新一轮局部生成/);
+        assert.match(payload.prompt, /目录变更后的局部生成任务/);
         const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
         assert.deepEqual(input.targets.map(section => section.id), [targets[0].id]);
         for (const file of payload.files) fs.writeFileSync(path.join(directory, file.path), file.content, 'utf8');

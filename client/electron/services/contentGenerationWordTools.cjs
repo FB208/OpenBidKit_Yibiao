@@ -63,7 +63,7 @@ function createContentGenerationWordTools({ agentService, signal, activity, vali
     },
   }, {
     name: 'adjust-sections', label: '并发扩缩写正文', executionMode: 'sequential',
-    description: '全文差额大于10000字时使用。为不同小节分配扩缩写要求，各子任务用 Pi 原生 read/edit 直接修改 HTML，等待全部完成后再检查总字数。差额小于等于10000字时由主 Agent 直接 edit 微调。',
+    description: '字数检查结果 difference 表示距离有效字数范围的差额，不是实际总字数。差额大于10000字时，为不同小节分配各自的增减字数和修改要求，各子任务用 Pi 原生 read/edit 修改 HTML；等待全部完成后复查总字数。差额为1～10000字时由主 Agent 直接 edit 调整；差额为0且目标完整时不调整。',
     parameters: Type.Object({ sections: Type.Array(Type.Object({
       section_id: Type.String(), instructions: Type.String(),
     }), { minItems: 1 }) }),
@@ -72,7 +72,7 @@ function createContentGenerationWordTools({ agentService, signal, activity, vali
       if (!enterAdjustment().complete) throw new Error('请先完成全部目标小节及配图，再进行扩缩写');
       return result({ results: await editContentSections({
         jobs: params.sections, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity,
-        title: '正文扩缩写', instructions: '精简重复冗余文字，扩写应具体且不重复凑字；不得为压字数删去必须保留的实质内容。',
+        title: '正文扩缩写', instructions: '缩写时优先删除重复表述、冗余修饰和可合并的说明；扩写时补充与本节主题相关的实施细节。两种调整均须保留实质信息、事实参数和承诺，禁止通过删除必要信息或重复表达满足字数要求。',
       }) });
     },
   }];

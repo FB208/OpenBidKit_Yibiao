@@ -617,7 +617,7 @@ function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, r
     ? '表格需求为“大量”，没有数量上限，但仍然只有明显适合表格的小节才将 table.needed 设为 true。'
     : tableRequirement === 'none'
       ? '表格需求为“不要”，table.needed 必须为 false，table.purpose 留空。'
-      : `表格需求为“${tableRequirementLabel}”，全文共 ${totalSections || 0} 个 AI 生成小节，表格上限为 ${maxTables || 0} 个；table.needed 只表示进入候选池，程序稍后还会全局择优。`;
+      : `表格需求为“${tableRequirementLabel}”，全文共 ${totalSections || 0} 个 AI 生成小节，表格上限为 ${maxTables || 0} 个；在当前表格数量受限的模式下，table.needed=true 表示本节适合使用表格，属于候选建议。程序会在编排完成后根据全局数量限制确定最终结果，不应将候选标记理解为最终保留决定。`;
   const targetText = targetItemIds.length
     ? targetItemIds.map((id) => `- ${id}`).join('\n')
     : '无。保持文件中已有编排不变，仅完成格式检查并写回。';

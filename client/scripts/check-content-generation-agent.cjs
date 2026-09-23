@@ -7,9 +7,10 @@ const { createContentGenerationImageTools } = require('../electron/services/cont
 
 // 三种事实模式经真实输入构建与工具调用传给并发写作和扩缩写，不依赖主 Agent 手动转述。
 async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal }) {
-  for (const [mode, expected] of [['fabricate', /允许结合项目补充编造/], ['omit', /不确定事实使用笼统表达/], ['placeholder', /不确定事实使用【待填写】/]]) {
+  for (const [mode, expected] of [['fabricate', /允许结合项目背景补充设定/], ['omit', /不依赖未知具体值的概括性表述/], ['placeholder', /以“【待填写】”标记/]]) {
     const directory = path.join(workspaceDir, `事实模式-${mode}`);
-    const files = buildContentGenerationFiles({ ...fileOptions, globalFactsMode: mode,
+    const checkTotalWords = mode !== 'omit';
+    const files = buildContentGenerationFiles({ ...fileOptions, globalFactsMode: mode, checkTotalWords,
       targets: fileOptions.targets.slice(0, 1), wordControl: { minimumWords: 20000 }, documentIds: [],
     });
     for (const file of files) {
@@ -18,14 +19,24 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
       fs.writeFileSync(target, file.content, 'utf8');
     }
     const decisions = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
+    const imageTypes = files.find(file => file.path === '配图类型对照表.md').content;
+    assert.equal(imageTypes, fs.readFileSync(path.join(__dirname, '../electron/resources/content-generation/配图类型对照表.md'), 'utf8'));
+    for (const mapping of ['思维导图=mermaid', '组织架构图=html', '时序图=html', '状态图=html', '原理示意图=ai', '其他=ai']) {
+      assert.ok(imageTypes.split(/\r?\n/).includes(mapping));
+    }
     assert.equal(decisions.global_facts_mode, mode);
     assert.match(decisions.global_facts_requirements, expected);
-    assert.match(decisions.global_facts_requirements, /不能用补充内容覆盖已有设定/);
+    assert.match(decisions.global_facts_requirements, /不得覆盖或改变全局事实/);
+    const wordScope = checkTotalWords ? /由主 Agent 统一检查总字数/ : /本次仅统计目标小节字数，不依据全文上下限扩缩写/;
+    assert.match(decisions.word_requirements, wordScope);
     let generated = false;
     let edited = false;
     const tools = createContentGenerationTools({ signal,
       aiService: { async chat(request) {
         assert.ok(request.messages[0].content.includes(decisions.global_facts_requirements));
+        assert.ok(request.messages[0].content.includes(imageTypes), '并发正文模型必须收到工作区对照表全文');
+        assert.match(request.messages[1].content, wordScope);
+        assert.match(request.messages[1].content, /没有文件检索或图片生成工具，仅核对本次请求提供的材料/);
         generated = true;
         return '<!-- yibiao:block -->\n<p id="facts">项目实施内容</p>';
       } },
@@ -45,7 +56,8 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     assert.match(rules, /square 为 1:1.*wide 为 3:2.*tall 为 3:4.*panorama 为 16:9/);
     assert.match(rules, /省略时 Word 转换默认按 cover/);
     assert.match(rules, /需要完整保留的原方案图片应明确使用 contain/);
-    assert.match(tools.find(tool => tool.name === 'generate-image').parameters.properties.size.description, /不知道.*省略.*不猜测/);
+    assert.match(rules, /流程图使用 flowchart，思维导图使用 mindmap，实体关系图使用 erDiagram/);
+    assert.match(tools.find(tool => tool.name === 'generate-image').parameters.properties.size.description, /仅在明确.*否则省略.*不可直接作为生图尺寸/);
   }
   console.log('事实模式：三种中文要求、并发正文与扩缩写传递，以及图片比例、裁剪和尺寸说明检查通过。');
 }
@@ -73,6 +85,11 @@ function checkSharedTemplate(files) {
   });
   assert.equal(agent('img[src], img[data-yb-asset-ref]').length, 0);
   assert.equal(agent('figure > template[data-yb-role="prompt"]').length, 5);
+  agent('figure[data-yb-generation="htmlImage"] > template, figure[data-yb-generation="mermaid"] > template').each((_, element) => {
+    assert.match(agent(element).text(), /中文标签/);
+    assert.doesNotMatch(agent(element).text(), /不使用文字/);
+  });
+  assert.match(agent('figure[data-yb-generation="aiImage"] > template').text(), /无文字、标志和水印/);
   agent('figure > template').each((_, element) => assert.ok(agent(element).text().trim()));
   assert.equal(agent('figcaption').length, 5);
   for (let level = 1; level <= 6; level++) assert.ok(agent(`h${level}`).length);
@@ -130,7 +147,7 @@ async function checkTableCleanup({ Type, workspaceDir, fileOptions, signal }) {
       assert.match(payload.prompt, /包括原方案表格/);
       assert.ok(payload.prompt.includes(JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8')).global_facts_requirements));
       assert.match(payload.prompt, /不扩大本次编辑范围/);
-      assert.match(payload.prompt, /只改变表达形式，不作无关改写/);
+      assert.match(payload.prompt, /仅改变表达形式，不删减信息、不作无关改写/);
       assert.doesNotMatch(payload.prompt, /引用、原表格、/);
       childrenStarted++;
       if (childrenStarted === 2) bothStarted();
@@ -325,7 +342,7 @@ async function main() {
     assert.match(input.image_requirements, /少图.*1～3/);
     assert.match(input.image_requirements, /Mermaid 图片（mermaid）不允许/);
     assert.match(input.image_requirements, /甘特图、风险矩阵/);
-    assert.match(input.image_requirements, /不要求每节或全文覆盖所有类型/);
+    assert.match(input.image_requirements, /各小节及全文均无须覆盖全部已开启类型/);
     assert.match(files.find(file => file.path === '知识库/doc.md').content, /未选中条目全文/);
     assert.equal(JSON.parse(files.find(file => file.path === '知识库/索引.json').content)[0].file, '知识库/doc.md');
     assert.match(files.find(file => file.path === '全局事实设定.md').content, /六十天/);
@@ -336,8 +353,8 @@ async function main() {
       const decisionFile = scenarioFiles.find(file => file.path === '正文编排决策.json');
       const decisions = JSON.parse(decisionFile.content);
       assert.match(decisions.image_requirements, expected);
-      assert.match(decisions.image_requirements, /高分不等于必须多图/);
-      assert.match(decisions.image_requirements, /不设比例或强制顺序/);
+      assert.match(decisions.image_requirements, /不代表必须生成图片/);
+      assert.match(decisions.image_requirements, /查阅配图类型对照表.md.*用途、结构相近.*仍无法归类时，使用 AI 生图/);
       if (!enabled) assert.match(decisions.image_requirements, /AI 图片（aiImage）不允许；HTML 图片（htmlImage）不允许；Mermaid 图片（mermaid）不允许/);
       fs.writeFileSync(path.join(workspaceDir, decisionFile.path), decisionFile.content, 'utf8');
       let received = false;
@@ -440,7 +457,7 @@ async function main() {
     const aiService = { chat(request) {
       assert.equal(request.signal.aborted, false);
       assert.match(request.messages[0].content, /【待填写】/);
-      assert.match(request.messages[0].content, /不提及知识库/);
+      assert.match(request.messages[0].content, /不在正文中提及知识库/);
       assert.ok(request.messages[0].content.includes(input.image_requirements));
       assert.match(request.messages[1].content, /六十天/);
       assert.match(request.messages[1].content, /A3/);
@@ -501,9 +518,10 @@ async function main() {
             assert.equal(payload.auto_validate_json, true);
             assert.equal(payload.files.length, resume ? 0 : files.length);
             assert.match(payload.prompt, /三个文件必须完整阅读/);
+            assert.match(payload.prompt, /配图前完整阅读配图类型对照表.md/);
             assert.match(payload.prompt, /global_facts_requirements（当前事实模式的中文要求）/);
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
-            assert.match(payload.prompt, /知识库\/包含用户选中的全部文档/);
+            assert.match(payload.prompt, /知识库\/索引.json定位参考文档/);
             assert.match(payload.prompt, /image_requirements（用户配图要求）/);
             assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
@@ -599,7 +617,7 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
     assert.equal(payload.persistent_task.mode, 'resume');
     assert.equal(payload.initial_stage, 'generating');
     assert.equal(payload.files.length, files.length);
-    assert.match(payload.prompt, /重新阅读程序更新的输入文件/);
+    assert.match(payload.prompt, /重新读取已更新的输入文件/);
     assert.equal(state.word_adjustment_started, false);
     assert.equal(state.consistency, null);
     payload.before_tool_call({ toolCall: { name: 'generate-sections' }, args: {} });
@@ -641,7 +659,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
   assert.match(decisions.restoration_requirements, /原图不受无图/);
   assert.match(decisions.restoration_requirements, /data-yb-generation="aiImage"/);
   assert.match(decisions.restoration_requirements, /唯一、非空的 template/);
-  assert.match(decisions.restoration_requirements, /不得因该属性调用生图工具/);
+  assert.match(decisions.restoration_requirements, /该标记不构成调用 AI 生图的指令/);
   const underLimit = JSON.parse(buildContentGenerationFiles({ ...options, existingTotalWords: 100, wordControl: fileOptions.wordControl }).find(file => file.path === '正文编排决策.json').content);
   assert.match(underLimit.restoration_requirements, /100 字，全文上限 2000/);
   assert.match(underLimit.restoration_requirements, /每小节目标 800/);

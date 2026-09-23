@@ -41,10 +41,10 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     description: '使用主程序生图配置生成单张图片，复制到当前工作区图片目录；返回原始结果及 asset_ref，供正文 img 的 data-yb-asset-ref 使用。',
     executionMode: 'sequential',
     parameters: Type.Object({
-      prompt: Type.String({ minLength: 1, description: '图片生成提示词' }),
+      prompt: Type.String({ minLength: 1, description: '描述图片的表达目的、主体、场景或结构关系，并给出必要的构图、风格及文字要求。提示词应与本节正文和对应图片用途一致。' }),
       title: Type.Optional(Type.String({ description: '图片标题' })),
-      style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: '工程图示或专业实景照片风格' })),
-      size: Type.Optional(Type.String({ description: '当前生图服务支持的尺寸；不知道服务支持哪些尺寸时省略，沿用主程序配置，不猜测尺寸值。' })),
+      style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: 'engineering_diagram：工程图示风格，适用于示意、结构及原理表达；realistic_photo：写实照片风格，适用于实物和场景表达。省略时使用工程图示风格。' })),
+      size: Type.Optional(Type.String({ description: '仅在明确当前生图服务支持的尺寸值时填写 size；否则省略该参数，使用主程序配置。正文中的 data-yb-size 表示排版画框比例，不可直接作为生图尺寸参数。' })),
     }, { additionalProperties: false }),
     // 沿用现有生图队列、重试及统计，只增加工作区内的图片副本。
     async execute(_callId, params, toolSignal) {

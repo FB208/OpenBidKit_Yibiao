@@ -87,13 +87,13 @@ function checkNumberedInputAndSchema() {
   assert.ok(prompt.includes('相同 L 编号的所有分片仍属于同一个真实原文行'));
   assert.ok(prompt.includes('不要在 assignment 顶层输出正文 content 字段'));
   assert.ok(prompt.includes('每项的标题 content 仍须填写'));
-  assert.ok(prompt.includes('不要求每个目标小节都有 assignment'));
+  assert.ok(prompt.includes('不要求每个目标均分配材料'));
   assert.ok(prompt.includes('大型表格、成组图片、证书和清单等大块材料'));
   assert.ok(prompt.includes('只有多个目标小节确实都需要完整保留该材料时'));
   assert.ok(prompt.includes('纯空白签字、职务、日期、盖章栏'));
-  assert.ok(prompt.includes('优先直接写入 original-restore-result.json'));
-  assert.ok(prompt.includes('无需在 write 前逐行复述原文'));
-  assert.ok(prompt.includes('仍可使用 read、find 或 bash'));
+  assert.ok(prompt.includes('将结果直接写入 original-restore-result.json'));
+  assert.ok(prompt.includes('不重复输出逐行原文'));
+  assert.ok(prompt.includes('使用 read、find 或 bash 补充核对并修正'));
   assert.ok(prompt.includes('工具返回校验通过后无需再调用 json-validation'));
   assert.ok(!prompt.includes('完成后调用 json-validation'));
   const resumePrompt = restoration.buildOriginalRestorationPrompt({

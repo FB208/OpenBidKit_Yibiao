@@ -194,7 +194,7 @@ function getAssistantErrorDetails(messages = []) {
 function buildRetryPrompt(outputFile, error, attempt, maxRetries) {
   return `上一轮执行未通过程序校验或执行失败：${compactText(error?.message || error, 800)}
 
-请继续使用当前会话和工作区，只做必要修复，并将最终结果写入 ${outputFile}。
+本次结果文件：${outputFile}。在当前会话和工作区中，根据上述错误修复该文件。继续遵守当前阶段的可修改范围、工具权限及完成条件；已有文件优先局部修正，不因重试扩大修改范围或重新执行已完成阶段。
 这是第 ${attempt}/${maxRetries} 次自动修复机会。`;
 }
 
