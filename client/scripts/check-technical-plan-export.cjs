@@ -8,7 +8,8 @@ const AdmZip = require('adm-zip');
 const cheerio = require('cheerio');
 const { createTechnicalPlanExport } = require('../electron/services/technicalPlanExport.cjs');
 const { createOpenXmlHelperService } = require('../electron/services/openXmlHelperService.cjs');
-const { cloneDefaultExportFormat } = require('../electron/services/exportFormatDefaults.cjs');
+const { cloneDefaultExportFormat, normalizeExportFormat } = require('../electron/services/exportFormatDefaults.cjs');
+const { SYSTEM_EXPORT_TEMPLATES } = require('../electron/services/systemExportTemplates.cjs');
 
 /** 在独立 Electron 窗口走真实 preload、IPC、保存及进度订阅，保存对话框定向到临时目录。 */
 async function checkIpc(exporter, directory) {
@@ -86,6 +87,15 @@ async function main() {
     ] },
   };
   const config = cloneDefaultExportFormat();
+  const visualTemplates = ['tpl-system-a4-visual', 'tpl-system-a3-landscape-visual'].map(id => SYSTEM_EXPORT_TEMPLATES.find(template => template.template_id === id));
+  for (const template of visualTemplates) {
+    assert.ok(template);
+    assert.equal(template.config.heading_border.heading_top_border_space_pt, 5);
+    assert.ok(template.config.headings.every(heading => heading.line_spacing === 1.2 && heading.spacing_before_pt === 0 && heading.spacing_after_pt === 0));
+    assert.equal(normalizeExportFormat(template.config).heading_border.heading_top_border_space_pt, 5);
+  }
+  Object.assign(config.heading_border, visualTemplates[0].config.heading_border);
+  config.headings = visualTemplates[0].config.headings.map(heading => ({ ...heading }));
   Object.assign(config.page, { paper_size: 'a3', orientation: 'landscape', two_column: true,
     header_enabled: true, header_text: '当前模板页眉', footer_enabled: true, footer_text: '当前模板页脚',
     page_number_enabled: true, page_number_start: 7, first_page_different: true });
@@ -129,6 +139,14 @@ async function main() {
       for (const label of ['混合父标题', '人工正文', '待模板填写']) assert.equal(paragraph(label).find('w\\:pBdr').length, scope === 'document' ? 1 : 0, label);
       assert.equal(paragraph('现场施工正文').find('w\\:pBdr').length, 1);
       assert.equal(paragraph('交付验收正文').find('w\\:pBdr').length, 1);
+      assert.equal(paragraph('设备表题').find('w\\:top').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+      assert.equal(paragraph('设备表题').find('w\\:bottom').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+      assert.equal(paragraph('设备表题').find('w\\:spacing').attr('w:after'), '0');
+      assert.equal(paragraph('设备表题').find('w\\:top').attr('w:space'), '1');
+      assert.equal($('w\\:tbl').first().find('w\\:tblPr > w\\:tblBorders > w\\:top').attr('w:val'), 'nil');
+      assert.equal(paragraph('1.1 施工 & 安全').find('w\\:top').attr('w:space'), '5');
+      assert.equal(paragraph('1.1 施工 & 安全').find('w\\:spacing').attr('w:line'), '288');
+      assert.equal(paragraph('现场施工正文').find('w\\:bottom').length, 0);
       assert.equal(paragraph('现场施工正文').find('w\\:rFonts').first().attr('w:eastAsia'), '楷体');
       assert.equal(paragraph('人工正文').find('w\\:rFonts').first().attr('w:eastAsia'), scope === 'document' ? '楷体' : '宋体');
       assert.equal($('w\\:pgNumType[w\\:start="7"]').length, 1);
@@ -177,7 +195,23 @@ async function main() {
     }
     state.outlineData.outline = originalOutline;
     // 未指定整本导出的样张/小节转换继续遵循原设置。
-    const sample = readWord(Buffer.from((await helper.createRestrictedHtmlDocx('<h1>小节样张</h1><p>正文</p>', config, { assetRoot: workspaceDir, copyAssets: true })).bytes));
+    const sampleHtml = '<h1>一级样张</h1><h2>二级样张</h2><h3>三级样张</h3><h4>四级样张</h4><h5>五级样张</h5><h6>六级样张</h6><p>正文</p><table><caption>样张表题</caption><thead><tr><th>字段</th></tr></thead><tbody><tr><td>内容</td></tr></tbody></table>';
+    const sample = readWord(Buffer.from((await helper.createRestrictedHtmlDocx(sampleHtml, config, { assetRoot: workspaceDir, copyAssets: true })).bytes));
+    const preview = readWord(Buffer.from((await helper.renderRestrictedHtmlDocx(sampleHtml, config)).bytes));
+    for (const document of [sample, preview]) {
+      for (const title of ['一级样张', '二级样张', '三级样张', '四级样张', '五级样张', '六级样张']) {
+        const heading = document.paragraph(title);
+        assert.equal(heading.find('w\\:top').attr('w:space'), '5');
+        assert.equal(heading.find('w\\:spacing').attr('w:line'), '288');
+        assert.equal(heading.find('w\\:spacing').attr('w:before'), '0');
+        assert.equal(heading.find('w\\:spacing').attr('w:after'), '0');
+      }
+      assert.equal(document.paragraph('样张表题').find('w\\:top').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+      assert.equal(document.paragraph('样张表题').find('w\\:top').attr('w:space'), '1');
+      assert.equal(document.paragraph('样张表题').find('w\\:bottom').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+      assert.equal(document.paragraph('样张表题').find('w\\:spacing').attr('w:after'), '0');
+      assert.equal(document.$('w\\:tbl').first().find('w\\:tblPr > w\\:tblBorders > w\\:top').attr('w:val'), 'nil');
+    }
     assert.equal(sample.$('w\\:titlePg').length, 1);
     assert.equal(sample.$('w\\:headerReference[w\\:type="first"], w\\:footerReference[w\\:type="first"]').length, 2);
     console.log('首页不同：整本导出忽略设置，商务在前/AI 在前、两种模板范围及原有小节转换检查通过。');

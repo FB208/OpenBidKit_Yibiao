@@ -908,6 +908,9 @@ static class RestrictedHtmlDocumentRenderer
     {
         var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("Word 缺少正文部件");
         var content = mainPart.Document.Body ?? throw new InvalidOperationException("Word 缺少正文");
+        var tableCaptions = content.Elements<Wp.Paragraph>()
+            .Where(paragraph => paragraph.InnerText.Contains(TableCaptionMarker, StringComparison.Ordinal))
+            .ToHashSet();
 
         foreach (var paragraph in content.Descendants<Wp.Paragraph>())
         {
@@ -917,7 +920,7 @@ static class RestrictedHtmlDocumentRenderer
         ApplyTables(content, format, tableSpecs);
         ApplyNumbering(mainPart, format, rangeOnly ? IsolateNumbering(mainPart, content) : null);
         // 页框和一级标题通栏沿用现有互斥规则；整本导出的分栏在页面范围合并后应用。
-        if (ChapterFrameEnabled(format)) ApplyChapterParagraphFrames(content, format, includeLeading: rangeOnly);
+        if (ChapterFrameEnabled(format)) ApplyChapterParagraphFrames(content, format, tableCaptions, includeLeading: rangeOnly);
         else if (!rangeOnly) ApplyTwoColumnHeadingSections(mainPart, content, format);
         if (!rangeOnly) RemoveLeadingPageBreak(content);
         mainPart.Document.Save();
@@ -1550,10 +1553,11 @@ static class RestrictedHtmlDocumentRenderer
     const uint ChapterFrameLineSpacePt = 1;
 
     /// <summary>用段落边框给每个一级章节画连续页框。</summary>
-    static void ApplyChapterParagraphFrames(Wp.Body content, FormatReader format, bool includeLeading = false)
+    static void ApplyChapterParagraphFrames(Wp.Body content, FormatReader format, HashSet<Wp.Paragraph> tableCaptions, bool includeLeading = false)
     {
         var border = format.Section("heading_border");
         var color = Color(format.Text(border, "border_color", "#cfd8ee"), "CFD8EE");
+        var headingTopBorderSpacePt = (uint)Math.Max(0, Math.Round(format.Number(border, "heading_top_border_space_pt", ChapterFrameLineSpacePt)));
         var fills = new string[6];
         for (var level = 1; level <= 6; level += 1)
         {
@@ -1563,23 +1567,27 @@ static class RestrictedHtmlDocumentRenderer
         foreach (var chapter in CollectChapters(content, includeLeading))
         {
             if (chapter.Count == 0) continue;
-            foreach (var element in chapter)
+            for (var index = 0; index < chapter.Count; index += 1)
             {
+                var element = chapter[index];
                 if (element is Wp.Table table)
                 {
-                    ApplyChapterFrameTableBorders(table, color, format);
+                    var captioned = index > 0 && chapter[index - 1] is Wp.Paragraph previous && tableCaptions.Contains(previous);
+                    ApplyChapterFrameTableBorders(table, color, format, captioned);
                     continue;
                 }
 
                 if (element is not Wp.Paragraph paragraph) continue;
                 var level = HeadingLevelOf(paragraph);
                 // 正文只画左右竖线，交给 Word 和预览引擎合并成一条连续的框；
-                // 标题自带上横线和底纹，章尾那条横线由收尾段落补。
+                // 章节标题和表题用上横线与前文分隔，章尾那条横线由收尾段落补。
                 ApplyChapterFrameParagraph(
                     paragraph,
                     color,
                     level > 0 ? fills[Math.Clamp(level - 1, 0, 5)] : null,
-                    topLine: level > 0);
+                    topLine: level > 0 || tableCaptions.Contains(paragraph),
+                    bottomLine: tableCaptions.Contains(paragraph),
+                    topLineSpacePt: level > 0 ? headingTopBorderSpacePt : ChapterFrameLineSpacePt);
             }
 
             chapter[^1].InsertAfterSelf(CreateChapterFrameClosingParagraph(color));
@@ -1591,10 +1599,13 @@ static class RestrictedHtmlDocumentRenderer
         Wp.Paragraph paragraph,
         string color,
         string? fill,
-        bool topLine)
+        bool topLine,
+        bool bottomLine,
+        uint topLineSpacePt)
     {
         var properties = EnsureParagraphProperties(paragraph);
-        SetSingleChild(properties, CreateChapterFrameBorders(color, topLine));
+        SetSingleChild(properties, CreateChapterFrameBorders(color, topLine, bottomLine, topLineSpacePt));
+        if (bottomLine) properties.GetFirstChild<Wp.SpacingBetweenLines>()!.After = "0";
 
         if (fill is null) properties.RemoveAllChildren<Wp.Shading>();
         else SetSingleChild(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = fill });
@@ -1619,11 +1630,12 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>页框边框；子元素顺序按 OOXML schema 的 top / left / bottom / right。</summary>
-    static Wp.ParagraphBorders CreateChapterFrameBorders(string color, bool topLine)
+    static Wp.ParagraphBorders CreateChapterFrameBorders(string color, bool topLine, bool bottomLine = false, uint topLineSpacePt = ChapterFrameLineSpacePt)
     {
         var borders = new Wp.ParagraphBorders();
-        if (topLine) borders.AppendChild(CreateFrameBorder<Wp.TopBorder>(color, ChapterFrameLineSpacePt));
+        if (topLine) borders.AppendChild(CreateFrameBorder<Wp.TopBorder>(color, topLineSpacePt));
         borders.AppendChild(CreateFrameBorder<Wp.LeftBorder>(color, ChapterFrameBorderSpacePt));
+        if (bottomLine) borders.AppendChild(CreateFrameBorder<Wp.BottomBorder>(color, ChapterFrameLineSpacePt));
         borders.AppendChild(CreateFrameBorder<Wp.RightBorder>(color, ChapterFrameBorderSpacePt));
         return borders;
     }
@@ -1689,9 +1701,9 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>
-    /// 页框内的业务表格强制满栏宽并接管左右竖线，上下和内部横线保持表格自己的样式。
+    /// 页框内的业务表格强制满栏宽并接管左右竖线；表题已有下边线时不重复画表格顶边。
     /// </summary>
-    static void ApplyChapterFrameTableBorders(Wp.Table table, string color, FormatReader format)
+    static void ApplyChapterFrameTableBorders(Wp.Table table, string color, FormatReader format, bool captioned)
     {
         var properties = table.GetFirstChild<Wp.TableProperties>() ?? table.PrependChild(new Wp.TableProperties());
         var width = ContentWidthTwips(format);
@@ -1731,6 +1743,8 @@ static class RestrictedHtmlDocumentRenderer
 
         SetSingleChild(borders, CreateTableBorder<Wp.LeftBorder>(color, 6));
         SetSingleChild(borders, CreateTableBorder<Wp.RightBorder>(color, 6));
+        // 表题下边线已经承担表格上沿，避免两条横线叠在一起。
+        if (captioned) SetSingleChild(borders, CreateTableBorder<Wp.TopBorder>(color, 0));
     }
 
     /// <summary>双栏文档用连续分节把一级标题单独置于通栏。</summary>

@@ -51,6 +51,7 @@ const defaultExportFormat = {
   heading_border: {
     enabled: false,
     border_color: '#cfd8ee',
+    heading_top_border_space_pt: 1,
     level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
     structure: '上下结构',
   },
@@ -216,6 +217,7 @@ function normalizeExportFormat(source) {
   const heading_border = {
     enabled: typeof srcHeadingBorder.enabled === 'boolean' ? srcHeadingBorder.enabled : def.heading_border.enabled,
     border_color: typeof srcHeadingBorder.border_color === 'string' && srcHeadingBorder.border_color ? srcHeadingBorder.border_color : def.heading_border.border_color,
+    heading_top_border_space_pt: typeof srcHeadingBorder.heading_top_border_space_pt === 'number' ? srcHeadingBorder.heading_top_border_space_pt : def.heading_border.heading_top_border_space_pt,
     level_cell_colors: defHeadingCellColors.map((color, index) => (typeof srcHeadingCellColors[index] === 'string' && srcHeadingCellColors[index] ? srcHeadingCellColors[index] : color)),
     structure: typeof srcHeadingBorder.structure === 'string' && VALID_HEADING_BORDER_STRUCTURES.includes(srcHeadingBorder.structure) ? srcHeadingBorder.structure : def.heading_border.structure,
   };

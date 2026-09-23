@@ -414,7 +414,7 @@ const CHAPTER_FRAME_LINE_SPACE_PT = 1;
  * 所以页框里每一块的"最左字符位置"必须都等于 CHAPTER_FRAME_PADDING_TWIPS，竖线才是一条直线。
  * list=true 的块把左缩进交给编号定义（left - hanging 已经等于这个留白），这里不再叠加。
  */
-function chapterFrameParagraphOptions(context, { topLine = false, fill, list = false } = {}) {
+function chapterFrameParagraphOptions(context, { topLine = false, bottomLine = false, fill, list = false } = {}) {
   const frame = context?.chapterFrame;
   if (!frame) return {};
   const side = {
@@ -423,8 +423,9 @@ function chapterFrameParagraphOptions(context, { topLine = false, fill, list = f
   const line = {
     style: BorderStyle.SINGLE, size: 6, color: frame.color, space: CHAPTER_FRAME_LINE_SPACE_PT,
   };
+  const headingTopLine = fill ? { ...line, space: frame.headingTopBorderSpacePt ?? CHAPTER_FRAME_LINE_SPACE_PT } : line;
   const options = {
-    border: { left: side, right: side, ...(topLine ? { top: line } : {}) },
+    border: { left: side, right: side, ...(topLine ? { top: headingTopLine } : {}), ...(bottomLine ? { bottom: line } : {}) },
     frameIndent: { left: list ? null : CHAPTER_FRAME_PADDING_TWIPS, right: CHAPTER_FRAME_PADDING_TWIPS },
   };
   if (fill) options.shading = { type: ShadingType.CLEAR, fill };
@@ -454,6 +455,7 @@ function getChapterFrameConfig(exportFormat) {
   const levelCellColors = Array.isArray(frame.level_cell_colors) ? frame.level_cell_colors : [];
   return {
     color,
+    headingTopBorderSpacePt: Math.max(0, Math.round(frame.heading_top_border_space_pt ?? CHAPTER_FRAME_LINE_SPACE_PT)),
     fills: DEFAULT_HEADING_BORDER_CELL_COLORS.map((fill, index) => {
       const fallback = normalizeDocxColor(fill, 'FFFFFF');
       return normalizeDocxColor(levelCellColors[index] || fill, fallback);
@@ -914,9 +916,9 @@ function tableCaptionRunMarks(context) {
 function tableCaptionParagraphOptions(context) {
   const table = getTableStyle(context);
   return {
-    ...chapterFrameParagraphOptions(context),
+    ...chapterFrameParagraphOptions(context, { topLine: true, bottomLine: true }),
     alignment: alignmentToWordType(table.caption_alignment || DEFAULT_TABLE_STYLE.caption_alignment),
-    after: 80,
+    after: context?.chapterFrame ? 0 : 80,
     line: 240,
     indent: { left: 0, right: 0, firstLine: 0, hanging: 0 },
     keepNext: true,
@@ -1017,11 +1019,11 @@ function createTableCell({ children, context, isHeader = false, isFirstColumn = 
   });
 }
 
-function createDocxTable(rows, columnCount, context) {
+function createDocxTable(rows, columnCount, context, captioned = false) {
   const table = getTableStyle(context);
   const frame = context?.chapterFrame;
   // 页框里的表格要接住段落画的那两条竖线，必须撑满整栏并把左右外框换成页框色，
-  // 否则框会在表格处断开。上下和内部横线保持表格自己的样式。
+  // 否则框会在表格处断开；表题已有下边线时不重复画表格顶边。
   const fullWidth = frame ? true : table.full_width !== false;
   const borders = tableBorders(context);
   // 满宽表格的宽度写死成正文栏宽：tblW 用百分比时 Word 会把单元格左右边距加在百分比之外，
@@ -1037,6 +1039,7 @@ function createDocxTable(rows, columnCount, context) {
     borders: frame
       ? {
         ...borders,
+        ...(captioned ? { top: { style: BorderStyle.NIL, size: 0, color: frame.color } } : {}),
         left: { style: BorderStyle.SINGLE, size: 6, color: frame.color },
         right: { style: BorderStyle.SINGLE, size: 6, color: frame.color },
       }
@@ -1949,13 +1952,14 @@ async function htmlTableToDocx($, tableNode, context) {
   }
 
   const blocks = [];
-  if (captionNode.length && cleanText(captionNode.text())) {
+  const captioned = Boolean(captionNode.length && cleanText(captionNode.text()));
+  if (captioned) {
     blocks.push(paragraph(
       await htmlInlineRuns($, captionNode.contents().toArray(), context, tableCaptionRunMarks(context)),
       tableCaptionParagraphOptions(context),
     ));
   }
-  blocks.push(createDocxTable(rows, maxColumns, context));
+  blocks.push(createDocxTable(rows, maxColumns, context, captioned));
   return blocks;
 }
 
@@ -3037,7 +3041,7 @@ if (require.main === module) {
   assert.equal(spacing.afterLines, undefined);
   // 章节页框：段落画左右竖线，正文缩进在原有缩进上叠加留白，表格左右换成页框色。
   const frameContext = {
-    chapterFrame: { color: 'CFD8EE', fills: ['EEF5FF'] },
+    chapterFrame: { color: 'CFD8EE', headingTopBorderSpacePt: 5, fills: ['EEF5FF'] },
     exportFormat: { table: { full_width: false } },
   };
   const framed = paragraph([textRun('正文')], {
@@ -3063,12 +3067,14 @@ if (require.main === module) {
   assert.deepEqual(buildManualListIndent(frameContext, 0), { left: CHAPTER_FRAME_PADDING_TWIPS });
   assert.deepEqual(buildManualListIndent({}, 480), { left: 480 });
   const framedList = paragraph([textRun('列表')], buildListParagraphOptions(frameContext, 'ref-1', 0));
+  const framedCaption = paragraph([textRun('表题')], tableCaptionParagraphOptions(frameContext));
   const framedTable = createDocxTable(
     [new TableRow({ children: ['格一', '格二', '格三'].map((text) => createTableCell({
       children: [paragraph([textRun(text)])], context: frameContext, totalColumns: 3,
     })) })],
     3,
     frameContext,
+    true,
   );
   void Packer.toBuffer(new Document({
     sections: [{
@@ -3077,6 +3083,7 @@ if (require.main === module) {
         framed,
         framedHeading,
         framedList,
+        framedCaption,
         framedTable,
         chapterFrameClosingParagraph(frameContext),
       ],
@@ -3093,19 +3100,23 @@ if (require.main === module) {
     assert.match(body, /w:firstLine="480"/);
     // 标题多一条上横线和底纹
     const heading = xml.slice(Math.max(0, xml.indexOf('标题') - 900), xml.indexOf('标题'));
-    assert.match(heading, /<w:top w:val="single" w:color="CFD8EE" w:sz="6" w:space="1"/);
+    assert.match(heading, /<w:top w:val="single" w:color="CFD8EE" w:sz="6" w:space="5"/);
     assert.match(heading, /w:fill="EEF5FF"/);
+    const caption = xml.slice(xml.lastIndexOf('<w:p>', xml.indexOf('表题')), xml.indexOf('表题'));
+    assert.match(caption, /<w:top w:val="single" w:color="CFD8EE" w:sz="6" w:space="1"/);
+    assert.match(caption, /<w:bottom w:val="single" w:color="CFD8EE" w:sz="6" w:space="1"/);
+    assert.match(caption, /w:after="0"/);
     // 列表段落只写右留白：一旦写出 w:left，段落直接格式就会盖掉编号定义的 left，
     // 只剩 hanging 生效，最左字符被拉到留白左边，竖线跟着外凸。
     const listAt = xml.indexOf('列表');
     const list = xml.slice(xml.lastIndexOf('<w:p>', listAt), listAt);
     assert.match(list, /<w:ind w:right="115"\s*\/>/);
     assert.doesNotMatch(list, /<w:ind[^>]*w:left=/);
-    // 表格接住竖线：左右用页框色，上下保持表格自己的颜色
+    // 表格接住竖线；表题画下边线后，表格顶边不再重复绘制。
     const table = xml.slice(xml.indexOf('<w:tbl>'), xml.indexOf('</w:tblPr>'));
     assert.match(table, /<w:left w:val="single" w:color="CFD8EE"/);
     assert.match(table, /<w:right w:val="single" w:color="CFD8EE"/);
-    assert.doesNotMatch(table, /<w:top w:val="single" w:color="CFD8EE"/);
+    assert.match(table, /<w:top w:val="nil"/);
     // 关闭表格满宽也不能让页框内表格收窄；预览端采用相同的固定栏宽及列宽规则。
     const $table = cheerio.load(xml, { xmlMode: true })('w\\:tbl').first();
     const tableProperties = $table.children('w\\:tblPr');

@@ -17,7 +17,7 @@ const { cloneDefaultExportFormat } = require('./exportFormatDefaults.cjs');
  */
 
 /** 六级标题的通用构造，省得每套重复写十二个字段。 */
-function heading(font, size, alignment, bold, textColor, spacingBefore, spacingAfter, numberingTemplate) {
+function heading(font, size, alignment, bold, textColor, spacingBefore, spacingAfter, numberingTemplate, lineSpacing = 1) {
   return {
     font,
     size,
@@ -27,7 +27,7 @@ function heading(font, size, alignment, bold, textColor, spacingBefore, spacingA
     spacing_before_pt: spacingBefore,
     spacing_after_pt: spacingAfter,
     first_line_indent_chars: 0,
-    line_spacing: 1,
+    line_spacing: lineSpacing,
     numbering_format: 'custom',
     numbering_template: numberingTemplate,
   };
@@ -169,15 +169,16 @@ const SYSTEM_EXPORT_TEMPLATES = [
         enabled: true,
         structure: '上下结构',
         border_color: '#2174fd',
+        heading_top_border_space_pt: 5,
         level_cell_colors: ['#dbeafe', '#e8f1ff', '#f1f7ff', '#f6faff', '#ffffff', '#ffffff'],
       },
       headings: [
-        heading('黑体', '小二', '居中对齐', true, '#173f82', 0, 0, BID_NUMBERING[0]),
-        heading('黑体', '四号', '左对齐', true, '#173f82', 0, 0, BID_NUMBERING[1]),
-        heading('黑体', '小四', '左对齐', true, '#173f82', 0, 0, BID_NUMBERING[2]),
-        heading('楷体', '小四', '左对齐', false, '#173f82', 0, 0, BID_NUMBERING[3]),
-        heading('黑体', '小四', '左对齐', false, '#243048', 0, 0, BID_NUMBERING[4]),
-        heading('宋体', '小四', '左对齐', false, '#243048', 0, 0, BID_NUMBERING[5]),
+        heading('黑体', '小二', '居中对齐', true, '#173f82', 0, 0, BID_NUMBERING[0], 1.2),
+        heading('黑体', '四号', '左对齐', true, '#173f82', 0, 0, BID_NUMBERING[1], 1.2),
+        heading('黑体', '小四', '左对齐', true, '#173f82', 0, 0, BID_NUMBERING[2], 1.2),
+        heading('楷体', '小四', '左对齐', false, '#173f82', 0, 0, BID_NUMBERING[3], 1.2),
+        heading('黑体', '小四', '左对齐', false, '#243048', 0, 0, BID_NUMBERING[4], 1.2),
+        heading('宋体', '小四', '左对齐', false, '#243048', 0, 0, BID_NUMBERING[5], 1.2),
       ],
       body_text: {
         font: '宋体',
@@ -249,15 +250,16 @@ const SYSTEM_EXPORT_TEMPLATES = [
         enabled: true,
         structure: '上下结构',
         border_color: '#a78bfa',
+        heading_top_border_space_pt: 5,
         level_cell_colors: ['#f2edff', '#f6f2ff', '#faf7ff', '#fdfbff', '#ffffff', '#ffffff'],
       },
       headings: [
-        heading('黑体', '三号', '居中对齐', true, '#5b3ca6', 0, 0, BID_NUMBERING[0]),
-        heading('黑体', '小三', '左对齐', true, '#5b3ca6', 0, 0, BID_NUMBERING[1]),
-        heading('黑体', '四号', '左对齐', true, '#5b3ca6', 0, 0, BID_NUMBERING[2]),
-        heading('楷体', '小四', '左对齐', false, '#5b3ca6', 0, 0, BID_NUMBERING[3]),
-        heading('黑体', '小四', '居中对齐', false, '#243048', 0, 0, BID_NUMBERING[4]),
-        heading('宋体', '小四', '居中对齐', false, '#243048', 0, 0, BID_NUMBERING[5]),
+        heading('黑体', '三号', '居中对齐', true, '#5b3ca6', 0, 0, BID_NUMBERING[0], 1.2),
+        heading('黑体', '小三', '左对齐', true, '#5b3ca6', 0, 0, BID_NUMBERING[1], 1.2),
+        heading('黑体', '四号', '左对齐', true, '#5b3ca6', 0, 0, BID_NUMBERING[2], 1.2),
+        heading('楷体', '小四', '左对齐', false, '#5b3ca6', 0, 0, BID_NUMBERING[3], 1.2),
+        heading('黑体', '小四', '居中对齐', false, '#243048', 0, 0, BID_NUMBERING[4], 1.2),
+        heading('宋体', '小四', '居中对齐', false, '#243048', 0, 0, BID_NUMBERING[5], 1.2),
       ],
       body_text: {
         font: '宋体',
