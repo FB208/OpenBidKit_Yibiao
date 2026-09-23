@@ -39,6 +39,8 @@ export interface HeadingBorderConfig {
   enabled: boolean;
   border_color: string;
   heading_top_border_space_pt: number;
+  heading_bottom_border_space_pt: number;
+  heading_bottom_border_enabled: boolean;
   level_cell_colors: string[];
   structure: HeadingBorderStructure;
 }
@@ -495,6 +497,8 @@ const DEFAULT_HEADING_BORDER: HeadingBorderConfig = {
   enabled: false,
   border_color: '#cfd8ee',
   heading_top_border_space_pt: 1,
+  heading_bottom_border_space_pt: 1,
+  heading_bottom_border_enabled: false,
   level_cell_colors: [...DEFAULT_HEADING_BORDER_CELL_COLORS],
   structure: '上下结构',
 };

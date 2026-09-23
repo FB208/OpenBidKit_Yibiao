@@ -424,8 +424,9 @@ function chapterFrameParagraphOptions(context, { topLine = false, bottomLine = f
     style: BorderStyle.SINGLE, size: 6, color: frame.color, space: CHAPTER_FRAME_LINE_SPACE_PT,
   };
   const headingTopLine = fill ? { ...line, space: frame.headingTopBorderSpacePt ?? CHAPTER_FRAME_LINE_SPACE_PT } : line;
+  const headingBottomLine = fill ? { ...line, space: frame.headingBottomBorderSpacePt ?? CHAPTER_FRAME_LINE_SPACE_PT } : line;
   const options = {
-    border: { left: side, right: side, ...(topLine ? { top: headingTopLine } : {}), ...(bottomLine ? { bottom: line } : {}) },
+    border: { left: side, right: side, ...(topLine ? { top: headingTopLine } : {}), ...(bottomLine ? { bottom: headingBottomLine } : {}) },
     frameIndent: { left: list ? null : CHAPTER_FRAME_PADDING_TWIPS, right: CHAPTER_FRAME_PADDING_TWIPS },
   };
   if (fill) options.shading = { type: ShadingType.CLEAR, fill };
@@ -456,6 +457,8 @@ function getChapterFrameConfig(exportFormat) {
   return {
     color,
     headingTopBorderSpacePt: Math.max(0, Math.round(frame.heading_top_border_space_pt ?? CHAPTER_FRAME_LINE_SPACE_PT)),
+    headingBottomBorderSpacePt: Math.max(0, Math.round(frame.heading_bottom_border_space_pt ?? CHAPTER_FRAME_LINE_SPACE_PT)),
+    headingBottomBorderEnabled: frame.heading_bottom_border_enabled === true,
     fills: DEFAULT_HEADING_BORDER_CELL_COLORS.map((fill, index) => {
       const fallback = normalizeDocxColor(fill, 'FFFFFF');
       return normalizeDocxColor(levelCellColors[index] || fill, fallback);
@@ -2109,6 +2112,7 @@ async function htmlHeadingToDocxBlocks($, node, context) {
   const headingOpts = {
     ...chapterFrameParagraphOptions(context, {
       topLine: true,
+      bottomLine: context.chapterFrame?.headingBottomBorderEnabled,
       fill: context.chapterFrame?.fills[mdLevel - 1],
     }),
     heading: headingLevel(mdLevel),
@@ -2477,9 +2481,10 @@ function buildOutlineHeadingParagraph(item, context, level) {
   }
 
   const paraOptions = {
-    // 页框里的标题自带上横线和底纹，正文只有左右竖线，靠底纹区分标题
+    // 页框里的标题按模板配置画下横线，正文只有左右竖线。
     ...chapterFrameParagraphOptions(context, {
       topLine: true,
+      bottomLine: context.chapterFrame?.headingBottomBorderEnabled,
       fill: context.chapterFrame?.fills[Math.max(0, Math.min(level - 1, 5))],
     }),
     heading: headingLevel(level),
@@ -3041,7 +3046,7 @@ if (require.main === module) {
   assert.equal(spacing.afterLines, undefined);
   // 章节页框：段落画左右竖线，正文缩进在原有缩进上叠加留白，表格左右换成页框色。
   const frameContext = {
-    chapterFrame: { color: 'CFD8EE', headingTopBorderSpacePt: 5, fills: ['EEF5FF'] },
+    chapterFrame: { color: 'CFD8EE', headingTopBorderSpacePt: 5, headingBottomBorderSpacePt: 4, headingBottomBorderEnabled: true, fills: ['EEF5FF'] },
     exportFormat: { table: { full_width: false } },
   };
   const framed = paragraph([textRun('正文')], {
@@ -3050,6 +3055,7 @@ if (require.main === module) {
   });
   const framedHeading = paragraph([textRun('标题')], chapterFrameParagraphOptions(frameContext, {
     topLine: true,
+    bottomLine: frameContext.chapterFrame.headingBottomBorderEnabled,
     fill: 'EEF5FF',
   }));
   // 页框内的列表：左缩进归编号定义，段落只补右留白。Word 的左竖线画在最左字符外侧，
@@ -3098,9 +3104,10 @@ if (require.main === module) {
     assert.match(body, /w:left="315"/);
     assert.match(body, /w:right="115"/);
     assert.match(body, /w:firstLine="480"/);
-    // 标题多一条上横线和底纹
+    // 标题按模板配置画上下横线和底纹。
     const heading = xml.slice(Math.max(0, xml.indexOf('标题') - 900), xml.indexOf('标题'));
     assert.match(heading, /<w:top w:val="single" w:color="CFD8EE" w:sz="6" w:space="5"/);
+    assert.match(heading, /<w:bottom w:val="single" w:color="CFD8EE" w:sz="6" w:space="4"/);
     assert.match(heading, /w:fill="EEF5FF"/);
     const caption = xml.slice(xml.lastIndexOf('<w:p>', xml.indexOf('表题')), xml.indexOf('表题'));
     assert.match(caption, /<w:top w:val="single" w:color="CFD8EE" w:sz="6" w:space="1"/);

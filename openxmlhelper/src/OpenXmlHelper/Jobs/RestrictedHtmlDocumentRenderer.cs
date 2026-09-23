@@ -1558,6 +1558,8 @@ static class RestrictedHtmlDocumentRenderer
         var border = format.Section("heading_border");
         var color = Color(format.Text(border, "border_color", "#cfd8ee"), "CFD8EE");
         var headingTopBorderSpacePt = (uint)Math.Max(0, Math.Round(format.Number(border, "heading_top_border_space_pt", ChapterFrameLineSpacePt)));
+        var headingBottomBorderSpacePt = (uint)Math.Max(0, Math.Round(format.Number(border, "heading_bottom_border_space_pt", ChapterFrameLineSpacePt)));
+        var headingBottomBorderEnabled = format.Bool(border, "heading_bottom_border_enabled", false);
         var fills = new string[6];
         for (var level = 1; level <= 6; level += 1)
         {
@@ -1579,15 +1581,17 @@ static class RestrictedHtmlDocumentRenderer
 
                 if (element is not Wp.Paragraph paragraph) continue;
                 var level = HeadingLevelOf(paragraph);
+                var isTableCaption = tableCaptions.Contains(paragraph);
                 // 正文只画左右竖线，交给 Word 和预览引擎合并成一条连续的框；
-                // 章节标题和表题用上横线与前文分隔，章尾那条横线由收尾段落补。
+                // 标题是否画下横线由模板决定；表题保持上下横线，章尾由收尾段落补线。
                 ApplyChapterFrameParagraph(
                     paragraph,
                     color,
                     level > 0 ? fills[Math.Clamp(level - 1, 0, 5)] : null,
-                    topLine: level > 0 || tableCaptions.Contains(paragraph),
-                    bottomLine: tableCaptions.Contains(paragraph),
-                    topLineSpacePt: level > 0 ? headingTopBorderSpacePt : ChapterFrameLineSpacePt);
+                    topLine: level > 0 || isTableCaption,
+                    bottomLine: (level > 0 && headingBottomBorderEnabled) || isTableCaption,
+                    topLineSpacePt: level > 0 ? headingTopBorderSpacePt : ChapterFrameLineSpacePt,
+                    bottomLineSpacePt: level > 0 ? headingBottomBorderSpacePt : ChapterFrameLineSpacePt);
             }
 
             chapter[^1].InsertAfterSelf(CreateChapterFrameClosingParagraph(color));
@@ -1601,11 +1605,12 @@ static class RestrictedHtmlDocumentRenderer
         string? fill,
         bool topLine,
         bool bottomLine,
-        uint topLineSpacePt)
+        uint topLineSpacePt,
+        uint bottomLineSpacePt)
     {
         var properties = EnsureParagraphProperties(paragraph);
-        SetSingleChild(properties, CreateChapterFrameBorders(color, topLine, bottomLine, topLineSpacePt));
-        if (bottomLine) properties.GetFirstChild<Wp.SpacingBetweenLines>()!.After = "0";
+        SetSingleChild(properties, CreateChapterFrameBorders(color, topLine, bottomLine, topLineSpacePt, bottomLineSpacePt));
+        if (bottomLine && fill is null) properties.GetFirstChild<Wp.SpacingBetweenLines>()!.After = "0";
 
         if (fill is null) properties.RemoveAllChildren<Wp.Shading>();
         else SetSingleChild(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = fill });
@@ -1630,12 +1635,12 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>页框边框；子元素顺序按 OOXML schema 的 top / left / bottom / right。</summary>
-    static Wp.ParagraphBorders CreateChapterFrameBorders(string color, bool topLine, bool bottomLine = false, uint topLineSpacePt = ChapterFrameLineSpacePt)
+    static Wp.ParagraphBorders CreateChapterFrameBorders(string color, bool topLine, bool bottomLine = false, uint topLineSpacePt = ChapterFrameLineSpacePt, uint bottomLineSpacePt = ChapterFrameLineSpacePt)
     {
         var borders = new Wp.ParagraphBorders();
         if (topLine) borders.AppendChild(CreateFrameBorder<Wp.TopBorder>(color, topLineSpacePt));
         borders.AppendChild(CreateFrameBorder<Wp.LeftBorder>(color, ChapterFrameBorderSpacePt));
-        if (bottomLine) borders.AppendChild(CreateFrameBorder<Wp.BottomBorder>(color, ChapterFrameLineSpacePt));
+        if (bottomLine) borders.AppendChild(CreateFrameBorder<Wp.BottomBorder>(color, bottomLineSpacePt));
         borders.AppendChild(CreateFrameBorder<Wp.RightBorder>(color, ChapterFrameBorderSpacePt));
         return borders;
     }

@@ -170,6 +170,8 @@ const SYSTEM_EXPORT_TEMPLATES = [
         structure: '上下结构',
         border_color: '#2174fd',
         heading_top_border_space_pt: 5,
+        heading_bottom_border_space_pt: 4,
+        heading_bottom_border_enabled: true,
         level_cell_colors: ['#dbeafe', '#e8f1ff', '#f1f7ff', '#f6faff', '#ffffff', '#ffffff'],
       },
       headings: [
@@ -251,6 +253,8 @@ const SYSTEM_EXPORT_TEMPLATES = [
         structure: '上下结构',
         border_color: '#a78bfa',
         heading_top_border_space_pt: 5,
+        heading_bottom_border_space_pt: 4,
+        heading_bottom_border_enabled: true,
         level_cell_colors: ['#f2edff', '#f6f2ff', '#faf7ff', '#fdfbff', '#ffffff', '#ffffff'],
       },
       headings: [

@@ -87,12 +87,18 @@ async function main() {
     ] },
   };
   const config = cloneDefaultExportFormat();
+  assert.equal(config.heading_border.heading_bottom_border_space_pt, 1);
+  assert.equal(config.heading_border.heading_bottom_border_enabled, false);
   const visualTemplates = ['tpl-system-a4-visual', 'tpl-system-a3-landscape-visual'].map(id => SYSTEM_EXPORT_TEMPLATES.find(template => template.template_id === id));
   for (const template of visualTemplates) {
     assert.ok(template);
     assert.equal(template.config.heading_border.heading_top_border_space_pt, 5);
+    assert.equal(template.config.heading_border.heading_bottom_border_space_pt, 4);
+    assert.equal(template.config.heading_border.heading_bottom_border_enabled, true);
     assert.ok(template.config.headings.every(heading => heading.line_spacing === 1.2 && heading.spacing_before_pt === 0 && heading.spacing_after_pt === 0));
     assert.equal(normalizeExportFormat(template.config).heading_border.heading_top_border_space_pt, 5);
+    assert.equal(normalizeExportFormat(template.config).heading_border.heading_bottom_border_space_pt, 4);
+    assert.equal(normalizeExportFormat(template.config).heading_border.heading_bottom_border_enabled, true);
   }
   Object.assign(config.heading_border, visualTemplates[0].config.heading_border);
   config.headings = visualTemplates[0].config.headings.map(heading => ({ ...heading }));
@@ -143,9 +149,13 @@ async function main() {
       assert.equal(paragraph('设备表题').find('w\\:bottom').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
       assert.equal(paragraph('设备表题').find('w\\:spacing').attr('w:after'), '0');
       assert.equal(paragraph('设备表题').find('w\\:top').attr('w:space'), '1');
+      assert.equal(paragraph('设备表题').find('w\\:bottom').attr('w:space'), '1');
       assert.equal($('w\\:tbl').first().find('w\\:tblPr > w\\:tblBorders > w\\:top').attr('w:val'), 'nil');
       assert.equal(paragraph('1.1 施工 & 安全').find('w\\:top').attr('w:space'), '5');
+      assert.equal(paragraph('1.1 施工 & 安全').find('w\\:bottom').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+      assert.equal(paragraph('1.1 施工 & 安全').find('w\\:bottom').attr('w:space'), '4');
       assert.equal(paragraph('1.1 施工 & 安全').find('w\\:spacing').attr('w:line'), '288');
+      assert.equal(paragraph('1.1 施工 & 安全').find('w\\:spacing').attr('w:after'), '0');
       assert.equal(paragraph('现场施工正文').find('w\\:bottom').length, 0);
       assert.equal(paragraph('现场施工正文').find('w\\:rFonts').first().attr('w:eastAsia'), '楷体');
       assert.equal(paragraph('人工正文').find('w\\:rFonts').first().attr('w:eastAsia'), scope === 'document' ? '楷体' : '宋体');
@@ -202,6 +212,8 @@ async function main() {
       for (const title of ['一级样张', '二级样张', '三级样张', '四级样张', '五级样张', '六级样张']) {
         const heading = document.paragraph(title);
         assert.equal(heading.find('w\\:top').attr('w:space'), '5');
+        assert.equal(heading.find('w\\:bottom').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+        assert.equal(heading.find('w\\:bottom').attr('w:space'), '4');
         assert.equal(heading.find('w\\:spacing').attr('w:line'), '288');
         assert.equal(heading.find('w\\:spacing').attr('w:before'), '0');
         assert.equal(heading.find('w\\:spacing').attr('w:after'), '0');
@@ -209,6 +221,7 @@ async function main() {
       assert.equal(document.paragraph('样张表题').find('w\\:top').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
       assert.equal(document.paragraph('样张表题').find('w\\:top').attr('w:space'), '1');
       assert.equal(document.paragraph('样张表题').find('w\\:bottom').attr('w:color'), config.heading_border.border_color.slice(1).toUpperCase());
+      assert.equal(document.paragraph('样张表题').find('w\\:bottom').attr('w:space'), '1');
       assert.equal(document.paragraph('样张表题').find('w\\:spacing').attr('w:after'), '0');
       assert.equal(document.$('w\\:tbl').first().find('w\\:tblPr > w\\:tblBorders > w\\:top').attr('w:val'), 'nil');
     }
