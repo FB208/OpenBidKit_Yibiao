@@ -920,7 +920,7 @@ static class RestrictedHtmlDocumentRenderer
         ApplyTables(content, format, tableSpecs);
         ApplyNumbering(mainPart, format, rangeOnly ? IsolateNumbering(mainPart, content) : null);
         // 页框和一级标题通栏沿用现有互斥规则；整本导出的分栏在页面范围合并后应用。
-        if (ChapterFrameEnabled(format)) ApplyChapterParagraphFrames(content, format, tableCaptions, includeLeading: rangeOnly);
+        if (ChapterFrameEnabled(format)) ApplyChapterFrames(content, format, tableCaptions);
         else if (!rangeOnly) ApplyTwoColumnHeadingSections(mainPart, content, format);
         if (!rangeOnly) RemoveLeadingPageBreak(content);
         mainPart.Document.Save();
@@ -1001,7 +1001,7 @@ static class RestrictedHtmlDocumentRenderer
 
     /// <summary>
     /// 清掉标题段落自带的边框与底纹。
-    /// 章节页框的边框和底纹由 ApplyChapterParagraphFrames 统一设置，避免重复画框。
+    /// 章节页框的边框和底纹由 ApplyChapterFrames 统一设置，避免重复画框。
     /// </summary>
     static void ClearHeadingBorder(Wp.ParagraphProperties properties)
     {
@@ -1067,8 +1067,8 @@ static class RestrictedHtmlDocumentRenderer
                 rowProperties.RemoveAllChildren<Wp.TableHeader>();
                 if (spec is not null && rowIndex < spec.Rows.Count && spec.Rows[rowIndex].IsHeaderRow)
                 {
-                    SetSingleChild(rowProperties, new Wp.CantSplit());
-                    rowProperties.AddChild(new Wp.TableHeader(), throwOnError: true);
+                    // 追加两项行属性，避免 AddChild 写入重复表头时覆盖不可拆分设置。
+                    rowProperties.Append(new Wp.CantSplit(), new Wp.TableHeader());
                 }
                 var cells = rows[rowIndex].Elements<Wp.TableCell>().ToList();
                 for (var cellIndex = 0; cellIndex < cells.Count; cellIndex += 1)
@@ -1220,19 +1220,15 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>
-    /// 列表级别的缩进；和 exportService.cjs 的 getListLevelIndent 逐条对应。
+    /// 列表级别的缩进；无页框时与 exportService.cjs 的 getListLevelIndent 保持一致。
     ///
-    /// 章节页框打开时改用首行缩进：left 固定为 ChapterFramePaddingTwips，层级由 firstLine 体现。
-    /// 页框内每一块的左竖线必须落在同一条线上，而 Word 与预览排版引擎给竖线定位的方式并不一样
-    /// ——Word 锚在段落最左那个字符（悬挂出去的编号也算，即 left - hanging），预览引擎锚在
-    /// w:ind left。hanging 非零时两边必然有一边是歪的；firstLine 只推首行、两边都不挪竖线，
-    /// 是同时对上的唯一写法。代价是折行的文字回到页框内边缘，不与编号后的文字对齐。
+    /// 页框正文位于通栏单元格，左右留白由单元格提供；列表仅保留首行的层级缩进。
     /// </summary>
     static (int Left, int Hanging, int FirstLine) ListLevelIndent(double indentChars, int levelIndex, int halfPoints, bool framed)
     {
         var text = CharsToTwips(indentChars * (levelIndex + 1), halfPoints);
         if (!framed) return (text, Math.Min(text, CharsToTwips(1, halfPoints)), 0);
-        return (ChapterFramePaddingTwips, 0, text);
+        return (0, 0, text);
     }
 
     /// <summary>设置无序列表符号及其字体。</summary>
@@ -1482,10 +1478,9 @@ static class RestrictedHtmlDocumentRenderer
 
     // -- 章节页框 --------------------------------------------------------
     //
-    // 用段落边框逐块画框，业务表格留在顶层；切分与取色规则和
-    // exportService.cjs 的 addOutlineItems / chapterFrameParagraphOptions 对应。
+    // 标题保留为顶层段落，正文和业务表格共用真实表格外框。
 
-    /// <summary>是否启用章节段落页框。</summary>
+    /// <summary>是否启用章节页框。</summary>
     static bool ChapterFrameEnabled(FormatReader format)
     {
         return format.Bool(format.Section("heading_border"), "enabled", false);
@@ -1514,34 +1509,7 @@ static class RestrictedHtmlDocumentRenderer
         }
     }
 
-    /// <summary>按一级标题把正文切成章；一级标题之前的内容（封面、目录等）不进页框。</summary>
-    static List<List<OpenXmlElement>> CollectChapters(Wp.Body content, bool includeLeading = false)
-    {
-        // 先固定住分组，后面要替换节点，不能边遍历边改
-        var elements = content.ChildElements
-            .Where(item => item is not Wp.SectionProperties)
-            .ToList();
-        var chapters = new List<List<OpenXmlElement>>();
-        List<OpenXmlElement>? current = null;
-        foreach (var element in elements)
-        {
-            if (HeadingLevelOf(element) == 1 || (includeLeading && current is null && HeadingLevelOf(element) > 0))
-            {
-                current = [];
-                chapters.Add(current);
-            }
-
-            current?.Add(element);
-        }
-
-        return chapters;
-    }
-
-    // -- 段落边框页框 ----------------------------------------------------
-    //
-    // 每个块自己画边框，相邻段落的竖线由 Word 和预览引擎合并成一条，
-    // 视觉上和整章包一张表一样，但每个块都能独立参与分页：
-    // 超长表格可以跨页拆行，正文也不会被整块推走。
+    // -- 顶层标题与平面正文表格 --------------------------------------------
 
     /// <summary>页框竖线与文字之间的留白（twips）。</summary>
     const int ChapterFramePaddingTwips = 115;
@@ -1552,53 +1520,170 @@ static class RestrictedHtmlDocumentRenderer
     /// <summary>横线与文字的距离（磅）。</summary>
     const uint ChapterFrameLineSpacePt = 1;
 
-    /// <summary>用段落边框给每个一级章节画连续页框。</summary>
-    static void ApplyChapterParagraphFrames(Wp.Body content, FormatReader format, HashSet<Wp.Paragraph> tableCaptions, bool includeLeading = false)
+    /// <summary>标题保留在正文顶层；标题、分节或样式范围之间的内容共用一张平面表格。</summary>
+    static void ApplyChapterFrames(Wp.Body content, FormatReader format, HashSet<Wp.Paragraph> tableCaptions)
     {
         var border = format.Section("heading_border");
         var color = Color(format.Text(border, "border_color", "#cfd8ee"), "CFD8EE");
+        var includeHeadings = format.Bool(border, "include_headings", true);
         var headingTopBorderSpacePt = (uint)Math.Max(0, Math.Round(format.Number(border, "heading_top_border_space_pt", ChapterFrameLineSpacePt)));
         var headingBottomBorderSpacePt = (uint)Math.Max(0, Math.Round(format.Number(border, "heading_bottom_border_space_pt", ChapterFrameLineSpacePt)));
         var headingBottomBorderEnabled = format.Bool(border, "heading_bottom_border_enabled", false);
-        var fills = new string[6];
-        for (var level = 1; level <= 6; level += 1)
+        var pending = new List<OpenXmlElement>();
+
+        // 每次调用只处理当前样式范围，不能跨 ai-only 范围拼接正文表格。
+        void FlushContent()
         {
-            fills[level - 1] = Color(format.ArrayText(border, "level_cell_colors", level - 1, "#ffffff"), "FFFFFF");
+            if (pending.Count == 0) return;
+            pending[0].InsertBeforeSelf(CreateChapterBodyTable(pending, format, color, tableCaptions));
+            foreach (var element in pending) element.Remove();
+            pending.Clear();
         }
 
-        foreach (var chapter in CollectChapters(content, includeLeading))
+        foreach (var element in content.ChildElements.ToList())
         {
-            if (chapter.Count == 0) continue;
-            for (var index = 0; index < chapter.Count; index += 1)
+            var level = HeadingLevelOf(element);
+            if (level > 0)
             {
-                var element = chapter[index];
-                if (element is Wp.Table table)
-                {
-                    var captioned = index > 0 && chapter[index - 1] is Wp.Paragraph previous && tableCaptions.Contains(previous);
-                    ApplyChapterFrameTableBorders(table, color, format, captioned);
-                    continue;
-                }
-
-                if (element is not Wp.Paragraph paragraph) continue;
-                var level = HeadingLevelOf(paragraph);
-                var isTableCaption = tableCaptions.Contains(paragraph);
-                // 正文只画左右竖线，交给 Word 和预览引擎合并成一条连续的框；
-                // 标题是否画下横线由模板决定；表题保持上下横线，章尾由收尾段落补线。
+                FlushContent();
+                var paragraph = (Wp.Paragraph)element;
                 ApplyChapterFrameParagraph(
                     paragraph,
                     color,
-                    level > 0 ? fills[Math.Clamp(level - 1, 0, 5)] : null,
-                    topLine: level > 0 || isTableCaption,
-                    bottomLine: (level > 0 && headingBottomBorderEnabled) || isTableCaption,
-                    topLineSpacePt: level > 0 ? headingTopBorderSpacePt : ChapterFrameLineSpacePt,
-                    bottomLineSpacePt: level > 0 ? headingBottomBorderSpacePt : ChapterFrameLineSpacePt);
+                    Color(format.ArrayText(border, "level_cell_colors", level - 1, "#ffffff"), "FFFFFF"),
+                    topLine: true,
+                    bottomLine: headingBottomBorderEnabled,
+                    topLineSpacePt: headingTopBorderSpacePt,
+                    bottomLineSpacePt: headingBottomBorderSpacePt);
+                if (!includeHeadings) paragraph.ParagraphProperties!.RemoveAllChildren<Wp.ParagraphBorders>();
             }
+            else if (element is Wp.Paragraph { ParagraphProperties.SectionProperties: not null }
+                || element is not (Wp.Paragraph or Wp.Table)) FlushContent();
+            else pending.Add(element);
+        }
+        FlushContent();
+    }
 
-            chapter[^1].InsertAfterSelf(CreateChapterFrameClosingParagraph(color));
+    /// <summary>按业务表列边界的并集建网格，正文每段一通栏行，业务表直接展开为同级行。</summary>
+    static Wp.Table CreateChapterBodyTable(IReadOnlyList<OpenXmlElement> content, FormatReader format, string color, HashSet<Wp.Paragraph> captions)
+    {
+        var width = ContentWidthTwips(format);
+        var boundaries = new SortedSet<int> { 0, width };
+        var tableBoundaries = new Dictionary<Wp.Table, int[]>();
+        for (var index = 0; index < content.Count; index += 1)
+        {
+            if (content[index] is not Wp.Table table) continue;
+            ApplyChapterFrameTableBorders(table, color, format, index > 0 && content[index - 1] is Wp.Paragraph caption && captions.Contains(caption));
+            var positions = new List<int> { 0 };
+            foreach (var column in table.GetFirstChild<Wp.TableGrid>()!.Elements<Wp.GridColumn>())
+            {
+                positions.Add(positions[^1] + int.Parse(column.Width!.Value!, CultureInfo.InvariantCulture));
+            }
+            tableBoundaries.Add(table, positions.ToArray());
+            boundaries.UnionWith(positions);
+        }
+
+        var grid = boundaries.ToArray();
+        var result = new Wp.Table(new Wp.TableProperties(
+            new Wp.TableWidth { Type = Wp.TableWidthUnitValues.Dxa, Width = width.ToString(CultureInfo.InvariantCulture) },
+            new Wp.TableJustification { Val = Wp.TableRowAlignmentValues.Center },
+            new Wp.TableBorders(
+                CreateTableBorder<Wp.TopBorder>(color, 6), CreateTableBorder<Wp.LeftBorder>(color, 6),
+                CreateTableBorder<Wp.BottomBorder>(color, 6), CreateTableBorder<Wp.RightBorder>(color, 6),
+                CreateTableBorder<Wp.InsideHorizontalBorder>(color, 0), CreateTableBorder<Wp.InsideVerticalBorder>(color, 0)),
+            new Wp.TableLayout { Type = Wp.TableLayoutValues.Fixed }));
+        result.AppendChild(new Wp.TableGrid(grid.Zip(grid.Skip(1), (start, end) =>
+            new Wp.GridColumn { Width = (end - start).ToString(CultureInfo.InvariantCulture) })));
+        foreach (var element in content)
+        {
+            if (element is Wp.Paragraph paragraph)
+                result.AppendChild(CreateChapterBodyRow(paragraph, grid.Length - 1, color, captions.Contains(paragraph)));
+            else if (element is Wp.Table table)
+                AppendChapterTableRows(result, table, tableBoundaries[table], grid, color);
+        }
+
+        // 正文框独立收口，标题关闭边框时也不依赖相邻段落补画上下边线。
+        foreach (var cell in result.Elements<Wp.TableRow>().First().Elements<Wp.TableCell>())
+            SetSingleChild(cell.TableCellProperties!.GetFirstChild<Wp.TableCellBorders>()!, CreateTableBorder<Wp.TopBorder>(color, 6));
+        foreach (var cell in result.Elements<Wp.TableRow>().Last().Elements<Wp.TableCell>())
+            SetSingleChild(cell.TableCellProperties!.GetFirstChild<Wp.TableCellBorders>()!, CreateTableBorder<Wp.BottomBorder>(color, 6));
+        return result;
+    }
+
+    /// <summary>正文留白改由单元格承担，保留首行缩进、列表编号、图片与原有同页关联。</summary>
+    static Wp.TableRow CreateChapterBodyRow(Wp.Paragraph source, int columns, string color, bool caption)
+    {
+        var paragraph = (Wp.Paragraph)source.CloneNode(true);
+        var properties = EnsureParagraphProperties(paragraph);
+        properties.RemoveAllChildren<Wp.ParagraphBorders>();
+        if (caption) properties.GetFirstChild<Wp.SpacingBetweenLines>()!.After = "0";
+        var cellProperties = new Wp.TableCellProperties(
+            new Wp.GridSpan { Val = columns },
+            new Wp.TableCellBorders(
+                CreateTableBorder<Wp.TopBorder>(color, caption ? 6U : 0U), CreateTableBorder<Wp.LeftBorder>(color, 6),
+                CreateTableBorder<Wp.BottomBorder>(color, caption ? 6U : 0U), CreateTableBorder<Wp.RightBorder>(color, 6)),
+            new Wp.TableCellMargin(
+                new Wp.TopMargin { Width = "0", Type = Wp.TableWidthUnitValues.Dxa },
+                new Wp.LeftMargin { Width = ChapterFramePaddingTwips.ToString(CultureInfo.InvariantCulture), Type = Wp.TableWidthUnitValues.Dxa },
+                new Wp.BottomMargin { Width = "0", Type = Wp.TableWidthUnitValues.Dxa },
+                new Wp.RightMargin { Width = ChapterFramePaddingTwips.ToString(CultureInfo.InvariantCulture), Type = Wp.TableWidthUnitValues.Dxa }));
+        return new Wp.TableRow(new Wp.TableCell(cellProperties, paragraph));
+    }
+
+    /// <summary>把原业务表摊平到共同网格，合并信息保留，表级边框与留白下沉到单元格。</summary>
+    static void AppendChapterTableRows(Wp.Table target, Wp.Table source, int[] sourceGrid, int[] grid, string color)
+    {
+        var tableProperties = source.GetFirstChild<Wp.TableProperties>()!;
+        var tableBorders = tableProperties.GetFirstChild<Wp.TableBorders>()!;
+        var tableMargins = tableProperties.GetFirstChild<Wp.TableCellMarginDefault>()!;
+        var rows = source.Elements<Wp.TableRow>().ToList();
+        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex += 1)
+        {
+            var row = (Wp.TableRow)rows[rowIndex].CloneNode(true);
+            // 取消跨页重复表头，保留表头行不可拆分；正文行仍可跨页。
+            row.TableRowProperties?.RemoveAllChildren<Wp.TableHeader>();
+            var column = 0;
+            foreach (var cell in row.Elements<Wp.TableCell>())
+            {
+                var properties = cell.TableCellProperties ?? cell.PrependChild(new Wp.TableCellProperties());
+                var span = properties.GridSpan?.Val?.Value ?? 1;
+                var endColumn = column + span;
+                SetSingleChild(properties, new Wp.GridSpan { Val = Array.BinarySearch(grid, sourceGrid[endColumn]) - Array.BinarySearch(grid, sourceGrid[column]) });
+                properties.RemoveAllChildren<Wp.TableCellWidth>();
+                var borders = properties.GetFirstChild<Wp.TableCellBorders>() ?? AddChild(properties, new Wp.TableCellBorders());
+                SetSingleChild(borders, CopyChapterCellBorder<Wp.TopBorder>(borders.GetFirstChild<Wp.TopBorder>() ?? (rowIndex == 0 ? tableBorders.GetFirstChild<Wp.TopBorder>() : (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideHorizontalBorder>())));
+                SetSingleChild(borders, column == 0 ? CreateTableBorder<Wp.LeftBorder>(color, 6) : CopyChapterCellBorder<Wp.LeftBorder>(borders.GetFirstChild<Wp.LeftBorder>() ?? (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideVerticalBorder>()));
+                SetSingleChild(borders, CopyChapterCellBorder<Wp.BottomBorder>(borders.GetFirstChild<Wp.BottomBorder>() ?? (rowIndex == rows.Count - 1 ? tableBorders.GetFirstChild<Wp.BottomBorder>() : (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideHorizontalBorder>())));
+                SetSingleChild(borders, endColumn == sourceGrid.Length - 1 ? CreateTableBorder<Wp.RightBorder>(color, 6) : CopyChapterCellBorder<Wp.RightBorder>(borders.GetFirstChild<Wp.RightBorder>() ?? (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideVerticalBorder>()));
+                var margins = properties.GetFirstChild<Wp.TableCellMargin>() ?? AddChild(properties, new Wp.TableCellMargin());
+                SetMissingChapterMargin(margins, new Wp.TopMargin(), tableMargins.GetFirstChild<Wp.TopMargin>()!);
+                SetMissingChapterMargin(margins, new Wp.LeftMargin(), tableMargins.GetFirstChild<Wp.TableCellLeftMargin>()!);
+                SetMissingChapterMargin(margins, new Wp.BottomMargin(), tableMargins.GetFirstChild<Wp.BottomMargin>()!);
+                SetMissingChapterMargin(margins, new Wp.RightMargin(), tableMargins.GetFirstChild<Wp.TableCellRightMargin>()!);
+                column = endColumn;
+            }
+            target.AppendChild(row);
         }
     }
 
-    /// <summary>给页框内的一个段落加边框、底纹和左右留白。</summary>
+    /// <summary>内部横纵线转成对应单元格边线，保留颜色、线型与粗细。</summary>
+    static T CopyChapterCellBorder<T>(Wp.BorderType? source) where T : Wp.BorderType, new()
+    {
+        var result = new T();
+        if (source is null) result.Val = Wp.BorderValues.Nil;
+        else result.SetAttributes(source.GetAttributes());
+        return result;
+    }
+
+    /// <summary>仅补充原来继承自业务表的留白，不覆盖单元格自身设置。</summary>
+    static void SetMissingChapterMargin<T>(Wp.TableCellMargin margins, T margin, OpenXmlElement source) where T : OpenXmlElement
+    {
+        if (margins.GetFirstChild<T>() is not null) return;
+        margin.SetAttributes(source.GetAttributes());
+        margins.AddChild(margin, throwOnError: true);
+    }
+
+    /// <summary>保留独立标题段落的边框、底纹和左右留白。</summary>
     static void ApplyChapterFrameParagraph(
         Wp.Paragraph paragraph,
         string color,
@@ -1622,10 +1707,7 @@ static class RestrictedHtmlDocumentRenderer
             properties.AddChild(indentation, throwOnError: true);
         }
 
-        // 首行缩进已经写进 w:ind，页框留白只能往上叠，不能覆盖。
-        // 列表段落的 left / hanging 由编号定义给（ListLevelIndent 已经把留白算进去了），
-        // 这里一旦写 w:ind left，段落直接格式就会盖掉编号定义的 left 而 hanging 照旧继承，
-        // 最左字符被拉到留白左边，竖线跟着外凸——只补右留白。
+        // 首行缩进已经写进 w:ind，只叠加左右留白；编号段落保留编号定义的左缩进。
         if (properties.GetFirstChild<Wp.NumberingProperties>() is null)
         {
             indentation.Left = AddTwips(indentation.Left, ChapterFramePaddingTwips);
@@ -1643,30 +1725,6 @@ static class RestrictedHtmlDocumentRenderer
         if (bottomLine) borders.AppendChild(CreateFrameBorder<Wp.BottomBorder>(color, bottomLineSpacePt));
         borders.AppendChild(CreateFrameBorder<Wp.RightBorder>(color, ChapterFrameBorderSpacePt));
         return borders;
-    }
-
-    /// <summary>
-    /// 章尾收尾段落：只有 1 twip 行高，肉眼看不见，作用是把页框底边那条横线画出来。
-    /// 让最后一个块自己画底线做不到——JS 侧的块建好就不可改，两边得用同一套办法。
-    /// </summary>
-    static Wp.Paragraph CreateChapterFrameClosingParagraph(string color)
-    {
-        var paragraph = new Wp.Paragraph();
-        var properties = EnsureParagraphProperties(paragraph);
-        properties.AddChild(CreateChapterFrameBorders(color, topLine: true), throwOnError: true);
-        properties.AddChild(new Wp.SpacingBetweenLines
-        {
-            Before = "0",
-            After = "0",
-            Line = "20",
-            LineRule = Wp.LineSpacingRuleValues.Exact,
-        }, throwOnError: true);
-        properties.AddChild(new Wp.Indentation
-        {
-            Left = ChapterFramePaddingTwips.ToString(CultureInfo.InvariantCulture),
-            Right = ChapterFramePaddingTwips.ToString(CultureInfo.InvariantCulture),
-        }, throwOnError: true);
-        return paragraph;
     }
 
     static string AddTwips(StringValue? value, int delta)

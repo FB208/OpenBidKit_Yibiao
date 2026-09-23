@@ -400,9 +400,8 @@ function resolveColumnCount(pageSetup) {
   return pageSetup?.two_column === true && pageSetup?.orientation === 'landscape' ? 2 : 1;
 }
 
-// 章节页框：段落自己画左右竖线，相邻段落由 Word 和预览引擎合并成一条连续的框。
-// 取值与 C# 侧 RestrictedHtmlDocumentRenderer 的 ChapterFrame* 常量一一对应，
-// 两边产物必须能对上，否则模板预览和真实导出会长成两个样子。
+// Markdown 导出保留段落页框；受限 HTML 的正文融合由 C# 统一处理。
+// 标题边框开关、颜色和留白仍与 RestrictedHtmlDocumentRenderer 保持一致。
 const CHAPTER_FRAME_PADDING_TWIPS = 115;
 const CHAPTER_FRAME_BORDER_SPACE_PT = 5;
 const CHAPTER_FRAME_LINE_SPACE_PT = 1;
@@ -414,7 +413,7 @@ const CHAPTER_FRAME_LINE_SPACE_PT = 1;
  * 所以页框里每一块的"最左字符位置"必须都等于 CHAPTER_FRAME_PADDING_TWIPS，竖线才是一条直线。
  * list=true 的块把左缩进交给编号定义（left - hanging 已经等于这个留白），这里不再叠加。
  */
-function chapterFrameParagraphOptions(context, { topLine = false, bottomLine = false, fill, list = false } = {}) {
+function chapterFrameParagraphOptions(context, { topLine = false, bottomLine = false, fill, list = false, heading = false } = {}) {
   const frame = context?.chapterFrame;
   if (!frame) return {};
   const side = {
@@ -429,6 +428,7 @@ function chapterFrameParagraphOptions(context, { topLine = false, bottomLine = f
     border: { left: side, right: side, ...(topLine ? { top: headingTopLine } : {}), ...(bottomLine ? { bottom: headingBottomLine } : {}) },
     frameIndent: { left: list ? null : CHAPTER_FRAME_PADDING_TWIPS, right: CHAPTER_FRAME_PADDING_TWIPS },
   };
+  if (heading && frame.includeHeadings === false) delete options.border;
   if (fill) options.shading = { type: ShadingType.CLEAR, fill };
   return options;
 }
@@ -456,6 +456,7 @@ function getChapterFrameConfig(exportFormat) {
   const levelCellColors = Array.isArray(frame.level_cell_colors) ? frame.level_cell_colors : [];
   return {
     color,
+    includeHeadings: frame.include_headings !== false,
     headingTopBorderSpacePt: Math.max(0, Math.round(frame.heading_top_border_space_pt ?? CHAPTER_FRAME_LINE_SPACE_PT)),
     headingBottomBorderSpacePt: Math.max(0, Math.round(frame.heading_bottom_border_space_pt ?? CHAPTER_FRAME_LINE_SPACE_PT)),
     headingBottomBorderEnabled: frame.heading_bottom_border_enabled === true,
@@ -2111,6 +2112,7 @@ async function htmlHeadingToDocxBlocks($, node, context) {
   const style = getHeadingStyle(context.exportFormat, mdLevel);
   const headingOpts = {
     ...chapterFrameParagraphOptions(context, {
+      heading: true,
       topLine: true,
       bottomLine: context.chapterFrame?.headingBottomBorderEnabled,
       fill: context.chapterFrame?.fills[mdLevel - 1],
@@ -2483,6 +2485,7 @@ function buildOutlineHeadingParagraph(item, context, level) {
   const paraOptions = {
     // 页框里的标题按模板配置画下横线，正文只有左右竖线。
     ...chapterFrameParagraphOptions(context, {
+      heading: true,
       topLine: true,
       bottomLine: context.chapterFrame?.headingBottomBorderEnabled,
       fill: context.chapterFrame?.fills[Math.max(0, Math.min(level - 1, 5))],
@@ -3206,6 +3209,19 @@ if (require.main === module) {
       }
       if (!isWhole) assert.doesNotMatch(zip.readAsText('word/styles.xml'), /楷体/);
     }
+    // 新开关覆盖目录标题和正文内标题；只去边框，底纹、缩进及正文页框保留。
+    assert.equal(getChapterFrameConfig({ heading_border: { enabled: true } }).includeHeadings, true);
+    format.heading_border.include_headings = false;
+    const unframedHeadingZip = new AdmZip(await buildDocxBuffer({ outline, export_format: format, export_template_scope: 'document' }));
+    const $unframed = cheerio.load(unframedHeadingZip.readAsText('word/document.xml'), { xmlMode: true });
+    for (const text of ['混合父标题', '正文内子标题', '纯AI父标题']) {
+      const p = $unframed('w\\:p').filter((_, node) => $unframed(node).text().includes(text)).first();
+      assert.equal(p.find('w\\:pBdr').length, 0, text);
+      assert.equal(p.find('w\\:shd').length, 1, text);
+      assert.equal(p.find('w\\:ind').attr('w:left'), String(CHAPTER_FRAME_PADDING_TWIPS));
+      assert.match(p.find('w\\:pStyle').attr('w:val'), /^Heading[1-6]$/);
+    }
+    assert.equal($unframed('w\\:p').filter((_, node) => $unframed(node).text() === 'AI正文').find('w\\:pBdr').length, 1);
     console.log('导出自检通过：原生间距 + 章节页框 + 样式范围。');
   }).catch((error) => { console.error(error); process.exitCode = 1; });
 }

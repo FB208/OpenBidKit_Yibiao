@@ -1101,11 +1101,15 @@ function ExportFormatPage({
           <AppSwitch checked={config.heading_level1_page_break_before} onCheckedChange={(checked) => updateTemplate({ heading_level1_page_break_before: checked })} />
         </label>
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>章节页框</strong><span>使用段落边框，保留标题导航和正文分页</span></div>
+          <div className="settings-row-copy"><strong>章节页框</strong><span>为章节内容显示连续页框，保留标题导航和正文分页</span></div>
           <AppSwitch checked={config.heading_border.enabled} onCheckedChange={(checked) => updateHeadingBorder({ enabled: checked })} />
         </label>
         {config.heading_border.enabled && (
           <>
+            <label className="settings-row">
+              <div className="settings-row-copy"><strong>标题也放入页框</strong><span>关闭后隐藏标题边框，保留标题底纹和导航</span></div>
+              <AppSwitch checked={config.heading_border.include_headings} onCheckedChange={(checked) => updateHeadingBorder({ include_headings: checked })} />
+            </label>
             <label className="settings-row">
               <div className="settings-row-copy"><strong>页框颜色</strong></div>
               <input type="color" value={config.heading_border.border_color} onChange={(event) => updateHeadingBorder({ border_color: event.target.value })} />
@@ -1113,7 +1117,7 @@ function ExportFormatPage({
             <div className="export-format-heading-cell-colors">
               <div className="export-format-heading-cell-colors-title">
                 <strong>标题底纹颜色</strong>
-                <span>仅作用于章节页框内对应级别的标题段落。</span>
+                <span>作用于对应级别的标题，不受标题边框开关影响。</span>
               </div>
               <div className="export-format-heading-cell-color-grid">
                 {HEADING_LEVEL_LABELS.map((label, index) => (

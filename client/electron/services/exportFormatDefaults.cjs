@@ -50,6 +50,7 @@ const defaultExportFormat = {
   heading_level1_page_break_before: false,
   heading_border: {
     enabled: false,
+    include_headings: true,
     border_color: '#cfd8ee',
     heading_top_border_space_pt: 1,
     heading_bottom_border_space_pt: 1,
@@ -218,6 +219,7 @@ function normalizeExportFormat(source) {
   const srcHeadingCellColors = Array.isArray(srcHeadingBorder.level_cell_colors) ? srcHeadingBorder.level_cell_colors : [];
   const heading_border = {
     enabled: typeof srcHeadingBorder.enabled === 'boolean' ? srcHeadingBorder.enabled : def.heading_border.enabled,
+    include_headings: typeof srcHeadingBorder.include_headings === 'boolean' ? srcHeadingBorder.include_headings : def.heading_border.include_headings,
     border_color: typeof srcHeadingBorder.border_color === 'string' && srcHeadingBorder.border_color ? srcHeadingBorder.border_color : def.heading_border.border_color,
     heading_top_border_space_pt: typeof srcHeadingBorder.heading_top_border_space_pt === 'number' ? srcHeadingBorder.heading_top_border_space_pt : def.heading_border.heading_top_border_space_pt,
     heading_bottom_border_space_pt: typeof srcHeadingBorder.heading_bottom_border_space_pt === 'number' ? srcHeadingBorder.heading_bottom_border_space_pt : def.heading_border.heading_bottom_border_space_pt,

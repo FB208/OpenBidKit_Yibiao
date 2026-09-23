@@ -15,7 +15,7 @@ function row(contents, cantSplit = false, height) {
   return `<w:tr><w:trPr>${cantSplit ? '<w:cantSplit/>' : ''}${trHeight}</w:trPr>${cells}</w:tr>`;
 }
 
-// 创建无边框表格；同一构造同时用于章节外框和嵌套业务表。
+// 创建无边框表格；同时保留引擎原有嵌套表能力的独立回归。
 function table(rows, columns = 1) {
   const grid = Array.from({ length: columns }, () => `<w:gridCol w:w="${6000 / columns}"/>`).join('');
   return `<w:tbl><w:tblPr><w:tblW w:w="6000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${rows.join('')}</w:tbl>`;
@@ -92,6 +92,19 @@ function checkPagination(api, label) {
   expectPage(pages, '正文0', 1, `${label}：CantSplit 行应整体换页`);
   expectPage(pages, '正文7', 1, `${label}：CantSplit 行不可拆成多页`);
 
+  // 融合表中部的业务表头不重复，但自身不可拆行；后续正文仍能使用余页并续排。
+  const middleHeader = Array.from({ length: 8 }, (_, index) => `中部表头${index}`);
+  const middleBody = Array.from({ length: 8 }, (_, index) => `中部正文${index}`);
+  pages = paginate(api, table([
+    row([paragraph('融合前置内容', 60)]),
+    row([middleHeader.map(text => paragraph(text)).join('')], true),
+    row([middleBody.map(text => paragraph(text)).join('')]),
+  ]));
+  expectPage(pages, '融合前置内容', 0, `${label}：表前正文应保留在原页`);
+  for (const text of middleHeader) expectPage(pages, text, 1, `${label}：中部表头行应整体移到下一页`);
+  expectPage(pages, '中部正文0', 1, `${label}：普通正文应继续利用表头后的剩余空间`);
+  expectPage(pages, '中部正文7', 2, `${label}：普通正文仍应允许跨页拆分`);
+
   // 页面高 100、重复表头高 20，85 高的关联块必须允许拆分，不能挤掉续页表头。
   const header = row([paragraph('重复表头', 20)]).replace('<w:trPr>', '<w:trPr><w:tblHeader/>');
   const linkedBody = paragraph(Array.from({ length: 7 }, (_, index) => `关联正文${index}`).join('\n'));
@@ -126,10 +139,39 @@ function checkPagination(api, label) {
   expectPage(pages, '右栏首段丙', 1, `${label}：右栏首段结尾应跟随左栏标题`);
 }
 
+// 标题留在表外，正文通栏与 2/3/4 列业务行共用真实网格，跨页后内容不能丢失或重复。
+function checkFlatFramePagination(api, label) {
+  // 6000 twip 的 2/3/4 等分边界并集；每行仅用 gridSpan，不创建内层表。
+  const widths = [1500, 500, 1000, 1000, 500, 1500];
+  const margins = ['top', 'left', 'bottom', 'right'].map(side => `<w:${side} w:w="0" w:type="dxa"/>`).join('');
+  const flatRow = cells => `<w:tr>${cells.map(([content, span]) => `<w:tc><w:tcPr><w:gridSpan w:val="${span}"/><w:tcMar>${margins}</w:tcMar></w:tcPr>${content}</w:tc>`).join('')}</w:tr>`;
+  const bodyLabels = Array.from({ length: 8 }, (_, index) => `融合正文${index}`);
+  const rows = [
+    flatRow([[bodyLabels.map(text => paragraph(text)).join(''), 6]]),
+    flatRow([[paragraph('两列甲'), 3], [paragraph('两列乙'), 3]]),
+    flatRow([[paragraph('三列甲'), 2], [paragraph('三列乙'), 2], [paragraph('三列丙'), 2]]),
+    flatRow([[paragraph('四列甲'), 1], [paragraph('四列乙'), 2], [paragraph('四列丙'), 2], [paragraph('四列丁'), 1]]),
+    flatRow([[paragraph('融合图注'), 6]]),
+  ];
+  const frame = `<w:tbl><w:tblPr><w:tblW w:w="6000" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>${widths.map(width => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>${rows.join('')}</w:tbl>`;
+  const heading = paragraph('顶层导航标题', 10, true).replace('<w:pPr>', '<w:pPr><w:pStyle w:val="Heading2"/><w:outlineLvl w:val="1"/>');
+  const layout = layoutBody(api, heading + frame);
+  const pages = layout.pages.map(page => fragmentText(page.fragments));
+  assert.ok(pages.length > 1, `${label}：平面融合表应实际跨页`);
+  expectPage(pages, '顶层导航标题', 0, `${label}：顶层标题应与正文开始处同页`);
+  expectPage(pages, '融合正文0', 0, `${label}：正文应使用标题后的当前页空间`);
+  const labels = ['顶层导航标题', ...bodyLabels, '两列甲', '两列乙', '三列甲', '三列乙', '三列丙', '四列甲', '四列乙', '四列丙', '四列丁', '融合图注'];
+  for (const text of labels) assert.equal(pages.join('\n').split(text).length - 1, 1, `${label}：${text} 不可丢失或重复`);
+  assert.ok(layout.pages.filter(page => page.fragments.some(fragment => fragment.kind === 'table')).length > 1,
+    `${label}：同一平面表应在后续页面继续排版`);
+}
+
 // 两个公开入口都运行，避免只补到浏览器或 CommonJS 一侧。
 async function main() {
-  checkPagination(require('@docx-editor.dev/core/layout'), 'CommonJS');
-  checkPagination(await import('@docx-editor.dev/core/layout'), 'ESM');
+  for (const [label, api] of [['CommonJS', require('@docx-editor.dev/core/layout')], ['ESM', await import('@docx-editor.dev/core/layout')]]) {
+    checkPagination(api, label);
+    checkFlatFramePagination(api, label);
+  }
   console.log('DOCX 表格分页定向检查通过（CommonJS / ESM）。');
 }
 
