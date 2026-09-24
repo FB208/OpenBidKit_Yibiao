@@ -86,6 +86,50 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   console.log('配图源码：真实文本队列并发、规范传递、混合类型、独立落盘、渲染交接、部分失败及取消检查通过。');
 }
 
+// 核对清单去重、启动快照及资料索引；统计不改变任何原编排。
+function checkExecutionManifest(fileOptions) {
+  const leaf = (id, content_mode = 'ai-generate') => ({ id, number: id, title: id, description: '说明', content_mode });
+  const items = ['pending', 'unset', 'complete', 'failed'].map(id => leaf(id));
+  const outline = [{ ...leaf('parent'), children: [...items, leaf('manual', 'manual-fill')] }];
+  const plans = Object.fromEntries(items.map((item, index) => [item.id, { plan: {
+    writing_focus: '重点-' + item.id, target_words: index === 1 ? 0 : 1000,
+    image_needed: index === 0, image_suitability_score: 8,
+    table: { needed: index === 1, purpose: index === 1 ? '措施' : '' }, knowledge: { item_ids: [] },
+  } }]));
+  const snapshot = JSON.stringify({ outline, plans });
+  for (const documentIds of [[], fileOptions.documentIds]) {
+    const files = buildContentGenerationFiles({ ...fileOptions, outline, plans, documentIds,
+      targets: items.slice(0, 2).reverse().map(item => ({ item })),
+      sectionStates: { pending: { status: 'success' }, complete: { status: 'success' }, failed: { status: 'error' },
+        manual: { status: 'success' }, parent: { status: 'success' }, deleted: { status: 'success' } },
+    });
+    const input = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
+    assert.equal(input.outline, undefined, '执行清单不再重复包含完整目录');
+    assert.deepEqual(input.targets.map(section => section.id), ['pending', 'unset'], '仍按目录顺序提供本轮目标');
+    assert.deepEqual(input.execution_summary, { total_ai_sections: 4, target_sections: 2, completed_before_run: 1,
+      target_words: 1000, unspecified_word_target_sections: 1, image_candidate_ids: ['pending'], table_section_ids: ['unset'] });
+    assert.deepEqual(input.completed_sections, [{ id: 'complete', number: 'complete', title: 'complete', file: '正文/complete.html' }]);
+    assert.deepEqual(input.image_layout_quota, { total_groups: 1, single: 1, imageText: 0, threeImages: 0, fourImages: 0 });
+    const reference = JSON.parse(files.find(file => file.path === input.reference_files.outline).content).outline;
+    for (const item of reference[0].children) {
+      if (['pending', 'unset'].includes(item.id)) assert.equal(item.content_plan, undefined, '目标编排只保存一份');
+      if (['complete', 'failed'].includes(item.id)) assert.deepEqual(item.content_plan, plans[item.id].plan, '非目标已有编排仍可按需参考');
+    }
+    const filePaths = new Set(files.map(file => file.path));
+    for (const file of Object.values(input.reference_files)) assert.ok(filePaths.has(file), '索引必须指向本轮提供的文件：' + file);
+    assert.equal(Boolean(input.reference_files.knowledge_index), documentIds.length > 0);
+    assert.equal(JSON.stringify({ outline, plans }), snapshot, '不能改写原目录和编排');
+  }
+  const emptyFiles = buildContentGenerationFiles({ ...fileOptions, outline, plans, targets: [], documentIds: [],
+    generationOptions: { ...fileOptions.generationOptions, imageQuantity: 'none' } });
+  const empty = JSON.parse(emptyFiles.find(file => file.path === '正文编排决策.json').content);
+  assert.equal(empty.execution_summary.target_words, 0);
+  assert.equal(empty.execution_summary.target_sections, 0);
+  assert.equal(empty.image_layout_quota.total_groups, 0);
+  assert.deepEqual(empty.execution_summary.image_candidate_ids, []);
+  console.log('执行清单：目标去重、统计、完成快照、目录参考和资料索引检查通过。');
+}
+
 // 经实际输入构建检查布局名额、确定性取整和本轮目标范围，不调用模型。
 function checkImageLayoutQuota(fileOptions) {
   const items = Array.from({ length: 12 }, (_, index) => ({ id: `layout-${index}`, number: String(index + 1), title: '配图小节', content_mode: 'ai-generate' }));
@@ -395,6 +439,7 @@ async function main() {
       } },
     };
     checkImageLayoutQuota(fileOptions);
+    checkExecutionManifest(fileOptions);
     await checkRestoredContent({ Type, workspaceDir, fileOptions, signal });
     await checkFactsRequirements({ Type, workspaceDir, fileOptions, signal });
     await checkImageSourceGeneration({ Type, workspaceDir, signal });
@@ -456,7 +501,10 @@ async function main() {
     assert.equal(files.some(file => file.path.startsWith('已还原内容/')), false);
     assert.equal(input.has_knowledge_base, true);
     assert.deepEqual(input.targets.map(item => item.id), ['e0000000-0000-4000-8000-000000000011', 'f0000000-0000-4000-8000-000000000012']);
-    assert.equal(input.outline[1].content_mode, 'manual-fill');
+    const referenceOutline = JSON.parse(files.find(file => file.path === input.reference_files.outline).content).outline;
+    assert.equal(referenceOutline[1].content_mode, 'manual-fill');
+    assert.equal(input.outline, undefined);
+    assert.ok(referenceOutline[0].children.every(item => !Object.hasOwn(item, 'content_plan')));
     assert.match(input.word_requirements, /1000.*2000/);
     assert.match(input.word_requirements, /content_plan.target_words/);
     assert.equal(input.targets[0].content_plan.target_words, 750);
@@ -788,6 +836,9 @@ async function main() {
             assert.equal(payload.auto_validate_json, true);
             assert.equal(payload.files.length, resume ? 0 : files.length);
             assert.match(payload.prompt, /三个文件必须完整阅读/);
+            assert.match(payload.prompt, /通常无需再写脚本重复统计/);
+            assert.match(payload.prompt, /如发现信息不一致，可读取相关文件核实/);
+            assert.match(payload.prompt, /completed_sections 仅记录本轮启动前/);
             assert.match(payload.prompt, /本轮全部待生成小节一次性放入 sections 数组提交/);
             assert.match(payload.prompt, /不自行按章节或固定小批次拆分调用/);
             assert.match(payload.prompt, /超出上限的任务自动排队/);
@@ -939,6 +990,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
   const files = buildContentGenerationFiles(options);
   const decisions = JSON.parse(files.find(file => file.path === '正文编排决策.json').content);
   const restored = decisions.targets[0].restored_content;
+  assert.equal(files.find(file => file.path === decisions.reference_files.outline).content.includes('restored_content'), false, '还原引用不重复放进目录参考');
   assert.equal(restored.words, countReadableWords(source));
   assert.equal(restored.words > options.wordControl.sectionWords, true);
   assert.equal(decisions.targets[1].restored_content, undefined);

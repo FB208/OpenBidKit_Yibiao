@@ -2330,7 +2330,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
           signal,
           buildFiles: () => buildContentGenerationFiles({
-            outline: outlineData.outline, targets, plans: storedContentPlans,
+            outline: outlineData.outline, targets, plans: storedContentPlans, sectionStates: sections,
             checkTotalWords: !targetItemId && targets.length === leaves.length,
             projectOverview, globalFacts, globalFactsMode, wordControl,
             generationOptions: storedPlan.contentGenerationOptions,

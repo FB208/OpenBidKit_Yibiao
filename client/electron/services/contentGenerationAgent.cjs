@@ -18,6 +18,7 @@ const RESOURCE_DIR = path.join(__dirname, '../resources/content-generation');
 const INPUT_FILES = {
   overview: '项目概述.md',
   decisions: '正文编排决策.json',
+  outline: '正文完整目录.json',
   rules: '受限HTML生成规范.md',
   imageTypes: '配图类型对照表.md',
   template: '正文模板.html',
@@ -90,23 +91,26 @@ function restorationInstructions(control, existingTotalWords) {
 }
 
 // 每轮新目标更新输入快照；暂停恢复不重写，已有小节 HTML 和图片始终保留。
-function buildContentGenerationFiles({ outline, targets, plans, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, hasOriginalPlan, restoredContents, existingTotalWords, requirement, template, knowledgeBaseService, documentIds, checkTotalWords = true }) {
+function buildContentGenerationFiles({ outline, targets, plans, sectionStates = {}, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, hasOriginalPlan, restoredContents, existingTotalWords, requirement, template, knowledgeBaseService, documentIds, checkTotalWords = true }) {
   if (!template) throw new Error('请先在“长嘛样”选择有效的正文模板');
   const targetIds = new Set(targets.map(({ item }) => item.id));
   const sections = [];
+  const completedSections = [];
+  let totalAiSections = 0;
   const restoredFiles = [];
   function visit(items, parents = []) {
     return items.map(item => {
       const node = { id: item.id, number: item.number, title: item.title, description: item.description || '', content_mode: item.content_mode };
       if (item.children?.length) node.children = visit(item.children, [...parents, item.title]);
       else if (item.content_mode === 'ai-generate') {
-        node.content_plan = plans[item.id]?.plan;
+        totalAiSections++;
         if (targetIds.has(item.id)) {
+          const section = { ...node, content_plan: plans[item.id]?.plan, chapter_path: [...parents, item.title].join(' > '), file: sectionFile(item.id) };
           const content = hasOriginalPlan && restoredContents[item.id];
           if (content) {
             const file = `已还原内容/${encodeURIComponent(item.id)}.md`;
             restoredFiles.push({ path: file, content });
-            node.restored_content = {
+            section.restored_content = {
               file, words: countReadableWords(content),
               images: [...new Set(originalImageReferences(content))].map(source_ref => ({
                 source_ref,
@@ -114,16 +118,36 @@ function buildContentGenerationFiles({ outline, targets, plans, projectOverview,
               })),
             };
           }
-          sections.push({ ...node, chapter_path: [...parents, item.title].join(' > '), file: sectionFile(item.id) });
+          sections.push(section);
+        } else {
+          node.content_plan = plans[item.id]?.plan;
+          if (sectionStates[item.id]?.status === 'success') {
+            completedSections.push({ id: item.id, number: item.number, title: item.title, file: sectionFile(item.id) });
+          }
         }
       }
       return node;
     });
   }
   const tree = visit(outline);
+  // 只汇总已保存的编排，不重新分配字数、表格或图片；完成列表是本轮启动前的快照。
+  const executionSummary = {
+    total_ai_sections: totalAiSections,
+    target_sections: sections.length,
+    completed_before_run: completedSections.length,
+    target_words: sections.reduce((sum, section) => sum + (section.content_plan?.target_words || 0), 0),
+    unspecified_word_target_sections: sections.filter(section => !section.content_plan?.target_words).length,
+    image_candidate_ids: sections.filter(section => section.content_plan?.image_needed === true).map(section => section.id),
+    table_section_ids: sections.filter(section => section.content_plan?.table?.needed === true).map(section => section.id),
+  };
+  const referenceFiles = {
+    ...INPUT_FILES,
+    ...(documentIds.length ? { knowledge_index: '知识库/索引.json' } : {}),
+  };
   const files = [
+    { path: INPUT_FILES.outline, content: JSON.stringify({ outline: tree }, null, 2) },
     { path: INPUT_FILES.overview, content: projectOverview || '未提供项目概述。' },
-    { path: INPUT_FILES.decisions, content: JSON.stringify({ outline: tree, targets: sections, has_knowledge_base: documentIds.length > 0, table_requirement: generationOptions.tableRequirement, word_requirements: wordInstructions(wordControl, checkTotalWords), word_control: { minimumWords: wordControl.minimumWords, maximumWords: wordControl.maximumWords, checkTotalWords }, image_layout_quota: buildImageLayoutQuota(sections, generationOptions), image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, global_facts_requirements: globalFactsInstructions(globalFactsMode), user_requirement: requirement || '' }, null, 2) },
+    { path: INPUT_FILES.decisions, content: JSON.stringify({ targets: sections, execution_summary: executionSummary, completed_sections: completedSections, reference_files: referenceFiles, has_knowledge_base: documentIds.length > 0, table_requirement: generationOptions.tableRequirement, word_requirements: wordInstructions(wordControl, checkTotalWords), word_control: { minimumWords: wordControl.minimumWords, maximumWords: wordControl.maximumWords, checkTotalWords }, image_layout_quota: buildImageLayoutQuota(sections, generationOptions), image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, global_facts_requirements: globalFactsInstructions(globalFactsMode), user_requirement: requirement || '' }, null, 2) },
     { path: INPUT_FILES.rules, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.rules), 'utf8') },
     { path: INPUT_FILES.imageTypes, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.imageTypes), 'utf8') },
     // 与模板预览共用样张，只移除示例图片引用，保留图组结构和配图提示词。
@@ -256,9 +280,9 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
 // 单个持久 Agent 负责阅读、检索、批量调度及最终文件清单。
 function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan) {
   return `你负责本次投标文件受限 HTML 正文生成，使用一个持久会话完成任务。
-1. 项目概述.md、正文编排决策.json、受限HTML生成规范.md 三个文件必须完整阅读；参考正文模板.html和所选模板配置.json。模板只是结构示例，不照抄示例正文，不要求每节套用全部元素。
+1. 先阅读正文编排决策.json（本轮执行清单）、项目概述.md和受限HTML生成规范.md，三个文件必须完整阅读；执行清单中的 reference_files 提供完整目录及资料位置，正文完整目录.json 按需读取。参考正文模板.html和所选模板配置.json。模板只是结构示例，不照抄示例正文，不要求每节套用全部元素。
 2. ${hasKnowledgeBase ? '已选择知识库，可通过知识库/索引.json定位参考文档。编排中的 knowledge.item_ids 对应索引条目的 id；根据条目所属文档读取相关原文。索引标题和简介用于定位，具体内容以文档原文为准。知识库和' : ''}全局事实设定.md是参考项。生成正文时，涉及人员、时间、地点、参数、职责或承诺等具体事实，应检索并阅读相关设定；不涉及的内容无需逐项阅读。一致性审计阶段的阅读范围按审计指令执行。主 Agent 负责检索并提供参考摘录，并发正文模型核对请求中提供的材料；编辑子 Agent 按需读取工作区文件。具体事实以全局事实设定为准，并遵守正文编排决策.json中的 global_facts_requirements（当前事实模式的中文要求）。
-3. 只生成正文编排决策.json中targets列出的AI生成叶子小节，其他目录作上下文；遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。各节篇幅以 content_plan.target_words 为准，不重新分配全文目标。每节输出路径已给定，禁止修改输入文件和业务数据库。${hasOriginalPlan ? '本次使用已还原底稿：阅读 restoration_requirements，并在生成每节前完整阅读其 restored_content.file；工具会自动加入本节完整底稿、原图引用对应关系和全局事实。已超过生效字数要求的底稿只整理、不扩写；冲突以全局事实设定为准。保留原表格和原图，以下配图与表格限制仅用于新增内容；原图直接引用已复制文件，不重新生图。无底稿小节按正常流程生成。' : ''}
+3. 只生成正文编排决策.json中 targets 列出的 AI 生成叶子小节，完整目录按需用于了解上下级和相邻章节。execution_summary 已汇总全文 AI 小节数、本轮目标数与目标字数、未设置字数目标的小节数、配图候选及表格入选 ID；image_layout_quota 已计算本轮布局名额，直接使用这些结果，通常无需再写脚本重复统计。如发现信息不一致，可读取相关文件核实。completed_sections 仅记录本轮启动前已成功完成的非目标小节，不是实时进度；本轮暂停恢复时结合工具结果和实际文件继续，不能仅因 HTML 存在就认定图片、审计等步骤全部完成。遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。各节篇幅以 content_plan.target_words 为准，不重新分配全文目标。每节输出路径已给定，禁止修改输入文件和业务数据库。${hasOriginalPlan ? '本次使用已还原底稿：阅读 restoration_requirements，并在生成每节前完整阅读其 restored_content.file；工具会自动加入本节完整底稿、原图引用对应关系和全局事实。已超过生效字数要求的底稿只整理、不扩写；冲突以全局事实设定为准。保留原表格和原图，以下配图与表格限制仅用于新增内容；原图直接引用已复制文件，不重新生图。无底稿小节按正常流程生成。' : ''}
 4. 先完整阅读配图类型对照表.md及 image_requirements（用户配图要求），读取 image_layout_quota（本轮新增布局名额）：total_groups 为总组数，single、imageText、threeImages、fourImages 分别为单张图片、图片表格、三列图片、四宫格的组数。结合本轮 targets 中 image_needed=true 小节的主题、写作重点和适配评分统一分配布局，并按 image_requirements 的本轮 AI 图片占比要求，在并发写作前规划每张图的表达目的、图片类型及生成方式；名额为零时不安排新增配图。可在合适小节安排多组，不要求逐节平均分配；单张图片与图片表格可互换，但合计组数不变，三列图片和四宫格保持各自组数。暂停、失败重试沿用本轮名额，已完成的布局计入完成数量，只补未完成部分，不重新分配一整轮。检索需要的参考资料并完成本轮安排后，调用一次 generate-sections，将本轮全部待生成小节一次性放入 sections 数组提交，不自行按章节或固定小批次拆分调用，也不等待一部分小节完成后再提交其余小节。程序中的 AI 服务队列会按用户设置的并发上限运行，超出上限的任务自动排队，空出名额后自动启动后续任务，无需你控制批次。每项都必须包含 section_id、instructions 和 references，section_id 原样使用 targets 中对应小节的 id；无参考摘录时 references 填空字符串，不省略字段。暂停恢复时一次提交剩余待生成小节，失败重试只提交失败项，保留已完成内容；工具会自动加入本节编排、项目概述、HTML规范、模板、配图类型对照表、字数及配图要求，你负责在各节 instructions 中写明布局、组数和每组表达目的，并逐图指定图片类型和生成方式（aiImage/htmlImage/mermaid），以及本节写作要求，并提供准确的参考摘录；未分配布局的小节明确写“不新增配图”。全局名额由你统筹，不得让每个并发任务自行分配或承担整轮名额。文本并发遵循用户现有模型配置，不要使用bash或脚本直接调用外部模型。
 5. 配图前完整阅读配图类型对照表.md，并遵守正文编排决策.json 的 image_requirements（用户配图要求）。无图不安排图片或占位，不调用配图工具；有图时按已分配的布局及逐图确定的生成方式完成配图；生成方式遵守类型开关和对照表，布局本身不绑定 AI、HTML 或 Mermaid，无须覆盖全部已开启类型。在当前会话中完成所需图片：AI 图调用 generate-image，通过 images 列表一次提交本轮全部待生成 AI 图片，不按章节或固定小批次拆分，不逐张等待后再提交下一张，超出并发上限的任务由程序队列处理；每项提供批内唯一的 image_id、prompt、size 及所需可选参数，图组内每张图使用不同标识；单张也使用一项列表。size 必填，逐图读取对应 figure 的 data-yb-size，按 square=1:1、wide=3:2、tall=3:4、panorama=16:9 选择匹配的具体生图尺寸；当前金龙 gpt-image-2-1k 的 tall 使用已验证的 768x1024。不能把画框名称作为尺寸，不得省略 size 或整批统一使用默认方图；prompt 中保留相同的宽高比例和横向/竖向构图方向，不得在整理提示词时丢失。工具内部按现有生图并发设置执行，整批返回 results 后，按 image_id 将成功项的 asset_ref 回填到对应图片，仅重新提交失败项，不重复生成成功项；HTML/Mermaid 图使用 generate-image-sources，通过 images 列表将本轮全部待生成 HTML/Mermaid 源码合并一次提交，不按章节、类型或固定小批次拆分，超出并发上限的任务由程序队列处理；每项提供唯一 image_id、kind（html/mermaid）及 prompt，prompt 写明图片类型、表达目的、准确内容和数据，不只给文件路径或要求并发模型自行检索。HTML 项必填 frame_size，与对应正文 figure 的 data-yb-size 一致。工具只生成并保存源码，不渲染、不回填正文；按 results 中的 image_id 对应图片，将全部待渲染文件按 HTML、Mermaid 分别一次批量提交对应 render 工具，不逐张或分小批等待。两个 render 工具都使用 images 数组，每项必填 image_id 和 source_file，HTML 另填该项 frame_size；单张也使用一项数组。现有本地渲染队列控制实际并发，超限自动排队。按返回 results 中的 image_id 对应正文图片，逐项检查 status、error 及 HTML 的 layout_issues，只对失败或需要修正的项修改源码并重新转图，不重复生成成功源码。设计宽度1240px，square/wide/tall/panorama对应高度1240/827/1653/698px，尺寸包含程序统一设置的四周40px内边距；以 body 为画布，用 Flex/Grid 合理铺满内部区域，不额外包一层画布或重复添加外层边距。采用正式简洁的配色和清晰层次，不在底部留下大块空白，不靠无意义文字或空卡片填满；Mermaid 图使用批量工具返回的 .mmd 源文件调用 render-mermaid-image。源码保存在图片/目录，配图 HTML 可使用 CSS，不受正文受限 HTML 标签限制。将工具返回的 asset_ref 原样写入对应 img 的 data-yb-asset-ref，不填写 src，不虚构文件路径，不把配图源码嵌入小节正文。图组中每张图片均须生成。暂停恢复时复用已完成图片及源码，各类剩余待办分别一次提交。渲染错误或 HTML layout_issues 交回当前会话修改源码并重新转图；失败不得默认为成功或改换生成方式。
 6. ${resuming ? '本次继续原会话。先检查正文/已完成文件，保留有效正文、图片和源码，复用已存在且符合内容的图片引用；只补齐未完成、失败或明确需要修正的小节及图片。' : '每个小节保存为正文/下的独立HTML文件。'} 工具返回每节文件、字数和错误；对失败小节修正要求后重试，可用read/edit检查和修正已有HTML。不要删除已完成的小节。

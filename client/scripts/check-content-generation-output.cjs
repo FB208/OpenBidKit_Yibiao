@@ -260,7 +260,7 @@ async function checkTask(directory, outputDir) {
     assert.equal(conversions, convertedBeforePause);
     // 写作、配图和扩缩写失败后，执行页面实际重试请求，检查同一会话及文件继续使用。
     pauseGeneration = pauseRequested = false;
-    const retainedFiles = ['正文编排决策.json', ...targets.map(section => section.file), '原图/现场 图片.png'];
+    const retainedFiles = ['正文编排决策.json', '正文完整目录.json', ...targets.map(section => section.file), '原图/现场 图片.png'];
     const retainedBytes = retainedFiles.map(file => fs.readFileSync(path.join(directory, file)));
     for (const stage of ['写作', '配图', '扩缩写']) {
       const persistentState = { word_adjustment_started: stage === '扩缩写' };
@@ -486,6 +486,11 @@ async function checkTask(directory, outputDir) {
       }
       assert.equal(payload.initial_stage, 'generating');
       const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
+      assert.equal(input.outline, undefined);
+      assert.equal(input.execution_summary.target_sections, 2);
+      assert.equal(input.execution_summary.total_ai_sections, 2);
+      assert.equal(input.execution_summary.target_words, 175000);
+      assert.deepEqual(input.completed_sections, []);
       const words = input.targets.map(section => section.content_plan.target_words);
       assert.equal(words.reduce((sum, value) => sum + value, 0), 175000);
       assert.ok(words[1] > words[0]);
@@ -530,6 +535,11 @@ async function checkTask(directory, outputDir) {
         }
         const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
         assert.deepEqual(input.targets.map(section => section.id), addedIds);
+        assert.equal(input.execution_summary.total_ai_sections, addedIds.length + retained.length);
+        assert.equal(input.execution_summary.target_sections, addedIds.length);
+        assert.equal(input.execution_summary.target_words, addedIds.length * 3000);
+        assert.equal(input.execution_summary.completed_before_run, retained.length);
+        assert.deepEqual(input.completed_sections.map(section => section.id).sort(), retained.map(section => section.id).sort());
         assert.deepEqual(input.targets.map(section => section.content_plan.target_words), addedIds.map(() => 3000));
         for (const id of addedIds) assert.equal(state.contentGenerationPlans[id].plan.target_words, 3000);
         for (const section of retained) assert.deepEqual(state.contentGenerationPlans[section.id], savedTargets[section.id]);
