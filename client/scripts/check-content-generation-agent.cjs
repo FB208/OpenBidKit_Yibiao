@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, runContentLayoutAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
+const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, runContentLayoutAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { createContentGenerationImageTools } = require('../electron/services/contentGenerationImageTools.cjs');
 
 // 用真实文本队列核对源码并发、独立落盘和渲染交接，不请求外部模型。
@@ -1039,16 +1039,25 @@ async function checkLocalRendering(workspaceDir) {
   console.log('固定画布越界、隐藏溢出裁切与Mermaid原有转图检查通过。');
 }
 
-// 格式自检沿用主会话；两个编辑任务真正并发，成功项不重做，图片修改在写入前拒绝。
+// 格式自检先对齐运行编号再续接主会话；跨次失败重试保留成功项和图片保护。
 async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
   const targets = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8')).targets;
   let state = { status: 'supplementing', jobs: targets.map(section => ({ section_id: section.id, file: section.file, gaps: [{ figure_ids: ['图'], suggested_words: 50 }] })), completed_section_ids: [] };
-  const layout = { get: () => state, save: next => { state = next; } };
+  const sessionFile = '原正文会话.jsonl';
+  const persistent = { run_id: '原正文轮次', session_file: sessionFile, layout_check: state };
+  const layout = { get: () => state, save: next => { state = next; persistent.layout_check = next; } };
+  const inputBefore = fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8');
+  const interrupted = new Error('模拟格式自检主会话失败');
+  const runIds = [];
+  const checkpoints = [];
   let running = 0;
   let peak = 0;
   let failFirst = true;
   const calls = [];
-  const agentService = { updatePersistentTask() {}, async runTask(payload) {
+  const agentService = { updatePersistentTask(key, patch) {
+    assert.equal(key, CONTENT_GENERATION_AGENT_TASK_KEY);
+    Object.assign(persistent, patch);
+  }, async runTask(payload) {
     if (!payload.primary_session) {
       assert.equal(payload.failure_handled_by_parent, true);
       assert.deepEqual(payload.active_tools, ['read', 'edit', 'report-failure']);
@@ -1068,6 +1077,17 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
         return {};
       } finally { running--; }
     }
+    // 与 Runtime 的恢复门槛一致，不能仅断言 mode=resume 而忽略任务归属。
+    assert.equal(persistent.run_id, payload.task_id, '持久 Agent 任务与当前业务任务必须匹配');
+    assert.ok(!runIds.includes(payload.task_id));
+    runIds.push(payload.task_id);
+    assert.equal(persistent.session_file, sessionFile);
+    assert.equal(persistent.layout_check, state);
+    assert.equal(persistent.error, null, '开始本次执行时应清除上次错误');
+    payload.onCheckpoint({ status: 'running', phase: 'layout-checking', session_file: sessionFile });
+    assert.equal(checkpoints.at(-1).run_id, payload.task_id);
+    assert.equal(checkpoints.at(-1).task_key, CONTENT_GENERATION_AGENT_TASK_KEY);
+    assert.equal(checkpoints.at(-1).session_file, sessionFile);
     assert.equal(payload.persistent_task.mode, 'resume');
     assert.equal(payload.initial_stage, 'layout-checking');
     assert.deepEqual(payload.files, []);
@@ -1076,22 +1096,39 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
     const tools = payload.create_tools({ Type, workspaceDir });
     const supplement = tools.find(tool => tool.name === 'supplement-layout-sections');
     const complete = tools.find(tool => tool.name === 'complete-layout-supplement');
-    let results = (await supplement.execute('batch', { section_ids: targets.map(section => section.id) })).details.results;
-    assert.equal(results.filter(item => item.status === 'error').length, 1);
-    assert.throws(() => complete.execute(), /未完成/);
+    if (failFirst) {
+      const results = (await supplement.execute('batch', { section_ids: targets.map(section => section.id) })).details.results;
+      assert.equal(results.filter(item => item.status === 'error').length, 1);
+      assert.throws(() => complete.execute(), /未完成/);
+      Object.assign(persistent, { status: 'error', error: interrupted.message });
+      throw interrupted;
+    }
+    assert.deepEqual(state.completed_section_ids, [targets[1].id]);
     await assert.rejects(supplement.execute('again', { section_ids: [targets[1].id] }), /未完成的格式补写/);
-    failFirst = false;
     await supplement.execute('retry', { section_ids: [targets[0].id] });
     complete.execute();
     assert.deepEqual(payload.continueTask(), { complete: true });
     payload.validateOutput({}, { workspace_dir: workspaceDir });
     return { workspace_dir: workspaceDir };
   } };
-  await runContentLayoutAgent({ agentService, signal, layout });
+  const run = () => runContentLayoutAgent({ agentService, signal, layout, onCheckpoint: checkpoint => checkpoints.push(checkpoint) });
+  await assert.rejects(run(), error => error === interrupted);
+  assert.equal(persistent.error, interrupted.message);
+  assert.equal(state.status, 'supplementing');
+  const completedFile = path.join(workspaceDir, targets[1].file);
+  const completedBefore = fs.readFileSync(completedFile, 'utf8');
+  failFirst = false;
+  await run();
+  assert.equal(runIds.length, 2);
+  assert.equal(persistent.session_file, sessionFile);
+  assert.equal(persistent.status, 'success');
+  assert.equal(persistent.error, null);
+  assert.equal(fs.readFileSync(completedFile, 'utf8'), completedBefore);
+  assert.equal(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'), inputBefore);
   assert.equal(peak, 2);
   assert.equal(calls.filter(file => file === targets[1].file).length, 1);
   assert.equal(state.status, 'rechecking');
-  console.log('格式补写：原会话续接、真实并发、Pi edit 图片保护、失败重试与成功项复用通过。');
+  console.log('格式补写：运行编号与检查点一致、失败后原会话续接、并发、图片保护和成功项复用通过。');
 }
 
 if (process.argv.includes('--original-store')) {

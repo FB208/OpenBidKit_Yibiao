@@ -379,9 +379,13 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
 
 // 正文完成后续接原主会话，主 Agent 分配补写，子 Agent 用已有 edit 能力直接修改各自文件。
 async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoint, onActivity }) {
-  agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'running', phase: 'layout-checking', agent_connection: 'running' });
+  // 本次执行与持久任务使用同一编号，恢复原 Session 时保留已有补写进度。
+  const runId = crypto.randomUUID();
+  agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
+    run_id: runId, status: 'running', phase: 'layout-checking', agent_connection: 'running', error: null,
+  });
   await agentService.runTask({
-    task_id: crypto.randomUUID(), title: '正文格式自检补写', primary_session: true, summary_enabled: false,
+    task_id: runId, title: '正文格式自检补写', primary_session: true, summary_enabled: false,
     persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: 'resume' },
     initial_stage: 'layout-checking', active_tools: LAYOUT_TOOLS, files: [],
     prompt: buildLayoutPrompt(layout.get()), output_file: RESULT_FILE,
@@ -394,7 +398,8 @@ async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoin
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
     continueTask: () => layout.get().status === 'rechecking' ? { complete: true }
       : { stage: 'layout-checking', prompt: buildLayoutPrompt(layout.get()) },
-    onCheckpoint, onActivity,
+    onCheckpoint: checkpoint => onCheckpoint?.({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: runId }),
+    onActivity,
   });
   signal.throwIfAborted();
   agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'success', phase: 'completed', agent_connection: 'idle' });
