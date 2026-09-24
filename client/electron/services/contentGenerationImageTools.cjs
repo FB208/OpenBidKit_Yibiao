@@ -106,6 +106,49 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
   }
 
+  // 首次生成和源码修复共用转图逻辑；源码一就绪即进入已有本地队列。
+  async function renderImage(result, combinedSignal) {
+    combinedSignal.throwIfAborted();
+    const renderer = localImageRenderService || require('./localImageRenderService.cjs').getLocalImageRenderService();
+    const pauseOptions = { isPauseRequested: () => combinedSignal.aborted, createPauseError: () => combinedSignal.reason };
+    const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, result.source_file), 'utf8');
+    const rendered = result.kind === 'html'
+      ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: result.frame_size })
+      : await renderer.renderMermaidToPng(source, pauseOptions);
+    combinedSignal.throwIfAborted();
+    Object.assign(result, {
+      asset_ref: saveImage(rendered.buffer, '.png'), width: rendered.width, height: rendered.height,
+      ...(result.kind === 'html' ? { layout_issues: rendered.layout_issues } : {}),
+      status: result.kind === 'html' && rendered.layout_issues?.length ? 'needs_repair' : 'success',
+    });
+  }
+
+  // 等待整批退出后返回完整结果；取消也交给 Pi 落入会话，避免丢失已完成产物路径。
+  async function runImageBatch(images, toolSignal, onUpdate, processImage) {
+    const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
+    combinedSignal.throwIfAborted();
+    if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批图片的 image_id 不能重复');
+    let completed = 0;
+    const results = await Promise.all(images.map(async image => {
+      const result = { image_id: image.image_id, kind: image.kind,
+        ...(image.source_file ? { source_file: image.source_file } : {}),
+        ...(image.kind === 'html' ? { frame_size: image.frame_size } : {}),
+        stage: image.source_file ? 'render' : 'generate' };
+      try {
+        combinedSignal.throwIfAborted();
+        await processImage(image, result, combinedSignal);
+        if (result.status === 'success') result.stage = 'complete';
+      } catch (error) {
+        Object.assign(result, { status: combinedSignal.aborted ? 'cancelled' : 'error', error: error.message });
+      }
+      onUpdate?.(toolResult({ completed: ++completed, total: images.length, result }));
+      return result;
+    }));
+    const output = toolResult({ results, ...(combinedSignal.aborted ? { cancelled: true } : {}) });
+    if (results.some(result => result.status !== 'success')) output.isError = true;
+    return output;
+  }
+
   const targets = new Map(sections.map(section => [section.id, section]));
   return [{
     name: 'list-section-images', label: '读取正文图片清单', executionMode: 'sequential',
@@ -177,76 +220,46 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       return toolResult({ results: images.map(item => results.get(item.image_id)) });
     },
   }, {
-    name: 'generate-image', label: 'AI 生图',
-    description: '将本轮全部待生成 AI 图片通过 images 一次提交，不按章节或固定小批次拆分。内部按主程序生图并发设置生成，超出上限自动排队。每项 image_id 在批内唯一，用于对应正文中的具体图片。返回 results 中各项的状态及 asset_ref；只重试失败项。单张也通过只有一项的 images 提交。',
-    executionMode: 'sequential',
-    parameters: Type.Object({
-      images: Type.Array(Type.Object({
-        image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，用于将结果对应到正文中的具体图片；图组内每张图使用不同标识。' }),
-        prompt: Type.String({ minLength: 1, description: '描述图片的表达目的、主体、场景或结构关系，并保留与正文画框和 size 一致的宽高比例及横向/竖向构图要求，不得在整理提示词时省略比例。' }),
-        title: Type.Optional(Type.String({ description: '图片标题' })),
-        style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: 'engineering_diagram：工程图示风格，适用于示意、结构及原理表达；realistic_photo：写实照片风格，适用于实物和场景表达。省略时使用工程图示风格。' })),
-        size: Type.String({ minLength: 1, pattern: '\\S', description: '必填。逐图依据正文 figure 的 data-yb-size 选择对应比例的具体生图尺寸：square=1:1、wide=3:2、tall=3:4、panorama=16:9。当前金龙 gpt-image-2-1k 的 tall 可使用已验证的 768x1024。不能把 tall 等画框名称当尺寸，不得省略尺寸或统一沿用默认方图；prompt 同步写明比例和构图方向。' }),
-      }, { additionalProperties: false }), { minItems: 1 }),
-    }, { additionalProperties: false }),
-    // 批内并发交给现有生图队列，逐项保留结果；取消时等待整批退出再向主会话抛出。
-    async execute(_callId, { images }, toolSignal) {
-      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
-      combinedSignal.throwIfAborted();
-      if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批生图的 image_id 不能重复');
-      const results = await Promise.all(images.map(async ({ image_id, ...params }) => {
-        try {
-          combinedSignal.throwIfAborted();
+    name: 'generate-section-images', label: '批量生成正文图片', executionMode: 'sequential',
+    description: '通过 images 一次提交本轮全部待生成 AI、HTML、Mermaid 图片，image_id 原样使用正文图片清单标识，不按类型或小批次拆分。AI 使用生图队列，HTML/Mermaid 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列；超限自动排队。返回逐项 status、stage、asset_ref、source_file 和 HTML layout_issues。success 才可回填；needs_repair 须修改源码后转图。有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。暂停结果保留已完成产物，恢复仅补未完成项。',
+    parameters: Type.Object({ images: Type.Array(Type.Union(['ai', 'html', 'mermaid'].map(kind => Type.Object({
+      image_id: Type.String({ minLength: 1, description: '正文图片清单中的 image_id，批内唯一。' }),
+      kind: Type.Literal(kind),
+      prompt: Type.String({ minLength: 1, description: '图片表达目的、准确内容和数据；保留与正文画框一致的宽高比例及构图方向，不只给文件路径或要求模型检索。' }),
+      ...(kind === 'ai' ? {
+        size: Type.String({ minLength: 1, pattern: '\\S', description: '逐图依据正文 data-yb-size 选择对应比例的具体尺寸：square=1:1、wide=3:2、tall=3:4、panorama=16:9；当前金龙 gpt-image-2-1k 的 tall 使用 768x1024。不得传画框名称或省略尺寸。' }),
+        title: Type.Optional(Type.String()),
+        style: Type.Optional(Type.Union([Type.Literal('engineering_diagram'), Type.Literal('realistic_photo')], { description: '工程图示或写实照片风格，省略时使用工程图示。' })),
+      } : kind === 'html' ? {
+        frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。' }),
+      } : {}),
+    }, { additionalProperties: false }))), { minItems: 1 }) }, { additionalProperties: false }),
+    async execute(_callId, { images }, toolSignal, onUpdate) {
+      return runImageBatch(images, toolSignal, onUpdate, async (image, result, combinedSignal) => {
+        const { image_id, kind, prompt, frame_size } = image;
+        if (kind === 'ai') {
+          const { image_id: _id, kind: _kind, ...params } = image;
           if (!params.size?.trim()) throw new Error('请补充本张 AI 图片的 size，尺寸比例应与正文画框一致');
-          const result = await aiService.generateImage({ ...params, signal: combinedSignal });
+          const generated = await aiService.generateImage({ ...params, signal: combinedSignal });
           combinedSignal.throwIfAborted();
-          const assetRef = saveImage(fs.readFileSync(result.file_path), path.extname(result.file_path));
-          return { ...result, image_id, status: 'success', asset_ref: assetRef };
-        } catch (error) {
-          return { image_id, status: 'error', error: error.message };
-        }
-      }));
-      combinedSignal.throwIfAborted();
-      return toolResult({ results });
-    },
-  }, {
-    name: 'generate-image-sources', label: '批量生成配图源码',
-    description: '将本轮全部待生成 HTML/Mermaid 源码合并到 images 一次提交，不按章节、类型或固定小批次拆分。使用现有文本模型队列并发生成，超出上限自动排队，源码保存为图片目录下的新文件。每项 prompt 必须提供准确的表达内容及所需数据，模型无法读取主会话或检索资料。返回 results 中的 image_id、kind、status、source_file（HTML 含 frame_size）或 error；仅重试失败项。源码成功不表示渲染完成，随后按 HTML/Mermaid 分别批量调用对应 render 工具，修复反馈后再回填正文图片引用。',
-    executionMode: 'sequential',
-    parameters: Type.Object({
-      images: Type.Array(Type.Object({
-        image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，用于对应正文中的具体图片。' }),
-        kind: Type.Union([Type.Literal('html'), Type.Literal('mermaid')]),
-        prompt: Type.String({ minLength: 1, description: '图片的类型、表达目的、准确内容和数据，以及必要的设计要求；不能只给文件路径或让模型自行查找资料。' }),
-        frame_size: Type.Optional(Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: 'HTML 必填，与对应正文 figure 的 data-yb-size 一致；Mermaid 不需要。' })),
-      }, { additionalProperties: false }), { minItems: 1 }),
-    }, { additionalProperties: false }),
-    // 每图独立请求和落盘，部分失败不丢弃成功源码，取消后不再保存新文件。
-    async execute(_callId, { images }, toolSignal) {
-      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
-      combinedSignal.throwIfAborted();
-      if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批配图源码的 image_id 不能重复');
-      const results = await Promise.all(images.map(async ({ image_id, kind, prompt, frame_size }) => {
-        try {
-          combinedSignal.throwIfAborted();
+          Object.assign(result, generated, { status: 'success', asset_ref: saveImage(fs.readFileSync(generated.file_path), path.extname(generated.file_path)) });
+        } else {
+          if (!['html', 'mermaid'].includes(kind)) throw new Error('图片 kind 必须为 ai、html 或 mermaid');
           const source = (await aiService.chat({
             signal: combinedSignal, logTitle: `Agent 配图源码-${kind}-${image_id}`,
             messages: [{ role: 'system', content: buildImageSourcePrompt(kind, frame_size) }, { role: 'user', content: prompt }],
           })).trim();
           combinedSignal.throwIfAborted();
           if (!source || source.startsWith('```')) throw new Error('配图源码不能为空或包含 Markdown 围栏，请只返回源码');
-          const sourceFile = saveImage(Buffer.from(source, 'utf8'), kind === 'html' ? '.html' : '.mmd');
-          return { image_id, kind, status: 'success', source_file: sourceFile, ...(kind === 'html' ? { frame_size } : {}) };
-        } catch (error) {
-          return { image_id, kind, status: 'error', error: error.message };
+          result.source_file = saveImage(Buffer.from(source, 'utf8'), kind === 'html' ? '.html' : '.mmd');
+          result.stage = 'render';
+          await renderImage(result, combinedSignal);
         }
-      }));
-      combinedSignal.throwIfAborted();
-      return toolResult({ results });
+      });
     },
   }, ...['html', 'mermaid'].map(kind => ({
     name: `render-${kind}-image`, label: kind === 'html' ? '批量 HTML 转图片' : '批量 Mermaid 转图片',
-    description: `将本轮全部待渲染的 ${kind === 'html' ? 'HTML' : 'Mermaid'} 文件通过 images 一次提交，单张也使用一项数组，不逐张或分小批等待。读取工作区已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，由现有本地渲染队列控制并发并转为 PNG。返回 results 中每项的 image_id、status、asset_ref、像素尺寸和源码路径或 error${kind === 'html' ? '，并保留各项 layout_issues' : ''}；只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
+    description: `将本轮全部待渲染的 ${kind === 'html' ? 'HTML' : 'Mermaid'} 文件通过 images 一次提交，单张也使用一项数组，不逐张或分小批等待。读取工作区已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，由现有本地渲染队列控制并发并转为 PNG。返回 results 中每项的 image_id、status、asset_ref、像素尺寸和源码路径或 error${kind === 'html' ? '，并保留各项 layout_issues' : ''}；status=needs_repair 表示布局仍需修复，不可回填。只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
     executionMode: 'sequential',
     parameters: Type.Object({
       images: Type.Array(Type.Object({
@@ -255,28 +268,10 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
         ...(kind === 'html' ? { frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698；尺寸包含四周40px内边距。按此尺寸编写HTML，程序以2倍像素输出。' }) } : {}),
       }, { additionalProperties: false }), { minItems: 1 }),
     }, { additionalProperties: false }),
-    // 全量提交给现有渲染队列；逐项保留结果，取消时等待本批退出且不再落盘。
-    async execute(_callId, { images }, toolSignal) {
-      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
-      combinedSignal.throwIfAborted();
-      if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批转图的 image_id 不能重复');
-      const renderer = localImageRenderService || require('./localImageRenderService.cjs').getLocalImageRenderService();
-      const pauseOptions = { isPauseRequested: () => combinedSignal.aborted, createPauseError: () => combinedSignal.reason };
-      const results = await Promise.all(images.map(async ({ image_id, source_file, frame_size }) => {
-        try {
-          combinedSignal.throwIfAborted();
-          const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, source_file), 'utf8');
-          const result = kind === 'html'
-            ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: frame_size })
-            : await renderer.renderMermaidToPng(source, pauseOptions);
-          combinedSignal.throwIfAborted();
-          return { image_id, status: 'success', source_file, asset_ref: saveImage(result.buffer, '.png'), width: result.width, height: result.height, ...(kind === 'html' ? { frame_size, layout_issues: result.layout_issues } : {}) };
-        } catch (error) {
-          return { image_id, status: 'error', source_file, error: error.message };
-        }
-      }));
-      combinedSignal.throwIfAborted();
-      return toolResult({ results });
+    // 修复时只重新渲染已有源码，复用与首次生成相同的结果和取消处理。
+    async execute(_callId, { images }, toolSignal, onUpdate) {
+      return runImageBatch(images.map(image => ({ ...image, kind })), toolSignal, onUpdate,
+        async (_image, result, combinedSignal) => renderImage(result, combinedSignal));
     },
   }))];
 }

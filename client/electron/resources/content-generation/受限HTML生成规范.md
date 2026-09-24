@@ -59,7 +59,7 @@ image_needed 表示本节是否进入新增配图范围：为 false 时不新增
 最终正文中的每个 img 必须带 data-yb-asset-ref，值为图片工具返回或本节原图对应关系提供的 asset_ref，即当前 Agent 工作区相对路径（图片/xxx.png、原图/xxx.png 等）。不写 src、绝对路径、远程链接或 base64，不虚构图片文件。所有图组中的图片都须补齐资源引用后才能提交结果清单。
 
 - 所有 figure（包括原图）必须有唯一 id、合法的 data-yb-generation 和 data-yb-size。
-- data-yb-generation 按对照表填写：ai 对应 aiImage，调用 generate-image；html 对应 htmlImage，调用 render-html-image；mermaid 对应 mermaid，调用 render-mermaid-image。新增图片的类型与实际调用的生成工具一致；原图按上述规则使用 aiImage，不触发生图。
+- data-yb-generation 按对照表填写：ai 对应 aiImage，html 对应 htmlImage，mermaid 对应 mermaid；统一调用 generate-section-images，kind 分别填 ai、html、mermaid。新增图片的类型与实际调用的生成工具一致；原图按上述规则使用 aiImage，不触发生图。
 - data-yb-size 表示图片画框比例：square 为 1:1 方形，wide 为 3:2 横向，tall 为 3:4 纵向，panorama 为 16:9 横向；这是正文排版画框，不是生图服务的 size 参数。
 - data-yb-fit="contain" 保持原图比例、完整显示、不裁剪；data-yb-fit="cover" 铺满画框，比例不一致时会裁剪。省略时 Word 转换默认按 cover 处理。流程图、信息图及需要完整保留的原方案图片应明确使用 contain；实景示意图仅在允许裁剪边缘时使用 cover。
 - 每个 figure 必须包含且仅包含一个非空的 template[data-yb-role="prompt"]。新增图片的模板应说明表达目的、主要对象及其关系，必要时说明图中文字或数据；不得嵌入绘图源码。原图模板填写复用说明。所有 figure 包含一个 img，带非空 alt；独立图和图组内的图带 figcaption。
@@ -95,13 +95,15 @@ image_needed 表示本节是否进入新增配图范围：为 false 时不新增
 
 ## 三类图片工具
 
-- AI 生图：调用 generate-image，通过 images 列表一次提交本轮全部待生成 AI 图片，不按章节或固定小批次拆分，超出并发上限的任务由程序队列处理。每项提供批内唯一的 image_id、prompt、size，以及可选 style、title；图组内每张图使用不同标识，单张也使用只含一项的列表。程序复用现有生图并发设置执行，整批返回 results；按 image_id 对应正文中的具体图片，将 status=success 项的 asset_ref 通过 apply-section-images 回填到对应 img，只对 status=error 项处理错误并重新提交，不重复生成同批成功图片。size 必填，逐图读取对应 figure 的 data-yb-size，按 square=1:1、wide=3:2、tall=3:4、panorama=16:9 选择匹配的具体生图尺寸；当前金龙 gpt-image-2-1k 的 tall 使用已验证的 768x1024。不能把 tall 等画框名称当作尺寸，不得省略 size 或统一沿用默认方图；prompt 同步保留相同的比例与横向/竖向构图要求。尺寸被服务端拒绝时按失败结果修正该项，不通过省略尺寸重试。返回像素可能由服务端调整，不要求与请求像素完全相等。返回的 asset_ref 已指向当前工作区内的图片副本。
-本轮全部待生成 HTML/Mermaid 源码合并调用一次 generate-image-sources，不按章节、类型或固定小批次拆分，超出并发上限自动排队：images 每项包含批内唯一的 image_id、kind（html/mermaid）和 prompt，HTML 还须提供 frame_size，与正文对应 figure 的 data-yb-size 一致。主 Agent 在 prompt 中提供图片类型、表达目的、准确内容和数据，不能只给文件路径或要求模型自行检索；并发模型没有主会话上下文。工具按文本模型并发设置生成源码，独立保存到图片/下的新文件，返回 results 中每项的 source_file 或错误。按 image_id 对应正文图片，仅重试失败项，成功源码继续复用；源码生成成功不等于图片已完成，还须调用对应渲染工具。
+本轮全部待生成 AI、HTML、Mermaid 图片通过 generate-section-images 的 images 一次混合提交，不按章节、类型或固定小批次拆分，单张也用一项数组。每项填写清单 image_id、kind（ai/html/mermaid）和 prompt。程序同时向既有生图及文本队列提交任务，超限自动排队；每张源码完成后立即进入对应本地渲染队列，不等待其他源码或 AI 图片。逐项报告进度，整批结束后返回 results；按 image_id 对应正文图片，检查 status、stage、error、source_file、asset_ref 及 HTML layout_issues。success 才可回填，needs_repair 表示布局仍需修复，error/cancelled 表示失败或未完成；不能把已保存源码当成图片生成完成。
 
-- HTML 图片：将本轮全部待渲染 HTML 文件放入 images 数组，一次调用 render-html-image，不逐张或分小批等待。每项必填 image_id、source_file 和 frame_size；source_file 为源码相对路径，frame_size 与正文对应 figure 的 data-yb-size 一致。源文件可包含 html/head/body、style、div、SVG 等绘图结构，与受限正文分开；不依赖外部资源。生成前按画框比例确定固定设计尺寸：square=1240×1240、wide=1240×827、tall=1240×1653、panorama=1240×698。以 body 为画布，程序统一设置宽高及四周40px内边距，边距包含在上述尺寸内；例如 square 的内容区域为1160×1160。保留 body 的 Flex/Grid 布局，不额外包一层画布或重复添加外层边距。标题区和主体区共同利用内部空间，主体使用 Flex/Grid 分配剩余高度，卡片、节点及图形均衡分布，避免内容集中顶部、底部大面积留白。采用正式简洁的配色、统一字体和线条，模块间距协调；正文和节点文字不小于24px。不通过无意义文字、拉伸图形、单纯撑高空卡片或整体缩小内容填充版面。程序按固定尺寸以2倍像素输出，不按滚动高度扩大截图；内容不得侵入边距或超出画布。按 results 中的 image_id 对应正文图片，逐项检查 status、error 和 layout_issues。存在布局问题时，依据反馈调整对应源码的内容组织、字号和间距后重新渲染，不使用隐藏溢出来掩盖裁切；问题解决后，使用本次工具返回的图片资源引用。
-- Mermaid 图片：批量工具将无 Markdown 围栏的 Mermaid 源码保存为图片/下的新 .mmd 文件，主 Agent 将本轮全部待渲染 Mermaid 文件放入 images 数组，一次调用 render-mermaid-image，不逐张或分小批等待。每项必填 image_id 和 source_file，按 results 中的 image_id 对应正文图片，逐项检查 status 和 error。根据图的类型选择 Mermaid 语法：流程图使用 flowchart，思维导图使用 mindmap，实体关系图使用 erDiagram。按所选语法正确处理中文标签，保持节点和连线清晰，避免过度密集；语法或渲染报错时修改源文件后重试。
+- AI 生图：kind=ai，size 必填，逐图读取对应 figure 的 data-yb-size，按 square=1:1、wide=3:2、tall=3:4、panorama=16:9 选择匹配的具体生图尺寸；当前金龙 gpt-image-2-1k 的 tall 使用已验证的 768x1024。可选 style、title；不能把 tall 等画框名称当作尺寸，不得省略 size 或统一沿用默认方图；prompt 同步保留相同的比例与横向/竖向构图要求。尺寸被服务端拒绝时按失败结果修正该项，不通过省略尺寸重试。返回像素可能由服务端调整，不要求与请求像素完全相等。返回的 asset_ref 已指向当前工作区内的图片副本。
+- HTML/Mermaid：kind=html/mermaid，HTML 另填与正文画框一致的 frame_size。prompt 提供图片类型、表达目的、准确内容和数据，不能只给文件路径或要求模型自行检索；并发模型没有主会话上下文。源码独立保存为图片/下的新文件，随后自动转图。有 source_file 的失败或未完成项直接修复、转图，不重新生成源码；无源码的失败项才重新提交生成。
 
-两种转图工具均只接受 images 数组，单张也使用一项数组，不使用旧单图参数。它们只负责本地渲染，各自沿用已有组件并发队列，超限自动排队，不另行调用模型编写或修复源码。渲染报错或 HTML 布局问题由主 Agent 读取相应源码并修改，只将失败或需要修正的项重新批量提交转图，保留其他成功结果。源文件保留；图片以工具返回路径为准，成功且布局问题已处理后，通过 apply-section-images 将 asset_ref 批量回填到对应 img。暂停继续时复用已经完成的图片和源码，将各类剩余待办分别一次提交，仅补齐缺失或需要修改的部分。图片生成发生在当前正文 Agent 会话内。
+- HTML 图片修复：首次生成已自动转图；需要修复布局或重试转图时，将待修复 HTML 文件放入 images 数组，一次调用 render-html-image。每项必填 image_id、source_file 和 frame_size；source_file 为源码相对路径，frame_size 与正文对应 figure 的 data-yb-size 一致。源文件可包含 html/head/body、style、div、SVG 等绘图结构，与受限正文分开；不依赖外部资源。生成前按画框比例确定固定设计尺寸：square=1240×1240、wide=1240×827、tall=1240×1653、panorama=1240×698。以 body 为画布，程序统一设置宽高及四周40px内边距，边距包含在上述尺寸内；例如 square 的内容区域为1160×1160。保留 body 的 Flex/Grid 布局，不额外包一层画布或重复添加外层边距。标题区和主体区共同利用内部空间，主体使用 Flex/Grid 分配剩余高度，卡片、节点及图形均衡分布，避免内容集中顶部、底部大面积留白。采用正式简洁的配色、统一字体和线条，模块间距协调；正文和节点文字不小于24px。不通过无意义文字、拉伸图形、单纯撑高空卡片或整体缩小内容填充版面。程序按固定尺寸以2倍像素输出，不按滚动高度扩大截图；内容不得侵入边距或超出画布。按 results 中的 image_id 对应正文图片，逐项检查 status、error 和 layout_issues。存在布局问题时，依据反馈调整对应源码的内容组织、字号和间距后重新渲染，不使用隐藏溢出来掩盖裁切；问题解决后，使用本次工具返回的图片资源引用。
+- Mermaid 图片修复：首次生成已保存 .mmd 文件并自动转图；需要修复或重试时，将相关源文件放入 images 数组，一次调用 render-mermaid-image。每项必填 image_id 和 source_file，按 results 中的 image_id 对应正文图片，逐项检查 status 和 error。根据图的类型选择 Mermaid 语法：流程图使用 flowchart，思维导图使用 mindmap，实体关系图使用 erDiagram。按所选语法正确处理中文标签，保持节点和连线清晰，避免过度密集；语法或渲染报错时修改源文件后重试。
+
+两种转图工具均只接受 images 数组，单张也使用一项数组，不使用旧单图参数。它们只负责本地渲染，各自沿用已有组件并发队列，超限自动排队，不另行调用模型编写或修复源码。渲染报错或 HTML 布局问题由主 Agent 读取相应源码并修改，只将失败或需要修正的项重新批量提交转图，保留其他成功结果。源文件保留；图片以工具返回路径为准，成功且布局问题已处理后，通过 apply-section-images 将 asset_ref 批量回填到对应 img。暂停时工具等待本批请求退出，将已完成图片、已保存源码及未完成状态返回既有会话；恢复先核对会话结果与最新清单，成功图片直接复用，有源码的项继续修复或转图，无源码的剩余任务再混合提交生成。仅补齐缺失或需要修改的部分。图片生成发生在当前正文 Agent 会话内。
 
 ## 模板与字数
 

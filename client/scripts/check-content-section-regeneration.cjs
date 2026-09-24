@@ -84,7 +84,7 @@ async function main() {
       assert.equal(payload.task_id, persistent.run_id);
       assert.equal(payload.output_file, file);
       assert.match(payload.prompt, /1.2 改名后的目标/);
-      assert.match(payload.prompt, /generate-image-sources 的 images 一次提交/);
+      assert.match(payload.prompt, /generate-section-images 的 images 一次提交/);
       assert.match(payload.prompt, /list-section-images/);
       assert.match(payload.prompt, /apply-section-images/);
       assert.ok(!payload.prompt.includes('其他小节正文'));
@@ -95,7 +95,7 @@ async function main() {
       try {
         assert.equal(created.sessionFile, sessionFile);
         assert.ok(created.session.agent.state.messages.some(message => JSON.stringify(message).includes('原正文生成任务')));
-        for (const name of ['list-section-images', 'apply-section-images', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
+        for (const name of ['list-section-images', 'apply-section-images', 'generate-section-images', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
         assert.ok(!created.session.getActiveToolNames().includes('adjust-sections'));
         const { Type } = await import('typebox');
         const imageTools = payload.create_tools({ Type, workspaceDir });
@@ -119,14 +119,14 @@ async function main() {
         created.session.agent.streamFn = () => {
           if (!sourceRequested) {
             sourceRequested = true;
-            return response([{ type: 'toolCall', id: `source-${runs}`, name: 'generate-image-sources', arguments: {
-              images: [{ image_id: '单节流程图', kind: 'mermaid', prompt: '流程图：准备后实施' }],
+            return response([{ type: 'toolCall', id: `source-${runs}`, name: 'generate-section-images', arguments: {
+              images: [{ image_id: '单节流程图', kind: 'ai', prompt: '流程图：准备后实施', size: '1024x1024' }],
             } }], 'toolUse');
           }
-          const result = created.session.agent.state.messages.findLast(message => message.role === 'toolResult' && message.toolName === 'generate-image-sources');
+          const result = created.session.agent.state.messages.findLast(message => message.role === 'toolResult' && message.toolName === 'generate-section-images');
           const source = JSON.parse(result.content[0].text).results[0];
           assert.equal(source.status, 'success');
-          assert.equal(fs.readFileSync(path.join(workspaceDir, source.source_file), 'utf8'), 'flowchart LR\nA["准备"] --> B["实施"]');
+          assert.deepEqual(fs.readFileSync(path.join(workspaceDir, source.asset_ref)), fs.readFileSync(path.join(workspaceDir, '图片/原图.png')));
           return response([{ type: 'toolCall', id: `edit-${runs}`, name: 'edit', arguments: {
             path: file, edits: [{ oldText: original, newText: `修改后的说明${runs}` }], task_complete: true,
           } }], 'toolUse');
@@ -137,9 +137,9 @@ async function main() {
       return { workspace_dir: workspaceDir };
     },
   };
-  const service = createTaskService({ agentService, aiService: { async chat(request) {
-    assert.equal(request.messages[1].content, '流程图：准备后实施');
-    return 'flowchart LR\nA["准备"] --> B["实施"]';
+  const service = createTaskService({ agentService, aiService: { async generateImage(request) {
+    assert.equal(request.prompt, '流程图：准备后实施');
+    return { file_path: path.join(workspaceDir, '图片/原图.png') };
   } }, autoConfirmationService: { unregister() {} },
     technicalPlanStore: {
       loadTechnicalPlan: () => structuredClone(state), getContentWordOutputDir: () => outputDir,
