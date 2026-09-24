@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { buildContentGenerationFiles, runContentGenerationAgent } = require('../electron/services/contentGenerationAgent.cjs');
+const { refreshConsistencyInput } = require('../electron/services/contentGenerationConsistencyTools.cjs');
+const { editContentSections } = require('../electron/services/contentGenerationEditTools.cjs');
 const { createPiSession } = require('../electron/services/pi/piSessionFactory.cjs');
 
 // 使用真实输入与业务工具，只模拟主 Agent 的决策，子任务执行真实 Pi 原生 edit。
@@ -22,6 +24,8 @@ async function check() {
   let activeTools;
   const progress = [];
   const pause = new Error('模拟暂停');
+  const aggregateFile = '正文一致性检查汇总.txt';
+  const readAggregate = () => fs.readFileSync(path.join(workspaceDir, aggregateFile), 'utf8');
 
   // 各场景共用相同的最小文件输入，避免依赖用户数据库或外部模型。
   function reset() {
@@ -54,10 +58,48 @@ async function check() {
     hasKnowledgeBase: false, buildFiles: () => files, onConsistencyProgress: state => progress.push(structuredClone(state)),
   });
   try {
+    // 汇总沿用目录目标顺序；长行、表格和图片内容可逐字还原，不混入非目标小节。
+    reset();
+    const sourceFile = path.join(workspaceDir, '正文/one.html');
+    const source = `<!-- yibiao:block -->\r\n<p>${'中文长行😀'.repeat(12000)}</p>\r\n<table><tr><td>参数</td><td>60天</td></tr></table>${figure}\r\n`;
+    fs.writeFileSync(sourceFile, source, 'utf8');
+    fs.writeFileSync(path.join(workspaceDir, '正文/outside.html'), '<p>非本轮目标内容</p>', 'utf8');
+    refreshConsistencyInput(workspaceDir);
+    const aggregate = readAggregate();
+    assert.ok(aggregate.indexOf('小节：1.1 小节1') < aggregate.indexOf('小节：1.2 小节2'));
+    assert.match(aggregate, /小节 ID：one\n原文件：正文\/one.html/);
+    assert.match(aggregate, /L000002\[1\/\d+\]/);
+    assert.doesNotMatch(aggregate, /非本轮目标内容/);
+    const firstView = aggregate.split('原文件：正文/one.html\n')[1].split('\n\n小节：')[0];
+    const recovered = new Map();
+    for (const line of firstView.split('\n')) {
+      const match = /^(L\d+)(?:\[\d+\/\d+\])? \| (.*)$/.exec(line);
+      assert.ok(match);
+      recovered.set(match[1], (recovered.get(match[1]) || '') + match[2]);
+      assert.ok(Buffer.byteLength(line, 'utf8') < 50 * 1024);
+    }
+    assert.equal([...recovered.values()].join('\n'), source.replace(/\r\n/g, '\n'));
+    assert.equal(fs.readFileSync(sourceFile, 'utf8'), source, '汇总不得改写原 HTML');
+    const decisionFile = path.join(workspaceDir, '正文编排决策.json');
+    const partial = JSON.parse(fs.readFileSync(decisionFile, 'utf8'));
+    partial.targets = partial.targets.slice(1);
+    fs.writeFileSync(decisionFile, JSON.stringify(partial), 'utf8');
+    refreshConsistencyInput(workspaceDir);
+    assert.match(readAggregate(), /小节 ID：two/);
+    assert.doesNotMatch(readAggregate(), /小节 ID：one/);
+
     reset();
     action = async ({ payload, next, finish }) => {
       const start = next();
       assert.equal(start.stage, 'auditing');
+      assert.match(start.prompt, /首先阅读程序准备的《正文一致性检查汇总.txt》/);
+      assert.match(start.prompt, /修复后的核实以最新原文件为准/);
+      assert.match(readAggregate(), /小节 ID：one/);
+      assert.ok(readAggregate().includes(figure));
+      for (const name of ['edit', 'write']) {
+        assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: { path: aggregateFile } }), /不能覆盖/);
+        assert.throws(() => payload.before_file_write({ filePath: aggregateFile, toolName: name, content: '', originalContent: readAggregate() }), /不能覆盖/);
+      }
       assert.match(start.prompt, /小节内部/);
       assert.match(start.prompt, /global_facts_requirements（当前事实模式的中文要求）/);
       assert.match(start.prompt, /不代表审计阶段可以通过新增无依据的值消除冲突/);
@@ -67,7 +109,7 @@ async function check() {
       assert.equal(savedState.consistency.round, 1);
       for (const name of ['check-word-count', 'adjust-sections', 'generate-sections', 'generate-image', 'bash']) {
         assert.equal(activeTools.includes(name), false);
-        assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能/);
+        assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|暂不执行扩缩写/);
       }
       // 审计修复使字数变多，即使移除字数配置，完成分支也不能再访问字数检查。
       const decisionFile = path.join(workspaceDir, '正文编排决策.json');
@@ -75,6 +117,8 @@ async function check() {
       delete decisions.word_control;
       fs.writeFileSync(decisionFile, JSON.stringify(decisions), 'utf8');
       fs.appendFileSync(path.join(workspaceDir, '正文/one.html'), '<p>补充统一的项目承诺。</p>', 'utf8');
+      assert.equal(next().stage, 'auditing');
+      assert.doesNotMatch(readAggregate(), /补充统一的项目承诺/, '轮内汇总是快照，修复核实应读原文件');
       await finish([]);
       assert.throws(() => payload.before_tool_call({ toolCall: { name: 'edit' }, args: { path: '正文/one.html' } }), /结论已经提交/);
       assert.equal(next().complete, true);
@@ -86,9 +130,12 @@ async function check() {
     reset();
     action = async ({ next, finish }) => {
       next();
+      fs.appendFileSync(sourceFile, '<p>第一轮已修复内容</p>', 'utf8');
       await finish(['第一轮仍存在跨节工期冲突']);
       next();
       assert.equal(savedState.consistency.round, 2);
+      assert.match(readAggregate(), /第一轮已修复内容/);
+      fs.appendFileSync(sourceFile, '<p>暂停前已保存内容</p>', 'utf8');
       throw pause;
     };
     await assert.rejects(run(false), error => error === pause);
@@ -96,6 +143,7 @@ async function check() {
       assert.equal(payload.initial_stage, 'auditing');
       assert.match(payload.prompt, /第 2\/3 轮/);
       assert.equal(payload.files.length, 0);
+      assert.match(readAggregate(), /暂停前已保存内容/, '恢复时应重新汇总最新正文');
       await finish(['第二轮尚无明确依据']);
       next();
       assert.equal(savedState.consistency.round, 3);
@@ -118,6 +166,11 @@ async function check() {
     assert.equal(savedState.consistency.round, 3, '再次恢复不能增加第四轮');
 
     reset();
+    const repairContents = new Map(targets.map(({ item }) => {
+      const html = `<!-- yibiao:block -->\r\n<p>仅属于${item.id}的小节材料${'完整正文😀'.repeat(1000)}</p><p>工期六十天</p><table><tr><td>参数</td><td>六十天</td></tr></table>${figure}`;
+      fs.writeFileSync(path.join(workspaceDir, `正文/${item.id}.html`), html, 'utf8');
+      return [`正文/${item.id}.html`, html];
+    }));
     let started = 0;
     let release;
     let bothStarted;
@@ -125,17 +178,26 @@ async function check() {
     const startedGate = new Promise(resolve => { bothStarted = resolve; });
     let failOne = true;
     childAction = async payload => {
+      started++;
+      if (started === 2) bothStarted();
+      await gate;
       assert.equal(payload.failure_handled_by_parent, true);
       assert.equal(payload.workspace_dir, workspaceDir);
       assert.deepEqual(payload.active_tools, ['read', 'edit', 'report-failure']);
+      assert.equal(payload.summary_enabled, false);
+      assert.match(payload.prompt, /材料充分时可直接使用 edit/);
+      assert.match(payload.prompt, /发生修改后，以最新原文件为准/);
+      assert.doesNotMatch(payload.prompt, /先完整读取该文件及受限HTML生成规范.md/);
+      assert.ok(payload.prompt.includes(fs.readFileSync(path.join(workspaceDir, '受限HTML生成规范.md'), 'utf8')));
+      assert.ok(payload.prompt.endsWith(repairContents.get(payload.output_file)), '输入必须包含本节完整原文，保留换行、表格和图片');
+      const otherId = payload.output_file.endsWith('one.html') ? 'two' : 'one';
+      assert.ok(!payload.prompt.includes(`仅属于${otherId}的小节材料`), '不注入其他小节正文');
+      if (!failOne) assert.match(payload.prompt, /失败后重新派发前的最新内容/);
       const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
       assert.ok(payload.prompt.includes(decisions.global_facts_requirements));
       assert.match(payload.prompt, /以“【待填写】”标记/);
       assert.match(payload.prompt, /不扩大本次编辑范围/);
-      assert.match(payload.prompt, /只修复主 Agent 指定的矛盾/);
-      started++;
-      if (started === 2) bothStarted();
-      await gate;
+      assert.match(payload.prompt, /只修复主 Agent 指定的问题/);
       if (failOne && payload.output_file.endsWith('one.html')) throw new Error('模拟可恢复子任务失败');
       const created = await createPiSession({ workspaceDir, environment: { shellPath: process.env.ComSpec, layout: { agentDir: path.join(root, 'agent') }, instructions: '测试原生编辑', env: {} },
         config: {}, timeoutMs: 60000, summaryEnabled: false, proxyInfo: { baseUrl: 'http://127.0.0.1:1', token: 'test' },
@@ -165,6 +227,9 @@ async function check() {
     };
     await assert.rejects(run(false), error => error === pause);
     assert.deepEqual(savedState.consistency.failed_sections, ['one']);
+    const latestHtml = `${repairContents.get('正文/one.html')}<p>失败后重新派发前的最新内容</p>`;
+    fs.writeFileSync(sourceFile, latestHtml, 'utf8');
+    repairContents.set('正文/one.html', latestHtml);
     failOne = false;
     action = async ({ next, tools, finish }) => {
       await assert.rejects(finish([]), /修复任务未成功/);
@@ -174,8 +239,20 @@ async function check() {
       assert.equal(next().complete, true);
     };
     await run(true);
+    assert.equal(started, 3, '重试只重新派发失败小节');
+
+    // 共用入口默认不注入材料，其他编辑任务仍要求自行读取文件。
+    let defaultPrompt;
+    await editContentSections({ jobs: [{ section_id: 'one', instructions: '默认编辑路径' }],
+      targets: new Map([['one', { id: 'one', number: '1.1', title: '小节1', file: '正文/one.html' }]]),
+      workspaceDir, signal: new AbortController().signal, activity: { pending: 0 },
+      agentService: { async runTask(payload) { defaultPrompt = payload.prompt; } },
+      title: '默认编辑', instructions: '保留原流程',
+    });
+    assert.match(defaultPrompt, /先完整读取该文件及受限HTML生成规范.md/);
+    assert.doesNotMatch(defaultPrompt, /本小节启动时的完整 HTML|仅属于one的小节材料/);
     assert.ok(progress.some(state => state.round === 3 && state.status === 'completed' && state.remaining_issues.length));
-    console.log('通过：主会话审计、三轮上限、暂停与结论恢复、审计后不查字数、真实并发修复、原生 edit 图片保护及子任务失败重试。');
+    console.log('通过：目标汇总与恢复刷新、修复材料完整且按小节隔离、重试注入最新正文、默认编辑路径不变、三轮上限、真实并发修复、图片保护及失败重试。');
   } finally {
     assert.ok(path.resolve(root).startsWith(`${path.resolve(os.tmpdir())}${path.sep}`));
     fs.rmSync(root, { recursive: true, force: true });

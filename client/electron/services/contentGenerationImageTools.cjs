@@ -53,7 +53,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
 
   return [{
     name: 'generate-image', label: 'AI 生图',
-    description: '将已确定且相互独立的 AI 配图需求通过 images 一次批量提交，内部按主程序生图并发设置生成。每项 image_id 在批内唯一，用于对应正文中的具体图片。返回 results 中各项的状态及 asset_ref；只重试失败项。单张也通过只有一项的 images 提交。',
+    description: '将本轮全部待生成 AI 图片通过 images 一次提交，不按章节或固定小批次拆分。内部按主程序生图并发设置生成，超出上限自动排队。每项 image_id 在批内唯一，用于对应正文中的具体图片。返回 results 中各项的状态及 asset_ref；只重试失败项。单张也通过只有一项的 images 提交。',
     executionMode: 'sequential',
     parameters: Type.Object({
       images: Type.Array(Type.Object({
@@ -86,7 +86,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     },
   }, {
     name: 'generate-image-sources', label: '批量生成配图源码',
-    description: '通过 images 批量提交相互独立的 HTML/Mermaid 配图需求，使用现有文本模型队列并发生成源码并保存为图片目录下的新文件。每项 prompt 必须提供准确的表达内容及所需数据，模型无法读取主会话或检索资料。返回 results 中的 image_id、kind、status、source_file（HTML 含 frame_size）或 error；仅重试失败项。源码成功不表示渲染完成，随后调用对应 render 工具，修复反馈后再回填正文图片引用。',
+    description: '将本轮全部待生成 HTML/Mermaid 源码合并到 images 一次提交，不按章节、类型或固定小批次拆分。使用现有文本模型队列并发生成，超出上限自动排队，源码保存为图片目录下的新文件。每项 prompt 必须提供准确的表达内容及所需数据，模型无法读取主会话或检索资料。返回 results 中的 image_id、kind、status、source_file（HTML 含 frame_size）或 error；仅重试失败项。源码成功不表示渲染完成，随后按 HTML/Mermaid 分别批量调用对应 render 工具，修复反馈后再回填正文图片引用。',
     executionMode: 'sequential',
     parameters: Type.Object({
       images: Type.Array(Type.Object({
@@ -120,25 +120,38 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       return toolResult({ results });
     },
   }, ...['html', 'mermaid'].map(kind => ({
-    name: `render-${kind}-image`, label: kind === 'html' ? 'HTML 转图片' : 'Mermaid 转图片',
-    description: `读取工作区中已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，用主程序本地组件转为 PNG。返回 asset_ref、像素尺寸和源码路径；渲染失败时修改源码后重新调用。`,
+    name: `render-${kind}-image`, label: kind === 'html' ? '批量 HTML 转图片' : '批量 Mermaid 转图片',
+    description: `将本轮全部待渲染的 ${kind === 'html' ? 'HTML' : 'Mermaid'} 文件通过 images 一次提交，单张也使用一项数组，不逐张或分小批等待。读取工作区已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，由现有本地渲染队列控制并发并转为 PNG。返回 results 中每项的 image_id、status、asset_ref、像素尺寸和源码路径或 error${kind === 'html' ? '，并保留各项 layout_issues' : ''}；只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
     executionMode: 'sequential',
     parameters: Type.Object({
-      source_file: Type.String({ minLength: 1, description: '当前工作区内的源码相对路径，如 图片/实施流程.html 或 图片/实施流程.mmd；使用 UTF-8，不带 Markdown 围栏。' }),
-      ...(kind === 'html' ? { frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698；尺寸包含四周40px内边距。按此尺寸编写HTML，程序以2倍像素输出。' }) } : {}),
+      images: Type.Array(Type.Object({
+        image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，沿用源码生成时的 image_id，用于对应正文图片。' }),
+        source_file: Type.String({ minLength: 1, description: '当前工作区内的源码相对路径，如 图片/实施流程.html 或 图片/实施流程.mmd；使用 UTF-8，不带 Markdown 围栏。' }),
+        ...(kind === 'html' ? { frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698；尺寸包含四周40px内边距。按此尺寸编写HTML，程序以2倍像素输出。' }) } : {}),
+      }, { additionalProperties: false }), { minItems: 1 }),
     }, { additionalProperties: false }),
-    // 适配原转图接口的暂停回调，渲染结束后再次检查取消状态再保存。
-    async execute(_callId, { source_file, frame_size }, toolSignal) {
+    // 全量提交给现有渲染队列；逐项保留结果，取消时等待本批退出且不再落盘。
+    async execute(_callId, { images }, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
-      const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, source_file), 'utf8');
+      if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批转图的 image_id 不能重复');
       const renderer = localImageRenderService || require('./localImageRenderService.cjs').getLocalImageRenderService();
       const pauseOptions = { isPauseRequested: () => combinedSignal.aborted, createPauseError: () => combinedSignal.reason };
-      const result = kind === 'html'
-        ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: frame_size })
-        : await renderer.renderMermaidToPng(source, pauseOptions);
+      const results = await Promise.all(images.map(async ({ image_id, source_file, frame_size }) => {
+        try {
+          combinedSignal.throwIfAborted();
+          const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, source_file), 'utf8');
+          const result = kind === 'html'
+            ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: frame_size })
+            : await renderer.renderMermaidToPng(source, pauseOptions);
+          combinedSignal.throwIfAborted();
+          return { image_id, status: 'success', source_file, asset_ref: saveImage(result.buffer, '.png'), width: result.width, height: result.height, ...(kind === 'html' ? { frame_size, layout_issues: result.layout_issues } : {}) };
+        } catch (error) {
+          return { image_id, status: 'error', source_file, error: error.message };
+        }
+      }));
       combinedSignal.throwIfAborted();
-      return toolResult({ success: true, source_file, asset_ref: saveImage(result.buffer, '.png'), width: result.width, height: result.height, ...(kind === 'html' ? { layout_issues: result.layout_issues } : {}) });
+      return toolResult({ results });
     },
   }))];
 }

@@ -6,6 +6,66 @@ const { buildContentGenerationFiles, readContentGenerationResult } = require('..
 const { runContentGenerationTask, prepareContentGenerationStart } = require('../electron/services/contentGenerationTask.cjs');
 const { scanGeneratedSections, convertContentSections } = require('../electron/services/contentGenerationOutput.cjs');
 
+// 验证基准公式、整数分配及计划保存/再读取，避免只检查提示词文本。
+function checkContentWordPlanning() {
+  const sourcePath = path.resolve(__dirname, '../electron/services/contentGenerationTask.cjs');
+  const module = { exports: {} };
+  new Function('require', 'module', 'exports', '__dirname', `${fs.readFileSync(sourcePath, 'utf8')}\nmodule.exports = { getContentWordTarget, allocateContentWordTargets, createStoredContentPlan, normalizeStoredContentPlan, buildContentPlanningOutline, createContentPlanningPrompt, CONTENT_PLAN_SCHEMA };`)(
+    require('node:module').createRequire(sourcePath), module, module.exports, path.dirname(sourcePath),
+  );
+  const api = module.exports;
+  const values = plans => [...plans.values()].map(plan => plan.target_words);
+  const plan = words => ({ target_words: words, writing_focus: '实施措施', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 });
+  for (const [control, expected] of [
+    [{ minimumWords: 150000, maximumWords: 200000, sectionWords: 800 }, 175000],
+    [{ minimumWords: 150000 }, 180000], [{ maximumWords: 200000 }, 160000],
+    [{ minimumWords: 1000, maximumWords: 1001 }, 1001], [{}, 0],
+  ]) {
+    assert.equal(api.getContentWordTarget(control), expected);
+    const plans = new Map([['one', plan(1000)], ['two', plan(2000)], ['three', plan(3000)]]);
+    api.allocateContentWordTargets(plans, control, 3);
+    assert.equal(values(plans).reduce((sum, n) => sum + n, 0), expected);
+    if (expected) {
+      assert.ok(values(plans).every(n => Number.isInteger(n) && n > 0));
+      assert.ok(plans.get('three').target_words > plans.get('one').target_words);
+    }
+    for (const [id, item] of plans) {
+      const stored = api.createStoredContentPlan(item, 'none');
+      assert.equal(stored.plan_version, 6);
+      assert.equal(api.normalizeStoredContentPlan(JSON.parse(JSON.stringify(stored))).plan.target_words, item.target_words);
+      const [node] = api.buildContentPlanningOutline([{ id, title: '测试', content_mode: 'ai-generate' }], { [id]: stored });
+      assert.equal(node.content_plan.target_words, item.target_words);
+    }
+  }
+  const partial = new Map([['new', plan(9999)]]);
+  api.allocateContentWordTargets(partial, { minimumWords: 150000, maximumWords: 200000 }, 5, true);
+  assert.equal(partial.get('new').target_words, 3000, '新增小节不再分配全文目标份额');
+  for (const control of [{ minimumWords: 150000, maximumWords: 200000 }, { sectionWords: 800 }, {}]) {
+    const added = new Map([['new-one', plan(9999)], ['new-two', plan(100)]]);
+    api.allocateContentWordTargets(added, control, 2, true);
+    assert.deepEqual(values(added), [3000, 3000], '当前全部小节均为新增时仍各分配 3000 字');
+  }
+  api.allocateContentWordTargets(partial, { sectionWords: 800 }, 5);
+  assert.equal(partial.get('new').target_words, 800);
+  const exact = new Map([['one', plan(1)], ['two', plan(29)]]);
+  api.allocateContentWordTargets(exact, { minimumWords: 30, maximumWords: 30 }, 2);
+  assert.deepEqual(values(exact), [1, 29], '已准确分配时保留模型方案');
+  const tiny = new Map([['one', plan(1)], ['two', plan(1)], ['three', plan(1000)]]);
+  api.allocateContentWordTargets(tiny, { minimumWords: 3, maximumWords: 3 }, 3);
+  assert.deepEqual(values(tiny), [1, 1, 1]);
+  assert.throws(() => api.allocateContentWordTargets(new Map([['one', plan(0)]]), { minimumWords: 1000 }, 1), /正整数 target_words/);
+  const validate = new (require('ajv'))().compile(api.CONTENT_PLAN_SCHEMA);
+  assert.ok(validate(plan(1000)));
+  assert.equal(validate({ ...plan(1000), target_words: undefined }), false);
+  assert.equal(api.normalizeStoredContentPlan({ plan_version: 5, plan: plan(1000) }), null);
+  const prompt = api.createContentPlanningPrompt({ targetItemIds: ['new'], regenerateTargetItemIds: [], totalSections: 5, wordControl: { minimumWords: 150000, maximumWords: 200000 }, tableRequirement: 'none' });
+  assert.match(prompt, /175000 字.*35000 字/s);
+  const incrementalPrompt = api.createContentPlanningPrompt({ targetItemIds: ['new'], regenerateTargetItemIds: [], totalSections: 1, wordControl: { minimumWords: 150000, maximumWords: 200000, sectionWords: 800 }, tableRequirement: 'none', isIncremental: true });
+  assert.match(incrementalPrompt, /每节 target_words 固定填 3000/);
+  assert.doesNotMatch(incrementalPrompt, /合计目标为|全文目标优先于/);
+  console.log('字数编排：区间/单边公式、比例及整数分配、新增固定目标、建议字数、Schema 和计划存取通过。');
+}
+
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64');
 const body = '<!-- yibiao:block -->\n<p>施工准备与检查</p>\n<!-- yibiao:block -->\n<table><tbody><tr><td><p>责任</p></td><td><p>项目组</p></td></tr></tbody></table>\n<!-- yibiao:block -->\n<figure id="现场图" data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">复用现场图片</template><img alt="现场" data-yb-asset-ref="原图/现场 图片.png"><figcaption>现场情况</figcaption></figure>';
 
@@ -353,6 +413,7 @@ async function checkTask(directory, outputDir) {
         target_item_id: targets[1].id, phase: 'word-converting', completed_stages: ['planning', 'restoring'],
         pending_item_ids: [targets[0].id], section_words: { [targets[1].id]: 16 } };
       state = { ...state, ...prepareContentGenerationStart(state, { regenerate }), contentGenerationTask: { status: 'paused' } };
+      assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, regenerate ? [] : [targets[0].id]);
       const converted = conversions;
       let enteredPlanning = false;
       const stop = new Error('检查到恢复后正确进入编排');
@@ -369,6 +430,81 @@ async function checkTask(directory, outputDir) {
       assert.equal(conversions, converted, '不能读取上一轮转换记录继续转换');
       assert.equal(timers.size, 0);
     }
+    // 首次生成前手工加目录只有 direct 标记，仍按全文分配；全文重生清除 pending，暂停复用编排。
+    state = { ...state, outlineData: { outline }, outlineWordControlSnapshot: { minimumWords: 150000, maximumWords: 200000, sectionWords: 800 },
+      contentGenerationPlans: {}, contentGenerationSections: {}, contentGenerationRuntime: { direct_generation_item_ids: targets.map(section => section.id) }, contentGenerationTask: null };
+    let planningRuns = 0;
+    const stopAtGeneration = new Error('已检查编排到生成的字数传递');
+    const planningService = { ...args.agentService, hasPersistentTaskSession: () => false, deletePersistentTask() {}, async runTask(payload) {
+      if (payload.initial_stage === 'content-planning') {
+        planningRuns++;
+        const input = JSON.parse(payload.files.find(file => file.path === '正文编排目录.json').content);
+        input.outline[0].children.forEach((node, index) => {
+          node.content_plan = { target_words: index ? 6000 : 2000, writing_focus: '施工', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 };
+        });
+        return { output_content: JSON.stringify(input) };
+      }
+      assert.equal(payload.initial_stage, 'generating');
+      const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
+      const words = input.targets.map(section => section.content_plan.target_words);
+      assert.equal(words.reduce((sum, value) => sum + value, 0), 175000);
+      assert.ok(words[1] > words[0]);
+      for (const section of input.targets) assert.equal(state.contentGenerationPlans[section.id].plan.target_words, section.content_plan.target_words);
+      throw stopAtGeneration;
+    } };
+    await assert.rejects(runContentGenerationTask({ ...args, agentService: planningService, payload: {} }), error => error === stopAtGeneration);
+    state.contentGenerationRuntime.pending_item_ids = targets.map(section => section.id);
+    await assert.rejects(runContentGenerationTask({ ...args, agentService: planningService, payload: { regenerate: true } }), error => error === stopAtGeneration);
+    assert.deepEqual(state.contentGenerationRuntime.pending_item_ids, []);
+    const savedTargets = structuredClone(state.contentGenerationPlans);
+    state.contentGenerationTask = { status: 'paused' };
+    await assert.rejects(runContentGenerationTask({ ...args, agentService: planningService, previousState: structuredClone(state), payload: { resume: true } }), error => error === stopAtGeneration);
+    assert.equal(planningRuns, 2);
+    assert.deepEqual(state.contentGenerationPlans, savedTargets);
+    // 新增固定 3000 字，覆盖无全文目标、多节及当前全部叶子都是新增；旧计划和保存时间保持不变。
+    for (const [addedCount, allNew, wordControl] of [
+      [1, false, { minimumWords: 150000, maximumWords: 200000 }],
+      [2, false, { sectionWords: 800 }], [2, true, { minimumWords: 150000, maximumWords: 200000 }],
+    ]) {
+      const addedIds = Array.from({ length: addedCount }, (_, index) => `00000000-0000-4000-8000-00000000009${index}`);
+      const retained = allNew ? [] : targets;
+      state = { ...state, outlineData: structuredClone({ outline }), outlineWordControlSnapshot: wordControl,
+        contentGenerationPlans: allNew ? {} : structuredClone(savedTargets),
+        contentGenerationSections: Object.fromEntries(retained.map(section => [section.id, { status: 'success', content: '' }])),
+        contentGenerationRuntime: { generation_started: true, pending_item_ids: addedIds, direct_generation_item_ids: addedIds,
+          section_words: Object.fromEntries(retained.map(section => [section.id, 16])) }, contentGenerationTask: null };
+      state.outlineData.outline[0].children = [
+        ...(allNew ? [] : state.outlineData.outline[0].children),
+        ...addedIds.map((id, index) => ({ id, number: `1.${retained.length + index + 1}`, title: '新增措施', content_mode: 'ai-generate' })),
+      ];
+      let incrementalPlanningRuns = 0;
+      const incrementalArgs = { ...args, agentService: { ...planningService, async runTask(payload) {
+        if (payload.initial_stage === 'content-planning') {
+          incrementalPlanningRuns++;
+          assert.match(payload.prompt, /每节 target_words 固定填 3000/);
+          const input = JSON.parse(payload.files.find(file => file.path === '正文编排目录.json').content);
+          for (const node of input.outline[0].children.filter(node => addedIds.includes(node.id))) {
+            node.content_plan = { target_words: 9999, writing_focus: '新增措施', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 };
+          }
+          return { output_content: JSON.stringify(input) };
+        }
+        const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
+        assert.deepEqual(input.targets.map(section => section.id), addedIds);
+        assert.deepEqual(input.targets.map(section => section.content_plan.target_words), addedIds.map(() => 3000));
+        for (const id of addedIds) assert.equal(state.contentGenerationPlans[id].plan.target_words, 3000);
+        for (const section of retained) assert.deepEqual(state.contentGenerationPlans[section.id], savedTargets[section.id]);
+        throw stopAtGeneration;
+      } } };
+      await assert.rejects(runContentGenerationTask({ ...incrementalArgs, payload: {} }), error => error === stopAtGeneration);
+      const savedIncremental = structuredClone(state.contentGenerationPlans);
+      for (const payload of [{ resume: true }, { retryFailedSections: true }]) {
+        state.contentGenerationTask.status = payload.resume ? 'paused' : 'error';
+        await assert.rejects(runContentGenerationTask({ ...incrementalArgs, previousState: structuredClone(state), payload }), error => error === stopAtGeneration);
+        assert.deepEqual(state.contentGenerationPlans, savedIncremental, '暂停和失败重试均复用已保存目标，不重新编排或改写时间');
+      }
+      assert.equal(incrementalPlanningRuns, 1);
+    }
+    assert.equal(timers.size, 0);
     // 实际生成输入应合计 HTML 字数与还原底稿，排除孤儿和非 AI 正文。
     const restored = '施工底稿';
     const zeroId = '00000000-0000-4000-8000-000000000031';
@@ -382,8 +518,8 @@ async function checkTask(directory, outputDir) {
       [targets[1].id]: { status: 'success', content: '' },
       [zeroId]: { status: 'success', content: '不应重复统计旧底稿' },
     };
-    state.contentGenerationPlans = { [targets[0].id]: { plan_version: 5, plan: {
-      writing_focus: '施工', image_suitability_score: 0, table: { needed: false },
+    state.contentGenerationPlans = { [targets[0].id]: { plan_version: 6, plan: {
+      target_words: 0, writing_focus: '施工', image_suitability_score: 0, table: { needed: false },
       original_material: { restored: true, source_hash: require('node:crypto').createHash('sha256').update(restored).digest('hex'),
         source_ranges: [{ start_line: 1, end_line: 1 }] },
     } } };
@@ -678,6 +814,7 @@ function checkImageModelStartup() {
 
 // 所有产物位于独立中文临时目录，不读取或修改用户项目数据。
 async function main() {
+  checkContentWordPlanning();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '正文转Word检查-'));
   try {
     checkImageModelStartup();

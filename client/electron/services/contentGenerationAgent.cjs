@@ -6,11 +6,13 @@ const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 const { createContentGenerationImageTools, validateContentImageReferences } = require('./contentGenerationImageTools.cjs');
 const { countHtmlWords, checkWordCount, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
 const { createContentImageProtection } = require('./contentGenerationEditTools.cjs');
-const { CONSISTENCY_TOOLS, buildConsistencyPrompt, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
+const { CONSISTENCY_TOOLS, refreshConsistencyInput, buildConsistencyPrompt, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
 const { TABLE_CLEANUP_TOOLS, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
 const { LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools } = require('./contentGenerationLayoutTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
+// 首稿试验暂时关闭入口；扩缩写工具、提示词及续跑实现保留。
+const WORD_ADJUSTMENT_ENABLED = false;
 const RESULT_FILE = '正文生成结果.json';
 const RESOURCE_DIR = path.join(__dirname, '../resources/content-generation');
 const INPUT_FILES = {
@@ -35,12 +37,9 @@ function sectionFile(id) {
   return `正文/${encodeURIComponent(id)}.html`;
 }
 
-// 把生效字数配置直接告诉模型；不再按全文上限折算单节目标。
+// 每个模型只承担编排给本节的目标；首稿试验统计全文，不再事后扩缩写。
 function wordInstructions(control, checkTotalWords) {
-  const range = control.sectionWords > 0
-    ? `建议约 ${control.sectionWords} 字，不设小节硬性上下限`
-    : '不限制';
-  return `全文最少字数：${control.minimumWords || '不限制'}；全文最多字数：${control.maximumWords || '不限制'}。\n每个 AI 小节：${range}。\n全文字数要求是整体目标，不是单节目标。${checkTotalWords ? '本轮全部目标生成完成后，由主 Agent 统一检查总字数并组织必要的调整；并发写作任务只负责本节，不独立承担全文目标。' : '本次仅统计目标小节字数，不依据全文上下限扩缩写本次小节；不得将全文目标分摊为本次各节的写作要求。'}字数统计不含 HTML 标签及配图提示词。`;
+  return `全文最少字数：${control.minimumWords || '不限制'}；全文最多字数：${control.maximumWords || '不限制'}。\n每节按 content_plan.target_words 指定的目标字数安排篇幅，0 表示不设目标；尽量接近目标，不为凑字数重复表达或删除必要信息。目标已经在编排阶段分配，不再自行分摊全文目标，也不让单个小节承担全文目标。${checkTotalWords ? '本轮全部目标生成完成后，由主 Agent 统一检查总字数。' : '本次仅统计目标小节字数，不承担全文字数达标。'}${WORD_ADJUSTMENT_ENABLED ? '生成后按总字数检查结果进行必要的扩缩写。' : '本次暂不执行生成后的扩缩写，字数偏差只如实记录；不要为了达到字数范围再次生成或编辑正文。'}字数统计不含 HTML 标签及配图提示词。`;
 }
 
 // 将当前事实模式翻译为统一中文要求，主会话与并发任务共用输入快照。
@@ -87,7 +86,7 @@ function imageInstructions(options) {
 
 // 将整理扩写规则和当前字数交给模型，不增加程序缩写或内容审计流程。
 function restorationInstructions(control, existingTotalWords) {
-  return `小节包含 restored_content 时，先完整核对对应底稿，再依据当前项目、章节职责和编排重点整理正文。输出应保留底稿中的实质信息，并转换为受限 HTML；不得以重新撰写的内容替代底稿中应保留的信息。没有底稿的小节按正常流程生成，不搬用其他小节材料。\n本次启动时全文已有正文共 ${existingTotalWords} 字，全文上限 ${control.maximumWords || '不限制'}；每小节目标 ${control.sectionWords || '不限制'} 字，本节还原字数见 restored_content.words。若本节还原字数已超过小节目标，或全文已有正文已超过全文上限，则本节只整理，不扩写，不为压字数删除实质内容；未超过时按现有要求适当扩写。仅对已设置的字数目标进行比较。全文字数上限用于判断全文已有内容是否超限，不作为单个小节的目标字数；未设置的小节目标或全文上限不参与相应判断。\n保留底稿中的实质信息、技术参数、措施和承诺；与全局事实设定冲突时，以全局事实设定为准，必要时读取并核对相关事实，无依据时不擅自改动。\n保留所有原表格的数据及含义，并保留本节原图片和引用顺序。表格编排和配图设置只指导新增内容：原表格不受 table.needed 限制，原图不受无图、image_needed、类型开关限制，也不占新增布局名额。原图按 restored_content.images 中的对应关系直接使用 asset_ref，不重新生成，不留待生图占位。原图 figure 必须保留 data-yb-generation="aiImage" 以及唯一、非空的 template data-yb-role="prompt"，模板写“复用原方案图片，不重新生成”并可补充图片说明。原图统一使用 data-yb-generation="aiImage" 作为受限 HTML 格式标记。原图身份及资源路径以 restored_content.images 为准；该标记不构成调用 AI 生图的指令。保留 img、图注及其他必需属性。`;
+  return `小节包含 restored_content 时，先完整核对对应底稿，再依据当前项目、章节职责和编排重点整理正文。输出应保留底稿中的实质信息，并转换为受限 HTML；不得以重新撰写的内容替代底稿中应保留的信息。没有底稿的小节按正常流程生成，不搬用其他小节材料。\n本次启动时全文已有正文共 ${existingTotalWords} 字，全文上限 ${control.maximumWords || '不限制'}；每小节目标见本节 content_plan.target_words，0 表示不限制；本节还原字数见 restored_content.words。若本节还原字数已超过小节目标，或全文已有正文已超过全文上限，则本节只整理，不扩写，不为压字数删除实质内容；未超过时按现有要求适当扩写。仅对已设置的字数目标进行比较。全文字数上限用于判断全文已有内容是否超限，不作为单个小节的目标字数；未设置的小节目标或全文上限不参与相应判断。\n保留底稿中的实质信息、技术参数、措施和承诺；与全局事实设定冲突时，以全局事实设定为准，必要时读取并核对相关事实，无依据时不擅自改动。\n保留所有原表格的数据及含义，并保留本节原图片和引用顺序。表格编排和配图设置只指导新增内容：原表格不受 table.needed 限制，原图不受无图、image_needed、类型开关限制，也不占新增布局名额。原图按 restored_content.images 中的对应关系直接使用 asset_ref，不重新生成，不留待生图占位。原图 figure 必须保留 data-yb-generation="aiImage" 以及唯一、非空的 template data-yb-role="prompt"，模板写“复用原方案图片，不重新生成”并可补充图片说明。原图统一使用 data-yb-generation="aiImage" 作为受限 HTML 格式标记。原图身份及资源路径以 restored_content.images 为准；该标记不构成调用 AI 生图的指令。保留 img、图注及其他必需属性。`;
 }
 
 // 每轮新目标更新输入快照；暂停恢复不重写，已有小节 HTML 和图片始终保留。
@@ -202,10 +201,10 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
   const validateHtml = (root, html) => { checkSectionHtml(html); validateContentImageReferences(root, html); };
   return [{
     name: 'generate-sections', label: '批量生成正文小节',
-    description: `一次提交多个目标小节并发生成受限 HTML，各节独立落盘。先按本轮布局名额统一分配，将本节布局、组数、每张图的表达目的、图片类型和生成方式写入 instructions；未分配布局时明确不新增配图。先检索相关${decisions.has_knowledge_base ? '知识库和' : ''}全局事实，把需要的参考原文摘录传入。失败小节可单独重试。`,
+    description: `将本轮全部待生成目标小节放入一次调用的 sections 数组，统一提交生成受限 HTML；程序队列按用户配置控制实际并发，超出上限的任务自动排队，各节独立落盘。先按本轮布局名额统一分配，将本节布局、组数、每张图的表达目的、图片类型和生成方式写入 instructions；未分配布局时明确不新增配图。先检索相关${decisions.has_knowledge_base ? '知识库和' : ''}全局事实，把需要的参考原文摘录传入。失败小节可单独重试。`,
     executionMode: 'sequential',
     parameters: Type.Object({ sections: Type.Array(Type.Object({
-      section_id: Type.String(), instructions: Type.String({ description: '本节写作要求，包含主 Agent 分配的布局、组数及每张图的表达目的、图片类型和生成方式（aiImage/htmlImage/mermaid）；未分配布局时明确“不新增配图”。' }), references: Type.String({ description: `从${decisions.has_knowledge_base ? '知识库、' : ''}全局事实检索得到的相关原文摘录，注明来源；无相关资料时填空字符串。` }),
+      section_id: Type.String({ description: '必填，原样填写正文编排决策 targets 中本节的 id，不使用 number，不省略。' }), instructions: Type.String({ description: '本节写作要求，字数遵守 content_plan.target_words，包含主 Agent 分配的布局、组数及每张图的表达目的、图片类型和生成方式（aiImage/htmlImage/mermaid）；未分配布局时明确“不新增配图”。' }), references: Type.String({ description: `从${decisions.has_knowledge_base ? '知识库、' : ''}全局事实检索得到的相关原文摘录，注明来源；无相关资料时填空字符串。` }),
     }, { additionalProperties: false }), { minItems: 1 }) }, { additionalProperties: false }),
     async execute(_callId, params, toolSignal, onUpdate) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
@@ -224,7 +223,7 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
               signal: combinedSignal, logTitle: `Agent HTML正文-${section.number}-${section.title}`,
               messages: [
                 { role: 'system', content: `${writingInstructions(decisions.has_knowledge_base)}\n\n本次事实处理要求：\n${decisions.global_facts_requirements}\n\n${rules}\n\n配图类型对照表（据此确定新增图片的生成类型）：\n${imageTypes}\n\n本次配图要求：\n${decisions.image_requirements}${section.restored_content ? `\n\n本节还原处理要求（原表格、原图保留规则优先于新增限制）：\n${decisions.restoration_requirements}` : ''}` },
-                { role: 'user', content: `项目概述：\n${overview}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n参考资料与事实摘录：\n${job.references || '未提供'}\n\n按本节 content_plan 执行：table.needed=false 时不新增数据表格；仅按本节写作要求中主 Agent 分配的布局、组数、表达目的和生成方式新增图片，不自行改变生成方式，不自行分配全局名额或独立承担 AI 图片占比目标；未分配布局时不新增配图；无图、无允许类型或 image_needed=false 时不留新增配图块，并发正文写作阶段只生成新增图片的受限 HTML 结构，填写生成类型、用途说明、替代文本及必要图注，暂不填写图片资源引用。主 Agent 生成图片后补入工具返回的 asset_ref；已有原图直接使用提供的资源引用。你没有文件检索或图片生成工具，仅核对本次请求提供的材料；规范中要求主 Agent 读取文件、生成图片及提交结果清单的操作不由你执行，只返回本节 HTML，不虚构图片路径。${restoredContext}` },
+                { role: 'user', content: `项目概述：\n${overview}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n参考资料与事实摘录：\n${job.references || '未提供'}\n\n按本节 content_plan.target_words 的目标字数生成正文，0 表示不设目标；不能用全文上下限或其他小节字数代替本节目标。按本节 content_plan 执行：table.needed=false 时不新增数据表格；仅按本节写作要求中主 Agent 分配的布局、组数、表达目的和生成方式新增图片，不自行改变生成方式，不自行分配全局名额或独立承担 AI 图片占比目标；未分配布局时不新增配图；无图、无允许类型或 image_needed=false 时不留新增配图块，并发正文写作阶段只生成新增图片的受限 HTML 结构，填写生成类型、用途说明、替代文本及必要图注，暂不填写图片资源引用。主 Agent 生成图片后补入工具返回的 asset_ref；已有原图直接使用提供的资源引用。你没有文件检索或图片生成工具，仅核对本次请求提供的材料；规范中要求主 Agent 读取文件、生成图片及提交结果清单的操作不由你执行，只返回本节 HTML，不虚构图片路径。${restoredContext}` },
               ],
             }));
             combinedSignal.throwIfAborted();
@@ -248,7 +247,9 @@ function createContentGenerationTools({ aiService, agentService, signal, onActiv
   },
   ...createContentGenerationConsistencyTools({ agentService, signal, activity, onActivity, consistency, validateHtml, validateResult: () => readContentGenerationResult(workspaceDir) }, { Type, workspaceDir }),
   ...createContentGenerationTableTools({ agentService, signal, activity, onActivity, tableCleanup, validateHtml, validateResult: () => readContentGenerationResult(workspaceDir) }, { Type, workspaceDir }),
-  ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml }, { Type, workspaceDir, setActiveTools }),
+  ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml }, {
+    Type, workspaceDir, setActiveTools: names => setActiveTools?.(names.filter(name => WORD_ADJUSTMENT_ENABLED || name !== 'adjust-sections')),
+  }).filter(tool => WORD_ADJUSTMENT_ENABLED || tool.name !== 'adjust-sections'),
   ...createContentGenerationImageTools({ aiService, signal }, { Type, workspaceDir })];
 }
 
@@ -257,19 +258,19 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
   return `你负责本次投标文件受限 HTML 正文生成，使用一个持久会话完成任务。
 1. 项目概述.md、正文编排决策.json、受限HTML生成规范.md 三个文件必须完整阅读；参考正文模板.html和所选模板配置.json。模板只是结构示例，不照抄示例正文，不要求每节套用全部元素。
 2. ${hasKnowledgeBase ? '已选择知识库，可通过知识库/索引.json定位参考文档。编排中的 knowledge.item_ids 对应索引条目的 id；根据条目所属文档读取相关原文。索引标题和简介用于定位，具体内容以文档原文为准。知识库和' : ''}全局事实设定.md是参考项。生成正文时，涉及人员、时间、地点、参数、职责或承诺等具体事实，应检索并阅读相关设定；不涉及的内容无需逐项阅读。一致性审计阶段的阅读范围按审计指令执行。主 Agent 负责检索并提供参考摘录，并发正文模型核对请求中提供的材料；编辑子 Agent 按需读取工作区文件。具体事实以全局事实设定为准，并遵守正文编排决策.json中的 global_facts_requirements（当前事实模式的中文要求）。
-3. 只生成正文编排决策.json中targets列出的AI生成叶子小节，其他目录作上下文；遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。每节输出路径已给定，禁止修改输入文件和业务数据库。${hasOriginalPlan ? '本次使用已还原底稿：阅读 restoration_requirements，并在生成每节前完整阅读其 restored_content.file；工具会自动加入本节完整底稿、原图引用对应关系和全局事实。已超过生效字数要求的底稿只整理、不扩写；冲突以全局事实设定为准。保留原表格和原图，以下配图与表格限制仅用于新增内容；原图直接引用已复制文件，不重新生图。无底稿小节按正常流程生成。' : ''}
-4. 先完整阅读配图类型对照表.md及 image_requirements（用户配图要求），读取 image_layout_quota（本轮新增布局名额）：total_groups 为总组数，single、imageText、threeImages、fourImages 分别为单张图片、图片表格、三列图片、四宫格的组数。结合本轮 targets 中 image_needed=true 小节的主题、写作重点和适配评分统一分配布局，并按 image_requirements 的本轮 AI 图片占比要求，在并发写作前规划每张图的表达目的、图片类型及生成方式；名额为零时不安排新增配图。可在合适小节安排多组，不要求逐节平均分配；单张图片与图片表格可互换，但合计组数不变，三列图片和四宫格保持各自组数。暂停、失败重试沿用本轮名额，已完成的布局计入完成数量，只补未完成部分，不重新分配一整轮。检索需要的参考资料后，调用 generate-sections，一次提交多个相互独立的小节以真正并发生成；工具会自动加入本节编排、项目概述、HTML规范、模板、配图类型对照表、字数及配图要求，你负责在各节 instructions 中写明布局、组数和每组表达目的，并逐图指定图片类型和生成方式（aiImage/htmlImage/mermaid），以及本节写作要求，并提供准确的参考摘录；未分配布局的小节明确写“不新增配图”。全局名额由你统筹，不得让每个并发任务自行分配或承担整轮名额。文本并发遵循用户现有模型配置，不要使用bash或脚本直接调用外部模型。
-5. 配图前完整阅读配图类型对照表.md，并遵守正文编排决策.json 的 image_requirements（用户配图要求）。无图不安排图片或占位，不调用配图工具；有图时按已分配的布局及逐图确定的生成方式完成配图；生成方式遵守类型开关和对照表，布局本身不绑定 AI、HTML 或 Mermaid，无须覆盖全部已开启类型。在当前会话中完成所需图片：AI 图调用 generate-image，通过 images 列表一次提交已确定且相互独立的多张配图需求，不逐张等待后再提交下一张；每项提供批内唯一的 image_id、prompt、size 及所需可选参数，图组内每张图使用不同标识；单张也使用一项列表。size 必填，逐图读取对应 figure 的 data-yb-size，按 square=1:1、wide=3:2、tall=3:4、panorama=16:9 选择匹配的具体生图尺寸；当前金龙 gpt-image-2-1k 的 tall 使用已验证的 768x1024。不能把画框名称作为尺寸，不得省略 size 或整批统一使用默认方图；prompt 中保留相同的宽高比例和横向/竖向构图方向，不得在整理提示词时丢失。工具内部按现有生图并发设置执行，整批返回 results 后，按 image_id 将成功项的 asset_ref 回填到对应图片，仅重新提交失败项，不重复生成成功项；HTML/Mermaid 图使用 generate-image-sources，通过 images 列表一次提交已确定且相互独立的源码生成需求；每项提供唯一 image_id、kind（html/mermaid）及 prompt，prompt 写明图片类型、表达目的、准确内容和数据，不只给文件路径或要求并发模型自行检索。HTML 项必填 frame_size，与对应正文 figure 的 data-yb-size 一致。工具只生成并保存源码，不渲染、不回填正文；按 results 中的 image_id 对应图片，对成功项使用 source_file 调用对应 render 工具，仅重试失败项，不重复生成成功源码。调用 render-html-image 时沿用该项 frame_size。设计宽度1240px，square/wide/tall/panorama对应高度1240/827/1653/698px，尺寸包含程序统一设置的四周40px内边距；以 body 为画布，用 Flex/Grid 合理铺满内部区域，不额外包一层画布或重复添加外层边距。采用正式简洁的配色和清晰层次，不在底部留下大块空白，不靠无意义文字或空卡片填满；Mermaid 图使用批量工具返回的 .mmd 源文件调用 render-mermaid-image。源码保存在图片/目录，配图 HTML 可使用 CSS，不受正文受限 HTML 标签限制。将工具返回的 asset_ref 原样写入对应 img 的 data-yb-asset-ref，不填写 src，不虚构文件路径，不把配图源码嵌入小节正文。图组中每张图片均须生成。渲染错误或 HTML layout_issues 交回当前会话修改源码并重新转图；失败不得默认为成功或改换生成方式。
+3. 只生成正文编排决策.json中targets列出的AI生成叶子小节，其他目录作上下文；遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。各节篇幅以 content_plan.target_words 为准，不重新分配全文目标。每节输出路径已给定，禁止修改输入文件和业务数据库。${hasOriginalPlan ? '本次使用已还原底稿：阅读 restoration_requirements，并在生成每节前完整阅读其 restored_content.file；工具会自动加入本节完整底稿、原图引用对应关系和全局事实。已超过生效字数要求的底稿只整理、不扩写；冲突以全局事实设定为准。保留原表格和原图，以下配图与表格限制仅用于新增内容；原图直接引用已复制文件，不重新生图。无底稿小节按正常流程生成。' : ''}
+4. 先完整阅读配图类型对照表.md及 image_requirements（用户配图要求），读取 image_layout_quota（本轮新增布局名额）：total_groups 为总组数，single、imageText、threeImages、fourImages 分别为单张图片、图片表格、三列图片、四宫格的组数。结合本轮 targets 中 image_needed=true 小节的主题、写作重点和适配评分统一分配布局，并按 image_requirements 的本轮 AI 图片占比要求，在并发写作前规划每张图的表达目的、图片类型及生成方式；名额为零时不安排新增配图。可在合适小节安排多组，不要求逐节平均分配；单张图片与图片表格可互换，但合计组数不变，三列图片和四宫格保持各自组数。暂停、失败重试沿用本轮名额，已完成的布局计入完成数量，只补未完成部分，不重新分配一整轮。检索需要的参考资料并完成本轮安排后，调用一次 generate-sections，将本轮全部待生成小节一次性放入 sections 数组提交，不自行按章节或固定小批次拆分调用，也不等待一部分小节完成后再提交其余小节。程序中的 AI 服务队列会按用户设置的并发上限运行，超出上限的任务自动排队，空出名额后自动启动后续任务，无需你控制批次。每项都必须包含 section_id、instructions 和 references，section_id 原样使用 targets 中对应小节的 id；无参考摘录时 references 填空字符串，不省略字段。暂停恢复时一次提交剩余待生成小节，失败重试只提交失败项，保留已完成内容；工具会自动加入本节编排、项目概述、HTML规范、模板、配图类型对照表、字数及配图要求，你负责在各节 instructions 中写明布局、组数和每组表达目的，并逐图指定图片类型和生成方式（aiImage/htmlImage/mermaid），以及本节写作要求，并提供准确的参考摘录；未分配布局的小节明确写“不新增配图”。全局名额由你统筹，不得让每个并发任务自行分配或承担整轮名额。文本并发遵循用户现有模型配置，不要使用bash或脚本直接调用外部模型。
+5. 配图前完整阅读配图类型对照表.md，并遵守正文编排决策.json 的 image_requirements（用户配图要求）。无图不安排图片或占位，不调用配图工具；有图时按已分配的布局及逐图确定的生成方式完成配图；生成方式遵守类型开关和对照表，布局本身不绑定 AI、HTML 或 Mermaid，无须覆盖全部已开启类型。在当前会话中完成所需图片：AI 图调用 generate-image，通过 images 列表一次提交本轮全部待生成 AI 图片，不按章节或固定小批次拆分，不逐张等待后再提交下一张，超出并发上限的任务由程序队列处理；每项提供批内唯一的 image_id、prompt、size 及所需可选参数，图组内每张图使用不同标识；单张也使用一项列表。size 必填，逐图读取对应 figure 的 data-yb-size，按 square=1:1、wide=3:2、tall=3:4、panorama=16:9 选择匹配的具体生图尺寸；当前金龙 gpt-image-2-1k 的 tall 使用已验证的 768x1024。不能把画框名称作为尺寸，不得省略 size 或整批统一使用默认方图；prompt 中保留相同的宽高比例和横向/竖向构图方向，不得在整理提示词时丢失。工具内部按现有生图并发设置执行，整批返回 results 后，按 image_id 将成功项的 asset_ref 回填到对应图片，仅重新提交失败项，不重复生成成功项；HTML/Mermaid 图使用 generate-image-sources，通过 images 列表将本轮全部待生成 HTML/Mermaid 源码合并一次提交，不按章节、类型或固定小批次拆分，超出并发上限的任务由程序队列处理；每项提供唯一 image_id、kind（html/mermaid）及 prompt，prompt 写明图片类型、表达目的、准确内容和数据，不只给文件路径或要求并发模型自行检索。HTML 项必填 frame_size，与对应正文 figure 的 data-yb-size 一致。工具只生成并保存源码，不渲染、不回填正文；按 results 中的 image_id 对应图片，将全部待渲染文件按 HTML、Mermaid 分别一次批量提交对应 render 工具，不逐张或分小批等待。两个 render 工具都使用 images 数组，每项必填 image_id 和 source_file，HTML 另填该项 frame_size；单张也使用一项数组。现有本地渲染队列控制实际并发，超限自动排队。按返回 results 中的 image_id 对应正文图片，逐项检查 status、error 及 HTML 的 layout_issues，只对失败或需要修正的项修改源码并重新转图，不重复生成成功源码。设计宽度1240px，square/wide/tall/panorama对应高度1240/827/1653/698px，尺寸包含程序统一设置的四周40px内边距；以 body 为画布，用 Flex/Grid 合理铺满内部区域，不额外包一层画布或重复添加外层边距。采用正式简洁的配色和清晰层次，不在底部留下大块空白，不靠无意义文字或空卡片填满；Mermaid 图使用批量工具返回的 .mmd 源文件调用 render-mermaid-image。源码保存在图片/目录，配图 HTML 可使用 CSS，不受正文受限 HTML 标签限制。将工具返回的 asset_ref 原样写入对应 img 的 data-yb-asset-ref，不填写 src，不虚构文件路径，不把配图源码嵌入小节正文。图组中每张图片均须生成。暂停恢复时复用已完成图片及源码，各类剩余待办分别一次提交。渲染错误或 HTML layout_issues 交回当前会话修改源码并重新转图；失败不得默认为成功或改换生成方式。
 6. ${resuming ? '本次继续原会话。先检查正文/已完成文件，保留有效正文、图片和源码，复用已存在且符合内容的图片引用；只补齐未完成、失败或明确需要修正的小节及图片。' : '每个小节保存为正文/下的独立HTML文件。'} 工具返回每节文件、字数和错误；对失败小节修正要求后重试，可用read/edit检查和修正已有HTML。不要删除已完成的小节。
 小节 id 是固定身份，number 才是显示编号。generate-sections 的 section_id、结果清单及文件名均使用 id；不得根据显示编号改写文件路径。
-7. 所有并发生成任务及配图全部完成后，先核对本轮实际新增布局与名额一致、图组内容及图片引用完整，并按 image_requirements 核对本轮新增图片的生成方式分布；AI 占比是规划目标，不因比例偏差新增失败条件或额外加图。原方案图片及布局不占新增名额，也不计入 AI 占比。核对完成后，再调用 check-word-count 统一检查实际字数，不能一边生成一边按部分结果调整。完整检查后进入图片保护阶段：只用 edit 调整正文文字，write 仅可保存正文生成结果.json；不能再调用命令、正文生成或配图工具。已插入的所有图片块（包括原图、新图、图注及提示词）、图片顺序和图片表格布局不可修改；图文表格中的普通说明文字可以调整。工具因图片保护拒绝编辑时，本次修改未写入文件。重新读取目标文件，将编辑范围限定为允许修改的普通文字，并原样保留受保护的图片块、引用、顺序和布局后重试。word_control.checkTotalWords=false 时，本次仅统计目标小节字数，不依据全文上下限扩缩写本次小节；两个边界都未设置时不做字数调整。
-检查完整且尚未达标时，以字数检查工具返回的 difference 判断调整方式，该值表示实际字数距离有效上下限的不足量或超出量，不是实际总字数。差额大于10000字时调用 adjust-sections；差额为1～10000字时由主 Agent 使用 read/edit 调整；差额为0且目标完整时，无须扩缩写。根据各节内容和篇幅分配本轮增减字数，各子任务只承担分配给本节的调整量。等待本轮全部任务结束后重新检查总字数，再依据最新差额安排下一轮。并发编辑期间你不得同时修改这些文件；等本轮所有任务结束后再调用 check-word-count。可以多轮调整，每轮按最新差额重新选择方式，直到进入要求范围，不设固定轮数。不删除原表格、原图、实质信息或承诺来凑字数；无法在保留要求下达标时明确调用 report-failure，不得伪报完成。不要再使用 generate-sections 重写整节进行字数调整。
+${WORD_ADJUSTMENT_ENABLED ? `7. 所有并发生成任务及配图全部完成后，先核对本轮实际新增布局与名额一致、图组内容及图片引用完整，并按 image_requirements 核对本轮新增图片的生成方式分布；AI 占比是规划目标，不因比例偏差新增失败条件或额外加图。原方案图片及布局不占新增名额，也不计入 AI 占比。核对完成后，再调用 check-word-count 统一检查实际字数，不能一边生成一边按部分结果调整。完整检查后进入图片保护阶段：只用 edit 调整正文文字，write 仅可保存正文生成结果.json；不能再调用命令、正文生成或配图工具。已插入的所有图片块（包括原图、新图、图注及提示词）、图片顺序和图片表格布局不可修改；图文表格中的普通说明文字可以调整。工具因图片保护拒绝编辑时，本次修改未写入文件。重新读取目标文件，将编辑范围限定为允许修改的普通文字，并原样保留受保护的图片块、引用、顺序和布局后重试。word_control.checkTotalWords=false 时，本次仅统计目标小节字数，不依据全文上下限扩缩写本次小节；两个边界都未设置时不做字数调整。
+检查完整且尚未达标时，以字数检查工具返回的 difference 判断调整方式，该值表示实际字数距离有效上下限的不足量或超出量，不是实际总字数。差额大于10000字时调用 adjust-sections；差额为1～10000字时由主 Agent 使用 read/edit 调整；差额为0且目标完整时，无须扩缩写。根据各节内容和篇幅分配本轮增减字数，各子任务只承担分配给本节的调整量。等待本轮全部任务结束后重新检查总字数，再依据最新差额安排下一轮。并发编辑期间你不得同时修改这些文件；等本轮所有任务结束后再调用 check-word-count。可以多轮调整，每轮按最新差额重新选择方式，直到进入要求范围，不设固定轮数。不删除原表格、原图、实质信息或承诺来凑字数；无法在保留要求下达标时明确调用 report-failure，不得伪报完成。不要再使用 generate-sections 重写整节进行字数调整。` : `7. 所有并发生成任务及配图全部完成后，先核对本轮实际新增布局与名额一致、图组内容及图片引用完整，并按 image_requirements 核对本轮新增图片的生成方式分布；AI 占比是规划目标，不因比例偏差新增失败条件或额外加图。原方案图片及布局不占新增名额，也不计入 AI 占比。核对完成后，再调用 check-word-count 统一检查实际字数，不能一边生成一边按部分结果调整。完整检查后进入图片保护阶段：只用 edit 修复已发现的内容或格式问题，write 仅可保存正文生成结果.json；不能再调用命令、正文生成或配图工具。已插入的所有图片块（包括原图、新图、图注及提示词）、图片顺序和图片表格布局不可修改；图文表格中的普通说明文字可以调整。工具因图片保护拒绝编辑时，本次修改未写入文件。重新读取目标文件，将编辑范围限定为允许修改的普通文字，并原样保留受保护的图片块、引用、顺序和布局后重试。本次暂不执行扩缩写：即使实际字数不在区间内，也不调用工具、命令或脚本扩缩写，不用 read/edit 为凑字数调整正文，不重新生成小节；如实提交实际字数，等待程序发出一致性审计任务。`}
 8. 检查小节覆盖、字数及所有 img 的 data-yb-asset-ref 对应图片文件已存在，图片占位全部完成后将所有本次目标写入正文生成结果.json，格式为{"sections":[{"section_id":"小节ID","file":"正文/小节ID.html","words":实际正文统计字数}]}。该JSON已预置Schema并开启自动校验；用write/edit完成，无需重复独立JSON校验。正文内容仅保存于各小节 HTML 文件。结果清单只记录小节 ID、文件路径和实际字数。完成当前正文生成阶段的全部目标和检查后，在结果清单最后一次写入或更新操作上设置 task_complete=true。
 9. 提交本阶段结果后，程序会在同一会话中发出一致性审计任务；等待下一阶段要求，不自行转换 Word。
 以下写作规则仅适用于小节 HTML 文件，不适用于结果清单：\n${writingInstructions(hasKnowledgeBase)}`;
 }
 
-// 新一轮目标也复用正文 Session；仅暂停恢复时继承本轮字数调整、审计与去表格进度。
+// 新一轮目标也复用正文 Session；暂停恢复时继承图片保护、审计与去表格进度。
 async function runContentGenerationAgent({ agentService, aiService, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onConsistencyProgress = () => {}, onTableCleanupProgress = () => {}, onWorkspaceReady = () => {} }) {
   const reuseSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
   const resuming = Boolean(resume && reuseSession);
@@ -310,12 +311,13 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
   });
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false,
-    prompt: tableCleanupState ? buildTableCleanupPrompt(tableCleanupState) : consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${reuseSession && !resuming ? '本次为目录变更后的局部生成任务，在原会话中执行。重新读取已更新的输入文件，仅对当前 targets 执行生成、调整和修复；本轮完成状态根据当前目标重新确认，不沿用上一轮的完成结论。保留其他小节的 HTML、图片及源码，新增配图源码使用新文件名，不覆盖已有文件。\n' : ''}${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : ''}`, output_file: RESULT_FILE,
+    prompt: tableCleanupState ? buildTableCleanupPrompt(tableCleanupState) : consistencyState ? buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) : `${reuseSession && !resuming ? '本次为目录变更后的局部生成任务，在原会话中执行。重新读取已更新的输入文件，仅对当前 targets 执行生成和审计修复；本轮完成状态根据当前目标重新确认，不沿用上一轮的完成结论。保留其他小节的 HTML、图片及源码，新增配图源码使用新文件名，不覆盖已有文件。\n' : ''}${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan)}${protectionActive ? (WORD_ADJUSTMENT_ENABLED ? '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只继续文字调整及结果清单保存，不重新生成正文或图片。' : '\n本次恢复时已处于图片保护阶段，正文和配图已经就绪，只核对并保存结果清单，随后进入一致性审计；不因字数偏差调整正文，不重新生成正文或图片。') : ''}`, output_file: RESULT_FILE,
     files, signal,
     persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: reuseSession ? 'resume' : 'create' },
     initial_stage: tableCleanupState ? 'table-cleaning' : consistencyState ? 'auditing' : 'generating', max_retries: 1, timeout_ms: 30 * 60 * 1000,
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA }, auto_validate_json: true,
     before_tool_call: context => {
+      if (!WORD_ADJUSTMENT_ENABLED && context.toolCall.name === 'adjust-sections') throw new Error('本次首稿试验暂不执行扩缩写');
       if (tableCleanupState?.status === 'completed' && ['edit', 'write', 'remove-section-tables'].includes(context.toolCall.name)) {
         throw new Error('去表格已经完成，请标记任务完成，不再修改正文');
       }
@@ -327,10 +329,11 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
     before_file_write: context => imageProtection.beforeWrite(context),
     create_tools: context => {
       if (hasOriginalPlan && !resuming) copyRestoredImages(context.workspaceDir, resolveOriginalImagePath);
+      if (!tableCleanupState && consistencyState?.status === 'running') refreshConsistencyInput(context.workspaceDir);
       const decisions = JSON.parse(fs.readFileSync(path.join(context.workspaceDir, INPUT_FILES.decisions), 'utf8'));
       imageProtection = createContentImageProtection({
         workspaceDir: context.workspaceDir, files: decisions.targets.map(section => section.file),
-        active: protectionActive || Boolean(consistencyState) || Boolean(tableCleanupState), ...(tableCleanupState ? { toolNames: TABLE_CLEANUP_TOOLS } : consistencyState ? { toolNames: CONSISTENCY_TOOLS } : {}), allowManifest: true, setActiveTools: context.setActiveTools,
+        active: protectionActive || Boolean(consistencyState) || Boolean(tableCleanupState), ...(tableCleanupState ? { toolNames: TABLE_CLEANUP_TOOLS } : consistencyState ? { toolNames: CONSISTENCY_TOOLS } : {}), allowManifest: true, setActiveTools: names => context.setActiveTools?.(names.filter(name => WORD_ADJUSTMENT_ENABLED || name !== 'adjust-sections')),
         onEnter: () => agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { word_adjustment_started: true }),
       });
       onWorkspaceReady(context.workspaceDir);
@@ -339,7 +342,7 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
       return createContentGenerationTools({ aiService, agentService, signal, onProgress, onActivity, imageProtection, consistency, tableCleanup }, context);
     },
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
-    // 字数不达标时继续同一主会话，不使用旧调整阶段或固定重试轮数。
+    // 首稿试验只记录目标与实际字数，内容完整后直接进入原有审计。
     continueTask: (_result, context) => {
       // 后处理分支必须先于字数检查，修复和去表格之后不再调整字数。
       if (tableCleanupState) {
@@ -353,12 +356,19 @@ async function runContentGenerationAgent({ agentService, aiService, resume, hasK
             consistency.save({ ...consistencyState, status: 'completed' });
             return finishConsistency(context.workspace_dir);
           }
+          refreshConsistencyInput(context.workspace_dir);
           consistency.save({ ...consistencyState, round: consistencyState.round + 1, status: 'running', summary: '' });
         }
         return { stage: 'auditing', prompt: buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) };
       }
       const words = checkWordCount(context.workspace_dir);
-      if (words.in_range) {
+      if (!words.complete) return { stage: 'generating', prompt: `正文目标尚未完整：${JSON.stringify(words.missing_section_ids)}。补齐缺失小节和配图并更新结果清单，保留已完成内容。` };
+      if (words.in_range || !WORD_ADJUSTMENT_ENABLED) {
+        readContentGenerationResult(context.workspace_dir);
+        const decisions = JSON.parse(fs.readFileSync(path.join(context.workspace_dir, INPUT_FILES.decisions), 'utf8'));
+        const targetWords = decisions.targets.reduce((sum, section) => sum + (section.content_plan?.target_words || 0), 0);
+        onActivity?.({ message: `首次正文生成：本轮目标 ${targetWords || '未设置'} 字，实际 ${words.total_words} 字；${WORD_ADJUSTMENT_ENABLED ? '' : '暂不扩缩写，'}进入一致性审计。` });
+        refreshConsistencyInput(context.workspace_dir);
         consistency.save({ round: 1, status: 'running', remaining_issues: [], failed_sections: [], summary: '' });
         imageProtection.enter(CONSISTENCY_TOOLS);
         return { stage: 'auditing', prompt: buildConsistencyPrompt(consistencyState, hasKnowledgeBase, hasOriginalPlan) };

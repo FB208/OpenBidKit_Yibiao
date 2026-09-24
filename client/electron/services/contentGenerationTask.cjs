@@ -19,7 +19,8 @@ const { runContentLayoutCheck, readWordLayout } = require('./contentGenerationLa
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
-const CONTENT_PLAN_VERSION = 5;
+const CONTENT_PLAN_VERSION = 6;
+const ADDED_SECTION_TARGET_WORDS = 3000;
 const CONTENT_PLANNING_OUTPUT_FILE = '正文编排目录.json';
 const CONTENT_PLANNING_KNOWLEDGE_FILE = '参考知识库轻量条目.json';
 const CONTENT_PLANNING_BID_INFO_FILE = '招标文件关键信息.md';
@@ -33,10 +34,11 @@ const TABLE_REQUIREMENT_LABELS = {
 
 const CONTENT_PLAN_SCHEMA = {
   type: 'object',
-  required: ['writing_focus', 'knowledge', 'table', 'image_suitability_score'],
+  required: ['writing_focus', 'knowledge', 'table', 'image_suitability_score', 'target_words'],
   additionalProperties: false,
   properties: {
     writing_focus: { type: 'string', minLength: 1 },
+    target_words: { type: 'integer', minimum: 0 },
     image_suitability_score: { type: 'integer', minimum: 0, maximum: 10 },
     knowledge: {
       type: 'object',
@@ -289,6 +291,41 @@ function normalizeOutlineWordControlSnapshot(value) {
   });
 }
 
+// 从目录生效配置计算全文写作基准，0 表示未设置全文目标。
+function getContentWordTarget({ minimumWords = 0, maximumWords = 0 }) {
+  if (minimumWords > 0 && maximumWords > 0) return Math.round((minimumWords + maximumWords) / 2);
+  return Math.round(minimumWords > 0 ? minimumWords * 1.2 : maximumWords * 0.8);
+}
+
+// 新增待生成小节固定目标字数；其他编排按 Agent 提议的篇幅比例分配整数目标。
+function allocateContentWordTargets(plans, control, totalSections, isIncremental = false) {
+  const entries = [...plans.values()];
+  if (!entries.length) return;
+  if (isIncremental) {
+    entries.forEach(plan => { plan.target_words = ADDED_SECTION_TARGET_WORDS; });
+    return;
+  }
+  const totalTarget = getContentWordTarget(control);
+  if (!totalTarget) {
+    entries.forEach(plan => { plan.target_words = control.sectionWords || 0; });
+    return;
+  }
+  const budget = Math.round(totalTarget * entries.length / totalSections);
+  if (budget < entries.length) throw new Error('正文目标字数不足以为每个小节分配字数，请调整字数配置或目录规模。');
+  if (entries.some(plan => !Number.isInteger(plan.target_words) || plan.target_words <= 0)) {
+    throw new Error('已设置全文字数要求，正文编排必须为每个目标小节提供正整数 target_words。');
+  }
+  const proposedTotal = entries.reduce((sum, plan) => sum + plan.target_words, 0);
+  if (proposedTotal === budget) return;
+  const allocations = entries.map((plan, index) => {
+    const exact = 1 + (budget - entries.length) * plan.target_words / proposedTotal;
+    return { plan, index, words: Math.floor(exact), fraction: exact - Math.floor(exact) };
+  });
+  const remainder = budget - allocations.reduce((sum, item) => sum + item.words, 0);
+  allocations.sort((left, right) => right.fraction - left.fraction || left.index - right.index);
+  allocations.forEach((item, index) => { item.plan.target_words = item.words + (index < remainder ? 1 : 0); });
+}
+
 function normalizeContentConcurrency(value) {
   const concurrency = Number(value);
   return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_TEXT_CONCURRENCY_LIMIT);
@@ -379,6 +416,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds) {
 
   return {
     writing_focus: singleLine(source.writing_focus || source.writingFocus || writing.focus || writing.writing_focus || writing.writingFocus),
+    target_words: source.target_words,
     image_suitability_score: source.image_suitability_score,
     image_needed: source.image_needed,
     knowledge: {
@@ -482,6 +520,9 @@ function validateContentPlan(plan) {
   if (!plan.knowledge || !Array.isArray(plan.knowledge.item_ids)) {
     throw new Error('正文编排决策缺少 knowledge.item_ids');
   }
+  if (!Number.isInteger(plan.target_words) || plan.target_words < 0) {
+    throw new Error('正文编排决策的 target_words 必须是非负整数');
+  }
   if (!Number.isInteger(plan.image_suitability_score) || plan.image_suitability_score < 0 || plan.image_suitability_score > 10) {
     throw new Error('正文编排决策的配图适配性评分必须是 0-10 的整数');
   }
@@ -525,6 +566,7 @@ function buildContentPlanningOutline(items, storedContentPlans, root = true) {
       ...(contentMode === 'ai-generate' && stored?.plan ? {
         content_plan: {
           writing_focus: stored.plan.writing_focus,
+          target_words: stored.plan.target_words,
           image_suitability_score: stored.plan.image_suitability_score,
           knowledge: { item_ids: stored.plan.knowledge.item_ids },
           table: stored.plan.table,
@@ -613,7 +655,13 @@ function formatContentPlanningProgress(value) {
   return Array.from(singleLine(value)).slice(0, 30).join('');
 }
 
-function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, regenerateRequirement, tableRequirement, maxTables, totalSections }) {
+function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, regenerateRequirement, tableRequirement, maxTables, totalSections, wordControl, isIncremental = false }) {
+  const totalWordTarget = getContentWordTarget(wordControl);
+  const wordInstruction = isIncremental
+    ? `本次为目录变更后的新增小节编排，每节 target_words 固定填 ${ADDED_SECTION_TARGET_WORDS}，不按全文目标或每小节建议字数重新分配，其他小节的已有目标保持不变。`
+    : totalWordTarget > 0
+      ? `全文 AI 正文目标基准为 ${totalWordTarget} 字，共 ${totalSections} 个 AI 小节；本次 ${targetItemIds.length} 个目标小节的合计目标为 ${Math.round(totalWordTarget * targetItemIds.length / totalSections)} 字。结合各节重要程度、内容量与写作重点分配正整数 target_words，不必平均分配，不重复承担全文目标。程序会按你提供的比例校正取整后的合计；已有非目标小节的编排保持不变。全文目标优先于每小节建议字数。`
+      : `未设置全文字数目标，每节 target_words 填 ${wordControl.sectionWords || 0}；0 表示不设字数目标。`;
   const tableRequirementLabel = TABLE_REQUIREMENT_LABELS[tableRequirement] || TABLE_REQUIREMENT_LABELS.heavy;
   const tableLimitInstruction = tableRequirement === 'heavy'
     ? '表格需求为“大量”，没有数量上限，但仍然只有明显适合表格的小节才将 table.needed 设为 true。'
@@ -637,7 +685,8 @@ ${requirementText}
 请严格完成以下工作：
 1. 先读取全部三个文件，结合完整目录中的上下级和同级关系进行整体判断。
 2. 只为 content_mode 为 ai-generate 的叶子节点编排；本次只修改程序列出的目标节点，其他节点及已有 content_plan 保持原样。
-3. 本次目标叶子的 content_plan 必须包含 writing_focus、knowledge.item_ids、table.needed、table.purpose、image_suitability_score；非 AI 叶子和分支节点不得包含 content_plan。
+3. 本次目标叶子的 content_plan 必须包含 writing_focus、target_words、knowledge.item_ids、table.needed、table.purpose、image_suitability_score；非 AI 叶子和分支节点不得包含 content_plan。
+字数编排要求：${wordInstruction} 字数只统计正文可读文字，不包含 HTML 标签和配图提示词；目标用于写作，不要求删减必要信息或重复凑字。
 4. writing_focus 用 1-2 句话概括本节正文重点，不展开成正文，不编造具体参数、周期、人员、设备、品牌、型号或承诺，并避免与相邻章节重复。
 5. knowledge.item_ids 只能从 ${CONTENT_PLANNING_KNOWLEDGE_FILE} 中选择，可以多选或为空数组，不要编造 id。
 6. ${tableLimitInstruction}
@@ -1687,6 +1736,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   // 完整目录只作上下文，持久 Agent 仅编排并返回本次目标节点。
   async function runContentPlanningAgent(targetItemIds, regenerateTargetItemIds = targetItemIds) {
+    const isIncremental = targetItemIds.every(id => contentRuntime.pending_item_ids.includes(id));
     const hasSession = agentService.hasPersistentTaskSession(CONTENT_PLANNING_AGENT_TASK_KEY);
     const runId = crypto.randomUUID();
     if (hasSession) {
@@ -1720,6 +1770,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         tableRequirement,
         maxTables,
         totalSections: leaves.length,
+        wordControl,
+        isIncremental,
       }),
       output_file: CONTENT_PLANNING_OUTPUT_FILE,
       files: [
@@ -1763,6 +1815,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       allowedKnowledgeItemIds,
       new Set(targetItemIds),
     );
+    allocateContentWordTargets(plans, wordControl, leaves.length, isIncremental);
     updateContentAgentState({
       status: 'success',
       phase: 'completed',
@@ -2111,6 +2164,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       contentPlans.set(item.id, plan);
     }
     logs = [...logs, `本次 ${targets.length} 个小节的编排及配图标记已保存。`];
+    if (targets.length) {
+      const targetWords = targets.reduce((sum, { item }) => sum + nextPlans[item.id].plan.target_words, 0);
+      logs.push(`本次编排目标字数：${targetWords || '未设置'}；全文基准：${getContentWordTarget(wordControl) || '未设置'} 字。`);
+    }
     storedContentPlans = pruneContentGenerationPlans(nextPlans, leaves);
     const runtime = syncRuntime();
     checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {

@@ -886,7 +886,7 @@ function GenerationSettingsPage({
                   </label>
                 </div>
                 <small className="outline-word-control-help">
-                  <span>填2代表20000字，0.15代表1500字，默认0表示不限制；每小节字数仅作为目录估算和写作建议。</span>
+                  <span>填2代表20000字，0.15代表1500字，默认0表示不限制；每小节建议字数用于目录规模估算；设置全文字数时，正文按编排分配的小节目标生成，未设置全文字数时沿用本节建议。</span>
 
                 </small>
                 <div className="outline-word-control-estimate">

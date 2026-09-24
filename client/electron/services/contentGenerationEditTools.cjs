@@ -74,7 +74,7 @@ function createContentImageProtection({ workspaceDir, files, active = false, all
 }
 
 // 扩缩写、一致性修复与去表格共用并发执行、原生 edit、图片保护和错误回传。
-async function editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity, title, instructions, preserveDataTables = true, onResult = () => {} }) {
+async function editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity, title, instructions, preserveDataTables = true, preloadInput = false, onResult = () => {} }) {
   if (activity.pending) throw new Error('请等待上一批生成或编辑任务全部结束');
   const ids = jobs.map(section => section.section_id);
   if (new Set(ids).size !== ids.length || ids.some(id => !targets.has(id))) throw new Error('只能编辑本次目标小节，一批不能重复提交同一小节');
@@ -86,6 +86,13 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
       const section = targets.get(job.section_id);
       try {
         combinedSignal.throwIfAborted();
+        // 每次派发都读取当前文件；只给启用的任务提供完整材料，不复用旧快照。
+        const input = preloadInput
+          ? `\n\n受限 HTML 生成规范（完整内容）：\n${fs.readFileSync(path.join(workspaceDir, '受限HTML生成规范.md'), 'utf8')}\n\n本小节启动时的完整 HTML（${section.file}）：\n${fs.readFileSync(path.join(workspaceDir, section.file), 'utf8')}`
+          : '';
+        const readingInstructions = preloadInput
+          ? '本次输入已提供该小节启动时的完整 HTML 和受限 HTML 生成规范，请先阅读，再按修复要求处理。材料充分时可直接使用 edit；需要补充依据、核实当前内容或处理编辑错误时，可自行读取相关文件。发生修改后，以最新原文件为准，不将启动时提供的正文视为实时内容。'
+          : '先完整读取该文件及受限HTML生成规范.md，';
         const childProtection = createContentImageProtection({ workspaceDir, files: [section.file], active: true });
         await agentService.runTask({
           title: `${title}-${section.number}-${section.title}`, primary_session: false,
@@ -94,7 +101,7 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
           before_tool_call: childProtection.beforeToolCall, before_file_write: childProtection.beforeWrite,
           output_file: section.file, summary_enabled: false, signal: combinedSignal,
           max_retries: 1, timeout_ms: 30 * 60 * 1000,
-          prompt: `你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。先完整读取该文件及受限HTML生成规范.md，再按以下要求${title}：\n${job.instructions}\n本项目事实缺失处理要求（仅适用于本任务允许补充的内容，不扩大本次编辑范围）：${factsRequirements}\n只使用原生 edit 修改这一个小节文件；不要改其他小节、输入资料或结果清单。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局均受写入前保护，不得删除、替换或修改；可以调整图文表格中的普通说明文字。工具因图片保护拒绝编辑时，本次修改未写入文件。重新读取目标文件，将编辑范围限定为允许修改的普通文字，并原样保留受保护的图片块、引用、顺序和布局后重试。保留受限 HTML 结构、原有图片及引用、${preserveDataTables ? '原表格、' : '表格中的全部数据和含义、'}实质信息、事实参数和承诺。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。${instructions} 事实冲突以全局事实设定.md为准，按需读取。无法完成时调用 report-failure。edit 返回文本未匹配等错误时，重新读取最新文件，依据实际原文修正编辑参数并重试。修改由当前子任务直接写入目标 HTML，不以返回补丁文本代替文件修改。完成本次要求后在最后一次成功 edit 上标记 task_complete=true${preserveDataTables ? '' : '；重试时若已无数据表格，核实信息完整后可以在 read 上标记完成'}，不承担全文达标或修改其他小节的任务。`,
+          prompt: `你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。${readingInstructions}再按以下要求${title}：\n${job.instructions}\n本项目事实缺失处理要求（仅适用于本任务允许补充的内容，不扩大本次编辑范围）：${factsRequirements}\n只使用原生 edit 修改这一个小节文件；不要改其他小节、输入资料或结果清单。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局均受写入前保护，不得删除、替换或修改；可以调整图文表格中的普通说明文字。工具因图片保护拒绝编辑时，本次修改未写入文件。重新读取目标文件，将编辑范围限定为允许修改的普通文字，并原样保留受保护的图片块、引用、顺序和布局后重试。保留受限 HTML 结构、原有图片及引用、${preserveDataTables ? '原表格、' : '表格中的全部数据和含义、'}实质信息、事实参数和承诺。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。${instructions} 事实冲突以全局事实设定.md为准，按需读取。无法完成时调用 report-failure。edit 返回文本未匹配等错误时，重新读取最新文件，依据实际原文修正编辑参数并重试。修改由当前子任务直接写入目标 HTML，不以返回补丁文本代替文件修改。完成本次要求后在最后一次成功 edit 上标记 task_complete=true${preserveDataTables ? '' : '；重试时若已无数据表格，核实信息完整后可以在 read 上标记完成'}，不承担全文达标或修改其他小节的任务。${input}`,
           validateOutput: output => validateHtml(workspaceDir, output.output_content),
           onActivity,
         });

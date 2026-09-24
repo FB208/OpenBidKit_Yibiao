@@ -165,6 +165,7 @@ async function main() {
     write('全局事实设定.md', '保留事实');
     write('项目概述.md', '测试项目');
     write('正文模板.html', '<p>样张</p>');
+    write('配图类型对照表.md', '思维导图=mermaid');
     write('所选模板配置.json', '{}');
     write('正文生成结果.json', JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 10 })) }));
 
@@ -273,7 +274,7 @@ async function main() {
     assert.equal(runtimeEvents.filter(event => event === 'success').length, successCount + 1);
     assert.equal(failureReports.length, 0);
 
-    // 最终提交超限仍继续同一会话，超过三轮不会被通用修复次数截断。
+    // 首稿试验只停用主流程入口；上面的原扩缩写工具及子任务检查仍然保留。
     decisions.word_control = { minimumWords: 35, maximumWords: 35, checkTotalWords: true };
     saveDecisions();
     let rounds = 0;
@@ -282,26 +283,27 @@ async function main() {
         await options.businessTools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '无矛盾', remaining_issues: [] });
         return;
       }
-      const oldText = '文'.repeat(15 + rounds);
       rounds += 1;
-      await edit.execute('round', { path: targets[0].file, edits: [{ oldText, newText: `${oldText}文` }] });
+      assert.ok(!options.businessTools.some(tool => tool.name === 'adjust-sections'));
+      assert.match(prompt, /本次暂不执行扩缩写/);
     };
     await runContentGenerationAgent({
       signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: () => [], aiService: {},
-      agentService: { updatePersistentTask() {}, runTask(payload) {
+      agentService: { hasPersistentTaskSession: () => false, updatePersistentTask() {}, runTask(payload) {
         const { persistent_task, ...transient } = payload;
         return scoped.runTask({ ...transient, workspace_dir: workspaceDir }).then(result => ({ ...result, workspace_dir: workspaceDir }));
       } },
     });
-    assert.equal(rounds, 5);
-    assert.equal(checkWordCount(workspaceDir).in_range, true);
+    assert.equal(rounds, 1);
+    assert.equal(checkWordCount(workspaceDir).in_range, false);
+    assert.equal(checkWordCount(workspaceDir).total_words, 30, '不达标时不修改首稿，直接审计');
 
     // 主任务最终失败和普通任务失败仍上报，保留原错误和工作区诊断范围。
     const finalError = new Error('主任务最终失败');
     promptAction = async () => { throw finalError; };
     await assert.rejects(runContentGenerationAgent({
       signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: () => [], aiService: {},
-      agentService: { updatePersistentTask() {}, runTask(payload) {
+      agentService: { hasPersistentTaskSession: () => false, updatePersistentTask() {}, runTask(payload) {
         const { persistent_task, ...transient } = payload;
         return scoped.runTask({ ...transient, workspace_dir: workspaceDir });
       } },
@@ -342,7 +344,7 @@ async function main() {
     assert.equal(activity.pending, 0);
     assert.equal(fs.readFileSync(path.join(workspaceDir, targets[0].file), 'utf8'), beforeCancel);
     assert.equal(failureReports.length, 2, '取消不应增加失败诊断');
-    console.log('通过：边界、10000字分界、等待整批、原生编辑、多轮继续、取消、共享工作区生命周期、子任务错误处理与最终失败诊断及运行统计');
+    console.log('通过：边界、10000字分界、等待整批、原生编辑、首稿跳过扩缩写、取消、共享工作区生命周期、子任务错误处理与最终失败诊断及运行统计');
   } finally {
     await service?.close();
     // 只删除本检查创建的临时根目录，不接触真实业务工作区。

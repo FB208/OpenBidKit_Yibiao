@@ -51,8 +51,8 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
       if (index === 0) assert.equal(options.frameSize, 'wide');
       return { buffer: Buffer.from('图片'), width: 100, height: 80, layout_issues: [] };
     };
-    const rendered = await tools.find(item => item.name === `render-${result.kind}-image`).execute('render-source', result);
-    assert.equal(fs.readFileSync(path.join(workspaceDir, rendered.details.asset_ref), 'utf8'), '图片');
+    const rendered = await tools.find(item => item.name === `render-${result.kind}-image`).execute('render-source', { images: [{ image_id: result.image_id, source_file: result.source_file, ...(result.kind === 'html' ? { frame_size: result.frame_size } : {}) }] });
+    assert.equal(fs.readFileSync(path.join(workspaceDir, rendered.details.results[0].asset_ref), 'utf8'), '图片');
   }
   for (const [frame_size, height] of Object.entries({ square: 1240, tall: 1653, panorama: 698 })) {
     aiService.chat = async request => { assert.ok(request.messages[0].content.includes(`1240×${height}px`)); return html; };
@@ -115,7 +115,7 @@ function checkImageLayoutQuota(fileOptions) {
   console.log('布局名额：少图/多图比例、余数和同分取整、零名额、类型开关及局部目标检查通过。');
 }
 
-// 三种事实模式经真实输入构建与工具调用传给并发写作和扩缩写，不依赖主 Agent 手动转述。
+// 三种事实模式经真实输入构建与工具调用传给并发写作和一致性修复，不依赖主 Agent 手动转述。
 async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal }) {
   for (const [mode, expected] of [['fabricate', /允许结合项目背景补充设定/], ['omit', /不依赖未知具体值的概括性表述/], ['placeholder', /以“【待填写】”标记/]]) {
     const directory = path.join(workspaceDir, `事实模式-${mode}`);
@@ -137,15 +137,18 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     assert.equal(decisions.global_facts_mode, mode);
     assert.match(decisions.global_facts_requirements, expected);
     assert.match(decisions.global_facts_requirements, /不得覆盖或改变全局事实/);
-    const wordScope = checkTotalWords ? /由主 Agent 统一检查总字数/ : /本次仅统计目标小节字数，不依据全文上下限扩缩写/;
+    const wordScope = checkTotalWords ? /由主 Agent 统一检查总字数/ : /本次仅统计目标小节字数，不承担全文字数达标/;
     assert.match(decisions.word_requirements, wordScope);
     let generated = false;
     let edited = false;
     const tools = createContentGenerationTools({ signal,
+      consistency: { get: () => ({ status: 'running' }), save() {} },
       aiService: { async chat(request) {
         assert.ok(request.messages[0].content.includes(decisions.global_facts_requirements));
         assert.ok(request.messages[0].content.includes(imageTypes), '并发正文模型必须收到工作区对照表全文');
         assert.match(request.messages[1].content, wordScope);
+        assert.match(request.messages[1].content, /target_words.*750/s);
+        assert.match(request.messages[1].content, /按本节 content_plan.target_words 的目标字数生成正文/);
         assert.match(request.messages[1].content, /没有文件检索或图片生成工具，仅核对本次请求提供的材料/);
         generated = true;
         return '<!-- yibiao:block -->\n<p id="facts">项目实施内容</p>';
@@ -159,7 +162,8 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     const params = { sections: [{ section_id: decisions.targets[0].id, instructions: '补充实施措施', references: '' }] };
     const generatedResult = await tools.find(tool => tool.name === 'generate-sections').execute('generate', params);
     assert.equal(generatedResult.details.results[0].status, 'success');
-    const editedResult = await tools.find(tool => tool.name === 'adjust-sections').execute('adjust', params);
+    assert.equal(tools.some(tool => tool.name === 'adjust-sections'), false);
+    const editedResult = await tools.find(tool => tool.name === 'repair-sections').execute('repair', params);
     assert.equal(editedResult.details.results[0].status, 'success');
     assert.ok(generated && edited);
     const rules = files.find(file => file.path === '受限HTML生成规范.md').content;
@@ -172,9 +176,9 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     assert.match(imageSchema.properties.size.description, /逐图依据.*data-yb-size.*768x1024/);
     assert.match(imageSchema.properties.prompt.description, /保留.*比例.*构图/);
     assert.match(rules, /size 必填.*768x1024/);
-    assert.match(rules, /通过 images 列表批量提交/);
+    assert.match(rules, /通过 images 列表一次提交本轮全部待生成 AI 图片/);
   }
-  console.log('事实模式：三种中文要求、并发正文与扩缩写传递，以及图片比例、裁剪和尺寸说明检查通过。');
+  console.log('事实模式：三种中文要求、并发正文与一致性修复传递，以及图片比例、裁剪和尺寸说明检查通过。');
 }
 
 // 执行预览模块，确认与 Agent 共用样张，且只有预览版本带示例图片引用。
@@ -379,7 +383,7 @@ async function main() {
     ];
     const targets = outline[0].children.map(item => ({ item }));
     const fileOptions = {
-      outline, targets, plans: Object.fromEntries(targets.map(({ item }) => [item.id, { plan: { writing_focus: '落实责任', knowledge: { item_ids: ['doc::k1'] }, table: { needed: false, purpose: '' }, image_needed: true, image_suitability_score: 8 } }])),
+      outline, targets, plans: Object.fromEntries(targets.map(({ item }) => [item.id, { plan: { target_words: 750, writing_focus: '落实责任', knowledge: { item_ids: ['doc::k1'] }, table: { needed: false, purpose: '' }, image_needed: true, image_suitability_score: 8 } }])),
       generationOptions: { imageQuantity: 'light', useAiImages: true, useHtmlImages: true, useMermaidImages: false, htmlImageTypes: '甘特图、风险矩阵' },
       projectOverview: '某地建设项目', globalFacts: [{ title: '工期', content: '六十天' }], globalFactsMode: 'placeholder',
       wordControl: { minimumWords: 1000, maximumWords: 2000, sectionWords: 800 },
@@ -454,7 +458,9 @@ async function main() {
     assert.deepEqual(input.targets.map(item => item.id), ['e0000000-0000-4000-8000-000000000011', 'f0000000-0000-4000-8000-000000000012']);
     assert.equal(input.outline[1].content_mode, 'manual-fill');
     assert.match(input.word_requirements, /1000.*2000/);
-    assert.match(input.word_requirements, /建议约 800 字.*不设小节硬性上下限/);
+    assert.match(input.word_requirements, /content_plan.target_words/);
+    assert.equal(input.targets[0].content_plan.target_words, 750);
+    assert.match(input.word_requirements, /本次暂不执行生成后的扩缩写/);
     assert.equal(input.targets[0].content_plan.image_suitability_score, 8);
     assert.match(input.image_requirements, /少图：按本轮布局名额/);
     assert.deepEqual(input.image_layout_quota, { total_groups: 2, single: 1, imageText: 1, threeImages: 0, fourImages: 0 });
@@ -508,7 +514,7 @@ async function main() {
         assert.ok(!JSON.stringify(request.messages).includes('"total_groups"'), '并发小节不接收整轮名额数值');
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
-      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
+      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
       const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: allocation, references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
@@ -616,22 +622,25 @@ async function main() {
       const method = kind === 'html' ? 'renderHtmlToPng' : 'renderMermaidToPng';
       const pause = new AbortController();
       const renderTool = createContentGenerationImageTools({ aiService: {}, signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(tool => tool.name === `render-${kind}-image`);
-      const renderParams = { source_file: sourceFile, ...(kind === 'html' ? { frame_size: 'wide' } : {}) };
-      assert.equal(renderTool.parameters.required.includes('frame_size'), kind === 'html');
+      const renderParams = { images: [{ image_id: '实施图', source_file: sourceFile, ...(kind === 'html' ? { frame_size: 'wide' } : {}) }] };
+      assert.deepEqual(renderTool.parameters.required, ['images']);
+      assert.equal(renderTool.parameters.properties.images.items.required.includes('frame_size'), kind === 'html');
       renderer[method] = async (text, options) => {
         assert.equal(text, source);
         assert.equal(options.isPauseRequested(), false);
         assert.equal(options.frameSize, kind === 'html' ? 'wide' : undefined);
         return { buffer: Buffer.from('PNG'), width: 100, height: 80, layout_issues: [] };
       };
-      const rendered = (await renderTool.execute('render', renderParams)).details;
+      const rendered = (await renderTool.execute('render', renderParams)).details.results[0];
+      assert.equal(rendered.status, 'success');
+      assert.equal(rendered.image_id, '实施图');
       assert.equal(rendered.width, 100);
       assert.equal(rendered.height, 80);
       assert.equal(rendered.source_file, sourceFile);
       assert.equal(fs.readFileSync(path.join(workspaceDir, rendered.asset_ref), 'utf8'), 'PNG');
       const renderError = new Error('模拟渲染错误');
       renderer[method] = async () => { throw renderError; };
-      await assert.rejects(renderTool.execute('error', renderParams), error => error === renderError);
+      assert.equal((await renderTool.execute('error', renderParams)).details.results[0].error, renderError.message);
       assert.equal(fs.readFileSync(path.join(workspaceDir, sourceFile), 'utf8'), source);
       const savedFiles = fs.readdirSync(path.join(workspaceDir, '图片'));
       renderer[method] = async (_text, options) => {
@@ -642,7 +651,52 @@ async function main() {
       };
       await assert.rejects(renderTool.execute('cancel', renderParams, pause.signal), /停止转图/);
       assert.deepEqual(fs.readdirSync(path.join(workspaceDir, '图片')), savedFiles, '取消后不得保存新图片');
+
+      // 三项同时派发，乱序结束仍对应各自标识，部分失败保留成功项及布局反馈。
+      const batchImages = ['甲', '乙', '丙'].map(image_id => ({ ...renderParams.images[0], image_id }));
+      const renderPending = [];
+      renderer[method] = (_text, options) => new Promise((resolve, reject) => renderPending.push({ resolve, reject, options }));
+      const batchRender = renderTool.execute('batch-render', { images: batchImages });
+      assert.equal(renderPending.length, 3, '所有转图一次交给组件，由组件队列控制实际并发');
+      renderPending[2].resolve({ buffer: Buffer.from('丙'), width: 300, height: 80, layout_issues: ['模拟布局问题'] });
+      renderPending[1].reject(new Error('仅乙转图失败'));
+      renderPending[0].resolve({ buffer: Buffer.from('甲'), width: 100, height: 80, layout_issues: [] });
+      const batchResults = (await batchRender).details.results;
+      assert.deepEqual(batchResults.map(item => [item.image_id, item.status]), [['甲', 'success'], ['乙', 'error'], ['丙', 'success']]);
+      assert.match(batchResults[1].error, /仅乙转图失败/);
+      for (const item of [batchResults[0], batchResults[2]]) {
+        assert.equal(fs.readFileSync(path.join(workspaceDir, item.asset_ref), 'utf8'), item.image_id);
+        assert.equal(item.source_file, sourceFile);
+      }
+      if (kind === 'html') assert.deepEqual(batchResults[2].layout_issues, ['模拟布局问题']);
+      await assert.rejects(renderTool.execute('duplicate-render', { images: [batchImages[0], batchImages[0]] }), /不能重复/);
+      renderer[method] = async () => ({ buffer: Buffer.from('乙'), width: 200, height: 80, layout_issues: [] });
+      const retryResult = (await renderTool.execute('retry-render', { images: [batchImages[1]] })).details.results;
+      assert.deepEqual(retryResult.map(item => [item.image_id, item.status]), [['乙', 'success']]);
+      assert.equal(fs.readFileSync(path.join(workspaceDir, batchResults[0].asset_ref), 'utf8'), '甲');
+
+      // 主任务或工具取消时，已保存项保留，尚未完成项不落盘。
+      for (const cancelTask of [false, true]) {
+        const taskCancel = new AbortController(), toolCancel = new AbortController();
+        const inFlight = [];
+        renderer[method] = (_text, options) => new Promise(resolve => inFlight.push({ resolve, options }));
+        const cancellable = createContentGenerationImageTools({ aiService: {}, signal: taskCancel.signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(item => item.name === renderTool.name);
+        const running = cancellable.execute('cancel-batch', { images: batchImages }, toolCancel.signal);
+        inFlight[0].resolve({ buffer: Buffer.from('已完成'), width: 100, height: 80, layout_issues: [] });
+        await new Promise(resolve => setImmediate(resolve));
+        const beforeCancel = fs.readdirSync(path.join(workspaceDir, '图片'));
+        const reason = new Error('取消整批转图');
+        (cancelTask ? taskCancel : toolCancel).abort(reason);
+        for (const pending of inFlight.slice(1)) {
+          assert.equal(pending.options.isPauseRequested(), true);
+          assert.equal(pending.options.createPauseError(), reason);
+          pending.resolve({ buffer: Buffer.from('不得保存'), width: 100, height: 80 });
+        }
+        await assert.rejects(running, error => error === reason);
+        assert.deepEqual(fs.readdirSync(path.join(workspaceDir, '图片')), beforeCancel);
+      }
     }
+    console.log('批量转图：全量派发、乱序结果对应、部分失败、布局反馈、单项重试及取消保留成功项通过。');
 
     const jobs = input.targets.map(item => ({ section_id: item.id, instructions: '落实责任', references: '全局事实：工期六十天' }));
     const html = '<!-- yibiao:block -->\n<p id="s_1_p001">具体实施措施</p>';
@@ -658,6 +712,8 @@ async function main() {
       return new Promise((resolve, reject) => pending.push({ resolve, reject }));
     } };
     const [tool] = createContentGenerationTools({ aiService, signal, onProgress: event => progress.push(event) }, { Type, workspaceDir });
+    assert.match(tool.description, /本轮全部待生成目标小节放入一次调用的 sections 数组/);
+    assert.match(tool.description, /超出上限的任务自动排队/);
     assert.match(tool.description, /知识库和全局事实/);
     assert.match(JSON.stringify(tool.parameters), /知识库、全局事实/);
     const batch = tool.execute('batch', { sections: jobs }, signal);
@@ -687,6 +743,26 @@ async function main() {
     const manifest = { sections: input.targets.map(item => ({ section_id: item.id, file: item.file, words: 6 })) };
     fs.writeFileSync(path.join(workspaceDir, '正文生成结果.json'), JSON.stringify(manifest), 'utf8');
     assert.equal(readContentGenerationResult(workspaceDir).sections.length, 2);
+
+    // 全量提交可超过实际并发上限，后续请求由现有队列补入，无需 Agent 再调用工具。
+    const queue = createAiRequestQueue({ getLimit: () => 1 });
+    const queuedRequests = [];
+    let submitted = 0;
+    const [queuedTool] = createContentGenerationTools({ signal, aiService: { chat(request) {
+      submitted++;
+      return queue.enqueue(() => new Promise(resolve => queuedRequests.push(resolve)), { signal: request.signal });
+    } } }, { Type, workspaceDir });
+    const queuedBatch = queuedTool.execute('all-targets', { sections: jobs }, signal);
+    assert.equal(submitted, jobs.length, '一次工具调用应立即将全部小节提交队列');
+    assert.equal(queue.getStatus().active, 1);
+    assert.equal(queue.getStatus().queued, 1);
+    queuedRequests[0](html);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(queuedRequests.length, 2, '首项完成后队列自动启动下一项');
+    assert.equal(queue.getStatus().active, 1);
+    assert.equal(queue.getStatus().queued, 0);
+    queuedRequests[1](html.replace('s_1_', 's_2_'));
+    assert.deepEqual((await queuedBatch).details.results.map(item => item.status), ['success', 'success']);
     fs.writeFileSync(firstFile, `${html}<img alt="实施图">`, 'utf8');
     assert.throws(() => readContentGenerationResult(workspaceDir), /尚未生成/);
     fs.writeFileSync(firstFile, `${html}<img alt="实施图" data-yb-asset-ref="图片/缺失.png">`, 'utf8');
@@ -712,12 +788,20 @@ async function main() {
             assert.equal(payload.auto_validate_json, true);
             assert.equal(payload.files.length, resume ? 0 : files.length);
             assert.match(payload.prompt, /三个文件必须完整阅读/);
+            assert.match(payload.prompt, /本轮全部待生成小节一次性放入 sections 数组提交/);
+            assert.match(payload.prompt, /不自行按章节或固定小批次拆分调用/);
+            assert.match(payload.prompt, /超出上限的任务自动排队/);
+            assert.match(payload.prompt, /每项都必须包含 section_id、instructions 和 references/);
+            assert.match(payload.prompt, /暂停恢复时一次提交剩余待生成小节，失败重试只提交失败项/);
             assert.match(payload.prompt, /配图前完整阅读配图类型对照表.md/);
             assert.match(payload.prompt, /size 必填.*768x1024/);
             assert.match(payload.prompt, /prompt 中保留.*比例.*构图方向/);
             assert.match(payload.prompt, /HTML\/Mermaid 图使用 generate-image-sources/);
             assert.match(payload.prompt, /工具只生成并保存源码，不渲染、不回填正文/);
-            assert.match(payload.prompt, /通过 images 列表一次提交已确定且相互独立的多张配图需求/);
+            assert.match(payload.prompt, /通过 images 列表一次提交本轮全部待生成 AI 图片/);
+            assert.match(payload.prompt, /本轮全部待生成 HTML\/Mermaid 源码合并一次提交/);
+            assert.match(payload.prompt, /全部待渲染文件按 HTML、Mermaid 分别一次批量提交/);
+            assert.match(payload.prompt, /两个 render 工具都使用 images 数组/);
             assert.match(payload.prompt, /按 image_id.*仅重新提交失败项/);
             assert.match(payload.prompt, /global_facts_requirements（当前事实模式的中文要求）/);
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
@@ -729,7 +813,7 @@ async function main() {
             assert.match(payload.prompt, /在并发写作前规划每张图的表达目的、图片类型及生成方式/);
             assert.match(payload.prompt, /核对本轮新增图片的生成方式分布/);
             assert.match(payload.prompt, /暂停、失败重试沿用本轮名额，已完成的布局计入完成数量/);
-            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'adjust-sections', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
+            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
             return { workspace_dir: workspaceDir };
           },
@@ -771,9 +855,9 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
   };
   const run = resume => runContentGenerationAgent({ resume, hasKnowledgeBase: true, signal, aiService: {}, agentService, buildFiles: () => files });
   const checkBlocked = payload => {
-    for (const name of ['bash', 'generate-sections', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) {
+    for (const name of ['adjust-sections', 'bash', 'generate-sections', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) {
       assert.equal(activeTools.includes(name), false);
-      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能/);
+      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|暂不执行扩缩写/);
     }
     assert.throws(() => payload.before_file_write({ toolName: 'write', filePath: sectionFile, content: '<p>覆盖正文</p>' }), /正文编辑只能/);
   };
@@ -804,14 +888,14 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
   assert.equal(state.word_adjustment_started, true);
   assert.equal(fs.readFileSync(sectionFile, 'utf8'), original);
 
-  // 未调用字数工具便提前提交，程序要求继续调整时也必须先启用保护。
+  // 未调用字数工具便提前提交，进入审计时也必须先启用保护。
   state = {};
   activeTools = undefined;
   action = async payload => {
     payload.validateOutput({}, { workspace_dir: workspaceDir });
     assert.equal(state.word_adjustment_started, false);
     const continuation = payload.continueTask({}, { workspace_dir: workspaceDir });
-    assert.ok(continuation.prompt);
+    assert.equal(continuation.stage, 'auditing');
     assert.equal(state.word_adjustment_started, true);
     checkBlocked(payload);
     throw pauseError;
@@ -869,7 +953,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
   assert.match(decisions.restoration_requirements, /该标记不构成调用 AI 生图的指令/);
   const underLimit = JSON.parse(buildContentGenerationFiles({ ...options, existingTotalWords: 100, wordControl: fileOptions.wordControl }).find(file => file.path === '正文编排决策.json').content);
   assert.match(underLimit.restoration_requirements, /100 字，全文上限 2000/);
-  assert.match(underLimit.restoration_requirements, /每小节目标 800/);
+  assert.match(underLimit.restoration_requirements, /每小节目标见本节 content_plan.target_words/);
   assert.match(underLimit.restoration_requirements, /未超过时按现有要求适当扩写/);
   let copied = 0;
   for (const resume of [false, true]) {
@@ -999,13 +1083,21 @@ async function checkLocalRendering(workspaceDir) {
     ['准备与核查','明确实施条件、责任分工和交付要求。'],['组织与实施','按计划开展工作，协调现场资源。'],
     ['质量与验收','核对成果和验收标准，记录检查结果。'],['交付与维护','完成资料归档，落实持续维护责任。'],
   ].map(([title, text]) => `<section class="card"><h2>${title}</h2><p>${text}</p></section>`).join('')}</div></main>`;
-  for (const [frameSize, height] of Object.entries({ square: 1240, wide: 827, tall: 1653, panorama: 698 })) {
+  const frames = { square: 1240, wide: 827, tall: 1653, panorama: 698 };
+  const renderJobs = [];
+  for (const frameSize of Object.keys(frames)) {
     // 同一Flex/Grid结构同时覆盖完整文档和HTML片段，source中的88px边距应由画布统一为40px。
     const html = frameSize === 'panorama' ? styles + content
       : `<!DOCTYPE html><html><head><meta charset="utf-8">${styles}</head><body>${content}</body></html>`;
     const sourceFile = `布局-${frameSize}.html`;
     fs.writeFileSync(path.join(workspaceDir, sourceFile), html, 'utf8');
-    const result = (await htmlTool.execute(frameSize, { source_file: sourceFile, frame_size: frameSize })).details;
+    renderJobs.push({ image_id: frameSize, source_file: sourceFile, frame_size: frameSize });
+  }
+  const renderedFrames = (await htmlTool.execute('all-frames', { images: renderJobs })).details.results;
+  assert.deepEqual(renderedFrames.map(item => [item.image_id, item.status]), Object.keys(frames).map(id => [id, 'success']));
+  for (const result of renderedFrames) {
+    const frameSize = result.image_id, height = frames[frameSize], sourceFile = result.source_file;
+    const html = fs.readFileSync(path.join(workspaceDir, sourceFile), 'utf8');
     const png = fs.readFileSync(path.join(workspaceDir, result.asset_ref));
     const image = nativeImage.createFromBuffer(png);
     assert.deepEqual(image.getSize(), { width: 2480, height: height * 2 });
@@ -1033,7 +1125,12 @@ async function checkLocalRendering(workspaceDir) {
   const clippedResult = await renderer.probeHtmlLayoutOnly(clipped, { frameSize: 'wide' });
   assert.ok(clippedResult.layout_issues.some(issue => issue.includes('裁切')), '隐藏溢出的文字仍应反馈裁切');
   fs.writeFileSync(path.join(workspaceDir, '实施流程.mmd'), 'flowchart LR\nA["准备"] --> B["实施"] --> C["交付"]', 'utf8');
-  const mermaid = (await tools.find(tool => tool.name === 'render-mermaid-image').execute('mermaid', { source_file: '实施流程.mmd' })).details;
+  const mermaidResults = (await tools.find(tool => tool.name === 'render-mermaid-image').execute('mermaid', { images: [
+    { image_id: '流程图', source_file: '实施流程.mmd' }, { image_id: '同源第二图', source_file: '实施流程.mmd' },
+  ] })).details.results;
+  assert.deepEqual(mermaidResults.map(item => item.status), ['success', 'success']);
+  assert.notEqual(mermaidResults[0].asset_ref, mermaidResults[1].asset_ref);
+  const mermaid = mermaidResults[0];
   assert.ok(mermaid.width > 24 && mermaid.height > 24);
   assert.deepEqual(nativeImage.createFromPath(path.join(workspaceDir, mermaid.asset_ref)).getSize(), { width: mermaid.width, height: mermaid.height });
   console.log('固定画布越界、隐藏溢出裁切与Mermaid原有转图检查通过。');
