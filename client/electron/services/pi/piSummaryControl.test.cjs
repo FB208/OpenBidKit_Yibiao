@@ -283,6 +283,8 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
     },
     agentService: {
       async runTask(payload) {
+        assert.deepEqual(payload.prepare_output_files, [fieldsFile]);
+        assert.equal(payload.max_retries, 1);
         const { session } = await createTestSession(t, payload.summary_enabled, {
           workspaceDir,
           openXmlTool: payload.open_xml_tool,
@@ -312,7 +314,11 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
           session_id: session.sessionId,
           output_content: fs.readFileSync(path.join(workspaceDir, payload.output_file), 'utf8'),
         };
-        assert.deepEqual(payload.validateOutput(candidate), { field_count: 1 });
+        const validation = await payload.validateOutput(candidate, {
+          workflow_stage: 'template-extraction',
+          readFile: async filePath => fs.readFileSync(path.join(workspaceDir, filePath), 'utf8'),
+        });
+        assert.deepEqual(validation, { field_count: 1 });
         return candidate;
       },
       updatePersistentTask() {},
@@ -322,4 +328,71 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
   assert.equal(result.field_count, 1);
   assert.equal(helperCalls, 2, '结构无效的文件不应提交给助手');
   assert.equal(successfulApplications, 1);
+});
+
+test('模版阶段汇总缺失产物并只为校验失败提供修复提示，空候选分类仍合法', async () => {
+  let classificationContent = '';
+  let hasArtifacts = false;
+  await runTemplateExtractionTask({
+    workspaceStore: {
+      listTenderSourceDocxRelativePaths: () => ['原件.docx'],
+      getBidTemplateSourcePath() {},
+      getBidTemplateSourceRelativePath() {},
+      getBidTemplatePath() {},
+      getBidTemplateRelativePath() {},
+      getBidTemplateFieldsPath() {},
+      getBidTemplateFieldsRelativePath() {},
+      hasBidTemplate: () => hasArtifacts,
+    },
+    agentService: {
+      async runTask(payload) {
+        const candidate = { output_content: '' };
+        const meta = {
+          workflow_stage: 'template-extraction',
+          async readFile(filePath) {
+            assert.equal(filePath, '投标模版字段分类.json');
+            return classificationContent;
+          },
+        };
+        await assert.rejects(payload.validateOutput(candidate, meta), error => {
+          assert.match(error.message, /投标模版字段分类\.json 未生成或内容为空/);
+          assert.match(error.message, /bid-template\.docx 和 bid-template-fields\.json 尚未同时生成/);
+          assert.match(error.message, /bid-template-fields\.json 未生成或内容为空/);
+          const prompt = payload.buildRetryPrompt(Object.assign(error, { agentValidationFailed: true }), meta);
+          assert.ok(prompt.includes(error.message));
+          assert.match(prompt, /空文件首次用 write/);
+          assert.match(prompt, /"action":"apply-template-fields","fields_file":"投标模版字段分类.json"/);
+          assert.match(prompt, /不得手工写入最终 Word 或字段清单/);
+          return true;
+        });
+        assert.equal(payload.buildRetryPrompt(new Error('网络失败'), meta), null);
+        hasArtifacts = true;
+        candidate.output_content = '{"version":1,"fields":[]}';
+        for (const [content, expected] of [
+          ['', /投标模版字段分类\.json 未生成或内容为空/],
+          ['{', /投标模版字段分类\.json 不是合法 JSON/],
+          ['{"fields":[]}', /投标模版字段分类\.json 结构无效/],
+          ['{"fields":[{"candidate_id":"c_1","name":"签字","fill_by":"无效"}],"ignored_candidate_ids":[]}', /投标模版字段分类\.json 结构无效/],
+        ]) {
+          classificationContent = content;
+          await assert.rejects(payload.validateOutput(candidate, meta), expected);
+        }
+        classificationContent = '{"fields":[],"ignored_candidate_ids":[]}';
+        assert.deepEqual(await payload.validateOutput(candidate, meta), { field_count: 0 });
+        for (const [content, expected] of [
+          ['{', /bid-template-fields\.json 不是合法 JSON/],
+          ['{"version":2,"fields":[]}', /bid-template-fields\.json 结构无效/],
+        ]) {
+          await assert.rejects(payload.validateOutput({ output_content: content }, meta), expected);
+        }
+        hasArtifacts = false;
+        await assert.rejects(payload.validateOutput(candidate, meta), /尚未同时生成/);
+        hasArtifacts = true;
+        return candidate;
+      },
+      updatePersistentTask() {},
+    },
+    taskId: '模板必需产物检查',
+    outline: [],
+  });
 });

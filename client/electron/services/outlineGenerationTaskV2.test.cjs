@@ -14,6 +14,12 @@ const {
   enforceMinimumLeafTarget,
 } = require('./outlineGenerationTaskV2.cjs');
 
+// 按运行时顺序先校验，再将同一份标准化结果交给业务阶段。
+async function submitStage(request, candidate, meta) {
+  const validation_result = await request.validateOutput(candidate, meta);
+  return request.continueTask(candidate, { ...meta, validation_result });
+}
+
 test('无评分任务首次生成和恢复时均遵守原方案来源限制，补充模式仍可使用其他资料', async () => {
   for (const originalOnly of [true, false]) {
     for (const restoring of [false, true]) {
@@ -37,17 +43,18 @@ test('无评分任务首次生成和恢复时均遵守原方案来源限制，�
             if (options.initial_stage === 'initial-outline') {
               if (originalOnly) assert.match(options.prompt, /目录来源仅限原方案.md/);
               assert.equal(options.max_retries, 1);
+              assert.deepEqual(options.prepare_output_files, ['outline.json']);
               const generated = options.validateOutput({ output_content: JSON.stringify({ outline: [{ ...root, id: null }] }) });
               let written;
-              await options.continueTask(result, { writeFiles: async files => { written = JSON.parse(files[0].content); } });
+              await options.continueTask(result, { validation_result: generated, writeFiles: async files => { written = JSON.parse(files[0].content); } });
               assert.deepEqual(written, generated);
               root = generated.outline[0];
               result = { output_content: JSON.stringify(generated) };
               return { ...result, validation_result: generated };
             }
             assert.equal(options.initial_stage, 'children_generation');
-            assert.equal(options.max_retries, 0);
-            assert.equal(options.validateOutput, undefined);
+            assert.equal(options.max_retries, 1);
+            assert.deepEqual(options.prepare_output_files, []);
             if (originalOnly) assert.match(options.prompt, /目录来源仅限原方案.md/);
             assert.equal(options.auto_validate_json, true);
             assert.equal(options.summary_enabled, false);
@@ -58,11 +65,12 @@ test('无评分任务首次生成和恢复时均遵守原方案来源限制，�
                 return file === '原方案.md' ? '# 实施方案' : JSON.stringify({ status: 'passed', issues: [], summary: '通过', user_feedback: '' });
               },
             };
-            const adjustment = await options.continueTask(result, meta);
+            const adjustment = await submitStage(options, result, meta);
             assert.equal(adjustment.stage, 'leaf_adjustment');
             if (originalOnly) assert.match(adjustment.prompt, /不得为凑字数或小节数量新增、拆分章节/);
-            const review = await options.continueTask(result, { ...meta, workflow_stage: 'leaf_adjustment', user_question_answers: [{ workflow_stage: 'leaf_adjustment', selected_option: '接受当前结果' }] });
+            const review = await submitStage(options, result, { ...meta, workflow_stage: 'leaf_adjustment', user_question_answers: [{ workflow_stage: 'leaf_adjustment', selected_option: '接受当前结果' }] });
             assert.equal(review.stage, 'outline_review');
+            assert.deepEqual(review.prepare_output_files, ['outline-review.json']);
             assert.ok(review.files.every((file) => !/score|allocation/.test(file.path)));
             assert.equal('score_mapping' in JSON.parse(review.files.find((file) => file.path === 'outline-review-context.json').content), false);
             for (const file of review.files) assert.ok(review.prompt.includes(file.content));
@@ -71,7 +79,7 @@ test('无评分任务首次生成和恢复时均遵守原方案来源限制，�
               assert.match(review.prompt, /目录来源仅限原方案.md/);
               assert.doesNotMatch(review.prompt, /专业经验只能补充通用目录结构/);
             }
-            await options.continueTask(result, { ...meta, workflow_stage: 'outline_review' });
+            await submitStage(options, result, { ...meta, workflow_stage: 'outline_review' });
             return result;
           },
         },
@@ -108,11 +116,11 @@ test('首次一级目录在修复回调中拒绝空内容、损坏 JSON 和错�
         assert.equal(options.max_retries, 1);
         const validate = (output_content) => options.validateOutput({ output_content });
         for (const content of [undefined, '', ' \n\t']) {
-          assert.throws(() => validate(content), /outline\.json 未生成或内容为空/);
+          assert.throws(() => validate(content), /outline\.json 未写入或内容为空/);
         }
         assert.throws(() => validate('{"outline":['), /outline\.json不是合法 JSON/);
         for (const value of [null, {}, { outline: [] }, { outline: [{ id: '1', title: '实施方案' }] }]) {
-          assert.throws(() => validate(JSON.stringify(value)), /outline\.json 不符合目录结构要求/);
+          assert.throws(() => validate(JSON.stringify(value)), /outline\.json 不符合结构要求/);
         }
         const valid = { outline: [{ id: null, title: '实施方案', description: '实施安排', attr: '技术', content_mode: 'ai-generate' }] };
         const accepted = validate(JSON.stringify(valid));
@@ -302,8 +310,9 @@ test('独立成册末级小节目标至少覆盖每个技术分支', () => {
 test('最终审核直接收到四份完整最新材料，与写回文件一致，覆盖直接审核及数量确认后的审核', async () => {
   for (const acceptLeafDifference of [false, true]) {
     let root = { id: randomUUID(), number: '1', title: '技术方案', description: '技术响应', attr: '技术', content_mode: 'ai-generate' };
+    const { content_mode, ...branchRoot } = root;
     const latestOutline = { outline: [{
-      ...root, title: '最新技术方案',
+      ...branchRoot, title: '最新技术方案',
       children: ['评分项一', '评分项二'].map((title, index) => ({
         id: null, title, description: '最新目录说明', content_mode: 'ai-generate',
       })),
@@ -333,6 +342,9 @@ test('最终审核直接收到四份完整最新材料，与写回文件一致�
         async runTask(request) {
           assert.equal(request.initial_stage, 'score-planning', '存在评分项时不能被无评分确认标记改变流程');
           const workspace = new Map(request.files.map((file) => [file.path, file.content]));
+          workspace.set('technical-score-groups.json', JSON.stringify({ groups: ['评分项一', '评分项二'].map((title, index) => ({
+            requirement_id: `R${index + 1}`, title, description: title, detail_points: [title],
+          })) }));
           workspace.set('score-directory-plan.json', JSON.stringify({
             allow_root_changes: true, extra_titles: [],
             branches: [{
@@ -350,23 +362,23 @@ test('最终审核直接收到四份完整最新材料，与写回文件一致�
             },
             writeFiles: async (files) => files.forEach((file) => workspace.set(file.path, file.content)),
           };
-          const children = await request.continueTask({ output_content: workspace.get('outline.json') }, meta);
+          const children = await submitStage(request, { output_content: workspace.get('outline.json') }, meta);
           assert.equal(children.stage, 'children_generation');
           await meta.writeFiles(children.files);
           workspace.set('技术评分信息.md', latestScore);
           let candidate = { output_content: JSON.stringify(latestOutline) };
-          let review = await request.continueTask(candidate, { ...meta, workflow_stage: 'children_generation' });
+          let review = await submitStage(request, candidate, { ...meta, workflow_stage: 'children_generation' });
           if (acceptLeafDifference) {
             assert.equal(review.stage, 'leaf_adjustment');
             await meta.writeFiles(review.files);
             candidate = { output_content: workspace.get('outline.json') };
-            review = await request.continueTask(candidate, {
+            review = await submitStage(request, candidate, {
               ...meta, workflow_stage: 'leaf_adjustment',
               user_question_answers: [{ workflow_stage: 'leaf_adjustment', selected_option: '接受当前结果' }],
             });
           }
           assert.equal(review.stage, 'outline_review');
-          assert.deepEqual(reads, ['score-directory-plan.json', '技术评分信息.md']);
+          assert.deepEqual(reads, ['technical-score-groups.json', 'score-directory-plan.json', '技术评分信息.md']);
           assert.doesNotMatch(review.prompt, /开始审核时一次性并行读取|任务开始时的旧评分内容/);
           assert.match(review.prompt, /请直接开始审核，无需重复读取这些文件/);
           assert.equal((review.prompt.match(/【文件开始：/g) || []).length, 4);
@@ -383,7 +395,7 @@ test('最终审核直接收到四份完整最新材料，与写回文件一致�
           assert.equal(JSON.parse(workspace.get('outline-review-context.json')).leaf_count.current_ai_generate, 2);
           workspace.set('outline-review.json', JSON.stringify({ status: 'passed', issues: [], user_feedback: '', summary: '审核通过' }));
           const result = { output_content: workspace.get('outline.json') };
-          assert.deepEqual(await request.continueTask(result, { ...meta, workflow_stage: 'outline_review' }), { complete: true });
+          assert.deepEqual(await submitStage(request, result, { ...meta, workflow_stage: 'outline_review' }), { complete: true });
           reviews += 1;
           return result;
         },
@@ -392,6 +404,144 @@ test('最终审核直接收到四份完整最新材料，与写回文件一致�
     assert.equal(reviews, 1);
     assert.equal(task.status, 'success');
   }
+});
+
+// 在内存工作区检查真实阶段回调，检查结束后停止，不调用模型或业务存储。
+async function inspectDirectoryStages({ rootCount = 1, wordTarget = false } = {}, inspect) {
+  const roots = Array.from({ length: rootCount }, (_, index) => ({
+    id: randomUUID(), title: `技术分支${index + 1}`, description: '实施安排', attr: '技术', content_mode: 'ai-generate',
+  }));
+  let task = { task_id: '阶段产物检查', stats: {} };
+  const finished = new Error('阶段检查完成');
+  await assert.rejects(runOutlineGenerationTaskV2({
+    workspaceStore: { loadTechnicalPlan: () => ({
+      techRequirements: '技术评分材料', bidAnalysisTasks: { techRequirements: { status: 'success', content: '技术评分材料' } },
+    }) },
+    updateTask: patch => (task = { ...task, ...patch }),
+    checkpointTask: patch => ({ task: (task = { ...task, ...patch }) }),
+    taskControl: { signal: new AbortController().signal, waitForOutlineSelection: async () => ({ items: roots, selectedIds: roots.map(root => root.id) }) },
+    payload: { agent_resume: { phase: 'outline-selection' }, word_control_options: wordTarget ? { minimumWords: 12000, maximumWords: 12000, sectionWords: 3000 } : {} },
+    agentService: {
+      updatePersistentTask() {},
+      async runTask(request) {
+        const workspace = new Map(request.files.map(file => [file.path, file.content]));
+        workspace.set('technical-score-groups.json', JSON.stringify({ groups: roots.map((root, index) => ({
+          requirement_id: `R${index + 1}`, title: root.title, description: root.description, detail_points: ['实施内容'],
+        })) }));
+        workspace.set('score-directory-plan.json', JSON.stringify({ allow_root_changes: false, extra_titles: [], branches: roots.map((root, index) => ({
+          root_id: root.id, root_title: root.title, score_item_level: 1, mappings: [{ requirement_id: `R${index + 1}`, target_title: root.title }],
+        })) }));
+        const meta = {
+          workflow_stage: request.initial_stage, user_question_answers: [],
+          readFile: async file => workspace.get(file),
+          writeFiles: async files => files.forEach(file => workspace.set(file.path, file.content)),
+        };
+        await inspect({ request, workspace, meta, roots });
+        throw finished;
+      },
+    },
+  }), error => error === finished);
+}
+
+test('阶段产物校验逐个指出缺失、空白、非法 JSON 和结构错误，评分双文件错误一次汇总', async () => {
+  await inspectDirectoryStages({}, async ({ request, workspace, meta, roots }) => {
+    assert.equal(request.max_retries, 1);
+    workspace.set('leaf-allocation.json', JSON.stringify({ mode: 'allocated', target_ai_leaf_count: 2, fixed_ai_leaf_count: 0, allocatable_ai_leaf_count: 2, allocations: [{ root_id: roots[0].id, leaf_count: 2 }] }));
+    workspace.set('outline-review.json', JSON.stringify({ status: 'passed', issues: [], user_feedback: '', summary: '审核通过' }));
+    const stages = {
+      'score-planning': ['technical-score-groups.json', 'score-directory-plan.json'],
+      leaf_allocation: ['leaf-allocation.json'],
+      children_generation: ['outline.json'],
+      leaf_adjustment: ['outline.json'],
+      outline_review: ['outline.json', 'outline-review.json'],
+    };
+    for (const [workflow_stage, files] of Object.entries(stages)) {
+      for (const file of files) {
+        const valid = workspace.get(file);
+        for (const [content, message] of [[undefined, '未写入或内容为空'], [' \r\n\t', '未写入或内容为空'], ['{', '不是合法 JSON'], ['{}', '不符合结构要求']]) {
+          workspace.set(file, content);
+          await assert.rejects(request.validateOutput({ output_content: workspace.get('outline.json') }, { ...meta, workflow_stage }), error => {
+            assert.ok(error.message.includes(file), `${workflow_stage} 应指明 ${file}`);
+            assert.ok(error.message.includes(message));
+            return true;
+          });
+        }
+        workspace.set(file, valid);
+      }
+      await request.validateOutput({ output_content: workspace.get('outline.json') }, { ...meta, workflow_stage });
+    }
+    workspace.delete('technical-score-groups.json');
+    workspace.delete('score-directory-plan.json');
+    await assert.rejects(request.validateOutput({ output_content: workspace.get('outline.json') }, meta), error => {
+      assert.match(error.message, /technical-score-groups\.json.*\nscore-directory-plan\.json/);
+      error.agentValidationFailed = true;
+      const prompt = request.buildRetryPrompt(error, meta);
+      assert.match(prompt, /当前 Session 修复一轮/);
+      assert.ok(prompt.includes(error.message));
+      assert.match(prompt, /已通过的文件保留/);
+      assert.match(prompt, /不要重复询问已确认事项/);
+      return true;
+    });
+    assert.equal(request.buildRetryPrompt(new Error('网络错误'), meta), null);
+  });
+});
+
+test('仅多技术分支且有字数目标时预建 AI 分配文件，其他分支由程序提供分配结果', async () => {
+  for (const rootCount of [1, 2]) {
+    for (const wordTarget of [false, true]) {
+      await inspectDirectoryStages({ rootCount, wordTarget }, async ({ request, workspace, meta, roots }) => {
+        assert.deepEqual(request.prepare_output_files, ['technical-score-groups.json', 'score-directory-plan.json']);
+        let transition = await submitStage(request, { output_content: workspace.get('outline.json') }, meta);
+        if (rootCount > 1 && wordTarget) {
+          assert.equal(transition.stage, 'leaf_allocation');
+          assert.deepEqual(transition.prepare_output_files, ['leaf-allocation.json']);
+          const context = JSON.parse(transition.files.find(file => file.path === 'leaf-allocation-context.json').content);
+          assert.equal(context.target_ai_leaf_count, 4);
+          workspace.set('leaf-allocation.json', JSON.stringify({ ...context, technical_branches: undefined, allocations: roots.map(root => ({ root_id: root.id, leaf_count: 2 })) }));
+          transition = await submitStage(request, { output_content: workspace.get('outline.json') }, { ...meta, workflow_stage: 'leaf_allocation' });
+        }
+        assert.equal(transition.stage, 'children_generation');
+        assert.deepEqual(transition.prepare_output_files || [], []);
+        const allocation = JSON.parse(transition.files.find(file => file.path === 'leaf-allocation.json').content);
+        assert.equal(allocation.mode, wordTarget ? 'allocated' : 'agent-decides');
+        assert.equal(allocation.allocations.length, rootCount);
+        assert.equal(allocation.target_ai_leaf_count, wordTarget ? 4 : null);
+      });
+    }
+  }
+});
+
+test('阶段校验拒绝未知和重复节点，交接沿用校验分配的身份，审核文件缺失时不能通过', async () => {
+  await inspectDirectoryStages({}, async ({ request, workspace, meta, roots }) => {
+    await submitStage(request, { output_content: workspace.get('outline.json') }, meta);
+    const childrenMeta = { ...meta, workflow_stage: 'children_generation' };
+    for (const [outline, reason] of [[[{ ...roots[0], id: randomUUID() }], '未知 ID'], [[roots[0], roots[0]], '重复']]) {
+      await assert.rejects(request.validateOutput({ output_content: JSON.stringify({ outline }) }, childrenMeta), error => {
+        assert.match(error.message, /outline\.json 节点身份不符合要求/);
+        assert.ok(error.message.includes(reason));
+        return true;
+      });
+    }
+    const { content_mode, ...branch } = roots[0];
+    const candidate = { output_content: JSON.stringify({ outline: [{ ...branch, children: ['实施', '保障'].map(title => ({
+      id: null, title, description: title, content_mode: 'ai-generate',
+    })) }] }) };
+    const validation_result = await request.validateOutput(candidate, childrenMeta);
+    const accepted = validation_result['outline.json'];
+    const review = await request.continueTask(candidate, { ...childrenMeta, validation_result });
+    assert.equal(review.stage, 'outline_review');
+    assert.deepEqual(review.prepare_output_files, ['outline-review.json']);
+    assert.deepEqual(JSON.parse(review.files.find(file => file.path === 'outline.json').content), accepted);
+    await meta.writeFiles(review.files);
+    const finalCandidate = { output_content: workspace.get('outline.json') };
+    const reviewMeta = { ...meta, workflow_stage: 'outline_review' };
+    await assert.rejects(request.validateOutput(finalCandidate, reviewMeta), /outline-review\.json 未写入或内容为空/);
+    workspace.set('outline-review.json', JSON.stringify({ status: 'passed', issues: [], user_feedback: '', summary: '审核通过' }));
+    const reviewed = await request.validateOutput(finalCandidate, reviewMeta);
+    assert.deepEqual(reviewed['outline.json'], accepted);
+    assert.deepEqual(await request.continueTask(finalCandidate, { ...reviewMeta, validation_result: reviewed }), { complete: true });
+    assert.deepEqual(JSON.parse(workspace.get('outline.json')), accepted);
+  });
 });
 
 // 覆盖身份创建、保留及 AI 输出边界，不依赖收费模型。

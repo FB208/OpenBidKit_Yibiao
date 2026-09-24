@@ -13,6 +13,28 @@ const AGENT_FIELD_CANDIDATES_FILE = '投标模版字段候选.json';
 const AGENT_TEMPLATE_FILE = 'bid-template.docx';
 const AGENT_TEMPLATE_FIELDS_FILE = 'bid-template-fields.json';
 const DEFAULT_TIMEOUT_MS = 300000;
+const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
+  type: 'object',
+  required: ['fields', 'ignored_candidate_ids'],
+  additionalProperties: false,
+  properties: {
+    fields: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['candidate_id', 'name', 'fill_by'],
+        additionalProperties: false,
+        properties: {
+          candidate_id: { type: 'string', minLength: 1 },
+          name: { type: 'string', minLength: 1 },
+          fill_by: { type: 'string', enum: ['ai', 'manual'] },
+          instruction: { type: 'string' },
+        },
+      },
+    },
+    ignored_candidate_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
+  },
+};
 
 function createToolResult(payload, compact = false, details = payload) {
   return {
@@ -44,15 +66,7 @@ function createPiOpenXmlTool({
   bidTemplateFieldsRelativePath,
 }) {
   // 分类从模型生成的文件读取，保留原工具参数的结构校验。
-  const validateFieldSelections = new Ajv({ allErrors: true, strict: true }).compile(Type.Object({
-    fields: Type.Array(Type.Object({
-      candidate_id: Type.String({ minLength: 1 }),
-      name: Type.String({ minLength: 1 }),
-      fill_by: Type.String({ enum: ['ai', 'manual'] }),
-      instruction: Type.Optional(Type.String()),
-    }, { additionalProperties: false })),
-    ignored_candidate_ids: Type.Array(Type.String({ minLength: 1 })),
-  }, { additionalProperties: false }));
+  const validateFieldSelections = new Ajv({ allErrors: true, strict: true }).compile(TEMPLATE_FIELD_CLASSIFICATION_SCHEMA);
   return {
     name: OPENXML_TOOL_NAME,
     label: 'Open XML 助手',
@@ -293,5 +307,6 @@ function resolveChapterSources(chapters, businessSources, resolveAgentSources) {
 
 module.exports = {
   OPENXML_TOOL_NAME,
+  TEMPLATE_FIELD_CLASSIFICATION_SCHEMA,
   createPiOpenXmlTool,
 };

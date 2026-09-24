@@ -120,6 +120,20 @@ async function writeWorkspaceFilesAsync(workspaceDir, files = []) {
   }
 }
 
+// 阶段开始时预建空白产物，已有输入、输出及失败现场均不覆盖。
+async function prepareOutputFilesAsync(workspaceDir, files = []) {
+  for (const file of files) {
+    const relative = safeRelativePath(file);
+    const target = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relative), file);
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    try {
+      await fs.promises.writeFile(target, '', { encoding: 'utf-8', flag: 'wx' });
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+}
+
 async function readOutputAsync(workspaceDir, outputFile) {
   const relative = safeRelativePath(outputFile);
   const target = ensureInsideRoot(workspaceDir, path.join(workspaceDir, relative), outputFile);
@@ -775,6 +789,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     try {
       if (!persistentTask && !sharedWorkspace) await clearDirectoryAsync(workspaceDir);
       await writeWorkspaceFilesAsync(workspaceDir, payload.files || []);
+      await prepareOutputFilesAsync(workspaceDir, payload.prepare_output_files);
       await ensureStarted();
       const created = await createPiSession({
         workspaceDir,
@@ -893,6 +908,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
                 validationResult = await payload.validateOutput(candidate, {
                   attempt: attemptIndex + 1,
                   stage: stageIndex,
+                  workflow_stage: activeTask.workflow_stage,
                   max_retries: maxRetries,
                   task_id: taskId,
                   title,
@@ -900,6 +916,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
                   workspace_dir: workspaceDir,
                   session_id: session.sessionId,
                   retry_attempts: [...retryAttempts],
+                  readFile: createWorkflowMeta().readFile,
                 });
               } catch (validationError) {
                 if (validationError && typeof validationError === 'object') {
@@ -913,6 +930,15 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           } catch (error) {
             if (activeController.signal.aborted) throw activeController.signal.reason || error;
             if (attemptIndex >= maxRetries) throw error;
+            const retryPrompt = typeof payload.buildRetryPrompt === 'function'
+              ? await payload.buildRetryPrompt(error, {
+                ...createWorkflowMeta(),
+                attempt: attemptIndex + 1,
+                max_retries: maxRetries,
+                retry_attempts: [...retryAttempts],
+              })
+              : buildRetryPrompt(outputFile, error, attemptIndex + 1, maxRetries);
+            if (retryPrompt === null) throw error;
             const output = await readOutputAsync(workspaceDir, outputFile);
             retryAttempts.push(createRetrySummary(retryAttempts.length + 1, error, output.content));
             retryCount = retryAttempts.length;
@@ -924,7 +950,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               visible: true,
               activity: true,
             });
-            stagePrompt = buildRetryPrompt(outputFile, error, attemptIndex + 1, maxRetries);
+            stagePrompt = retryPrompt;
             emitMonitorEvent({
               type: 'retry',
               task_id: taskId,
@@ -940,7 +966,10 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         if (typeof payload.continueTask !== 'function') break;
         const completedStageIndex = stageIndex;
         const completedWorkflowStage = activeTask.workflow_stage;
-        const continuation = await payload.continueTask(candidate, createWorkflowMeta());
+        const continuation = await payload.continueTask(candidate, {
+          ...createWorkflowMeta(),
+          validation_result: validationResult,
+        });
         if (!continuation || continuation.complete === true || !continuation.prompt) break;
         emitMonitorEvent({
           type: 'task_output',
@@ -956,6 +985,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         if (continuationFiles.length) {
           await writeWorkspaceFilesAsync(workspaceDir, continuationFiles);
         }
+        await prepareOutputFilesAsync(workspaceDir, continuation.prepare_output_files);
         stageIndex = Number.isFinite(Number(continuation.stage_index))
           ? Number(continuation.stage_index)
           : stageIndex + 1;

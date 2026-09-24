@@ -1,11 +1,16 @@
+const Ajv = require('ajv');
 const {
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
 } = require('./outlineGenerationAgentV2Config.cjs');
+const { TEMPLATE_FIELD_CLASSIFICATION_SCHEMA } = require('./pi/piOpenXmlTool.cjs');
 
 const TEMPLATE_FIELDS_OUTPUT_FILE = 'bid-template-fields.json';
 const TEMPLATE_OUTLINE_INPUT_FILE = '已确认一级目录.json';
 const TEMPLATE_CLASSIFICATION_FILE = '投标模版字段分类.json';
+const ajv = new Ajv({ allErrors: true, strict: true });
+const validateClassification = ajv.compile(TEMPLATE_FIELD_CLASSIFICATION_SCHEMA);
 
+// 明确分类文件与工具生成产物的职责，以及本阶段完成条件。
 function createTemplateExtractionPrompt(sourcePaths = []) {
   const sourceList = sourcePaths.length
     ? sourcePaths.map((item) => `- ${item}`).join('\n')
@@ -13,6 +18,8 @@ function createTemplateExtractionPrompt(sourcePaths = []) {
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。
 
 任务：根据用户已确认且处理模式为“模板填写”的一级目录，从招标 Word 原件抽取投标模版，识别模版中需要填写的位置，并写入 Word 内容控件和字段清单。本任务只提取和标记，不生成任何字段值，也不填写模版。
+
+必须完成的产物：当前工作目录根目录中的 ${TEMPLATE_CLASSIFICATION_FILE}、bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE}。程序会为尚不存在的分类文件预建空文件；空文件不算完成，首次填充必须使用 write 写入完整 JSON，已有内容修正可用 edit 或 write。必须使用上述精确文件名，不得改名、移到子目录或仅在回复中输出。分类文件由你填写，最终 Word 和字段清单必须由 openxml 的 apply-template-fields 生成，不得手工写入。全部产物有效后才允许结束任务。
 
 当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 只包含最终确认的“模板填写”目录，本任务必须只以该文件作为抽取范围依据，不得处理目录生成、人工填写、AI 生成或其他模式目录。
 
@@ -32,6 +39,7 @@ ${sourceList}
 10. apply-template-fields 已内置分类校验、Word 校验及产物检查，成功后程序自动结束任务，无需 task_complete。失败时继续修复，不得结束任务；成功后不再检查文件、重复应用字段或输出总结。`;
 }
 
+// 将模板工具绑定到当前业务工作区的原件和输出位置。
 function buildOpenXmlToolOptions(workspaceStore, openXmlHelperService) {
   return {
     openXmlHelperService,
@@ -46,6 +54,7 @@ function buildOpenXmlToolOptions(workspaceStore, openXmlHelperService) {
   };
 }
 
+// 提取模板并检查分类、Word 和字段清单，产物失败时在原会话修复一次。
 async function runTemplateExtractionTask({
   agentService,
   workspaceStore,
@@ -69,6 +78,7 @@ async function runTemplateExtractionTask({
     is_final_tool_call: (call) => call.name === 'openxml' && call.arguments?.action === 'apply-template-fields',
     prompt: createTemplateExtractionPrompt(sourcePaths),
     output_file: TEMPLATE_FIELDS_OUTPUT_FILE,
+    prepare_output_files: [TEMPLATE_CLASSIFICATION_FILE],
     files: [{
       path: TEMPLATE_OUTLINE_INPUT_FILE,
       content: JSON.stringify({ outline }, null, 2),
@@ -81,22 +91,46 @@ async function runTemplateExtractionTask({
     initial_stage: 'template-extraction',
     initial_stage_index: 0,
     open_xml_tool: buildOpenXmlToolOptions(workspaceStore, openXmlHelperService),
-    max_retries: 0,
+    max_retries: 1,
     onActivity,
     onCheckpoint,
-    validateOutput(candidate) {
+    buildRetryPrompt(error) {
+      if (error?.agentValidationFailed !== true) return null;
+      return `投标模版提取的必需产物尚未全部有效：\n${error.message}\n请保留当前工作区已有结果，只修复上述问题。必须在当前工作目录根目录中将完整分类写入 ${TEMPLATE_CLASSIFICATION_FILE}，不得改名或另存到其他目录；空文件首次用 write 填充，已有内容用 edit 或 write 修复。然后调用 openxml，参数为 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}，由工具生成 bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE}，不得手工写入最终 Word 或字段清单。分类及全部正式产物有效后才能结束。`;
+    },
+    async validateOutput(candidate, meta) {
+      const issues = [];
+      const classificationContent = String(await meta.readFile(TEMPLATE_CLASSIFICATION_FILE) || '').trim();
+      if (!classificationContent) {
+        issues.push(`${TEMPLATE_CLASSIFICATION_FILE} 未生成或内容为空，请写入完整分类 JSON`);
+      } else {
+        try {
+          const classification = JSON.parse(classificationContent);
+          if (!validateClassification(classification)) {
+            issues.push(`${TEMPLATE_CLASSIFICATION_FILE} 结构无效：${ajv.errorsText(validateClassification.errors, { dataVar: TEMPLATE_CLASSIFICATION_FILE })}`);
+          }
+        } catch (error) {
+          issues.push(`${TEMPLATE_CLASSIFICATION_FILE} 不是合法 JSON：${error?.message || String(error)}`);
+        }
+      }
       if (!workspaceStore.hasBidTemplate()) {
-        throw new Error('投标模版和字段清单尚未同时生成');
+        issues.push(`bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE} 尚未同时生成，请通过 openxml 的 apply-template-fields 生成`);
       }
       let payload;
-      try {
-        payload = JSON.parse(String(candidate.output_content || '').trim());
-      } catch (error) {
-        throw new Error(`投标模版字段清单不是合法 JSON：${error?.message || String(error)}`);
+      const outputContent = String(candidate.output_content || '').trim();
+      if (!outputContent) {
+        issues.push(`${TEMPLATE_FIELDS_OUTPUT_FILE} 未生成或内容为空，请通过 openxml 的 apply-template-fields 生成`);
+      } else {
+        try {
+          payload = JSON.parse(outputContent);
+          if (payload?.version !== 1 || !Array.isArray(payload?.fields)) {
+            issues.push(`${TEMPLATE_FIELDS_OUTPUT_FILE} 结构无效`);
+          }
+        } catch (error) {
+          issues.push(`${TEMPLATE_FIELDS_OUTPUT_FILE} 不是合法 JSON：${error?.message || String(error)}`);
+        }
       }
-      if (payload?.version !== 1 || !Array.isArray(payload?.fields)) {
-        throw new Error('投标模版字段清单结构无效');
-      }
+      if (issues.length) throw new Error(issues.join('\n'));
       return { field_count: payload.fields.length };
     },
   });

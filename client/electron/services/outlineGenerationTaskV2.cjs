@@ -14,6 +14,14 @@ const LEAF_ALLOCATION_FILE = 'leaf-allocation.json';
 const LEAF_ALLOCATION_CONTEXT_FILE = 'leaf-allocation-context.json';
 const OUTLINE_REVIEW_FILE = 'outline-review.json';
 const OUTLINE_REVIEW_CONTEXT_FILE = 'outline-review-context.json';
+const STAGE_OUTPUT_FILES = {
+  'initial-outline': [OUTLINE_OUTPUT_FILE],
+  'score-planning': [TECHNICAL_SCORE_GROUPS_FILE, SCORE_DIRECTORY_PLAN_FILE],
+  leaf_allocation: [LEAF_ALLOCATION_FILE],
+  children_generation: [OUTLINE_OUTPUT_FILE],
+  leaf_adjustment: [OUTLINE_OUTPUT_FILE],
+  outline_review: [OUTLINE_OUTPUT_FILE, OUTLINE_REVIEW_FILE],
+};
 const AI_CONTENT_MODE = 'ai-generate';
 const OUTLINE_ATTRIBUTES = ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'];
 const CONTENT_MODES = ['ai-generate', 'template-fill', 'directory-generate', 'manual-fill', 'other'];
@@ -446,6 +454,17 @@ function readJson(content, label) {
   }
 }
 
+// 所有阶段共用同一份必需文件清单，保持提示词与程序读取位置一致。
+function createOutputFileRequirements(stage) {
+  return `本阶段必需文件：${STAGE_OUTPUT_FILES[stage].join('、')}。程序已在当前工作目录根目录准备好这些文件，你只负责填入或修改内容，不要自行创建其他位置的副本、改名或删除文件。空白文件首次填入请使用 write；已有目录必须保留用户确认的内容和节点 ID。所有必需文件都必须包含完整、有效且符合 Schema 的纯 JSON；空文件不算完成，只在回复中输出 JSON 不算写入。全部文件写入并通过校验后才能结束本阶段。`;
+}
+
+// 仅将产物校验失败交回当前 Session 修复，不重跑用户确认和阶段交接。
+function createOutputRepairPrompt(error, meta) {
+  if (!error?.agentValidationFailed) return null;
+  return `本阶段产物校验失败，请在当前 Session 修复一轮：\n${error.message}\n\n${createOutputFileRequirements(meta.workflow_stage)}\n沿用已有材料和用户确认结果，只修复上述问题；已通过的文件保留，不要重复询问已确认事项。`;
+}
+
 function normalizeReferenceDocumentIds(storedPlan) {
   const ids = storedPlan?.referenceKnowledgeDocumentIds || [];
   return Array.isArray(ids) ? [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))] : [];
@@ -478,6 +497,7 @@ function createInitialPrompt(taskInstruction, { standaloneTechnical = false, noT
     : `6. 每个一级目录当前都是叶子节点，必须根据属性和后续处理方式填写 content_mode：技术方案正文使用 ai-generate；attr=商务/资信或业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时必须使用 manual-fill；无法归类的特殊内容使用 other，并在 content_mode_note 说明原因。
 7. 完整结构示例：{"outline":[{"id":null,"title":"投标文件目录","description":"投标文件目录说明","attr":"目录","content_mode":"directory-generate"},{"id":null,"title":"技术方案","description":"技术方案目录说明","attr":"技术","content_mode":"ai-generate"},{"id":null,"title":"投标报价","description":"投标报价目录说明","attr":"报价","content_mode":"manual-fill"}]}。content_mode_note 只在 content_mode=other 且确有说明时填写。`;
   return `请只在当前工作目录内工作。
+${createOutputFileRequirements('initial-outline')}
 
 任务：
 ${goal}
@@ -505,6 +525,7 @@ function createNoTechnicalScoreChildrenPrompt({ targetLeafCount, standaloneTechn
     ? '所有一级目录均属于技术文件，只生成技术方案正文相关的二级及以下目录。'
     : '只扩展 attr=技术 且 content_mode=ai-generate 的一级目录；其他一级目录保持原样，不得增加子目录。';
   return `用户已确认招标文件没有技术评分项，请直接根据确定的无技术评分项规则生成完整目录，不要判断是否存在评分项，也不要创建评分清单或评分映射。
+${createOutputFileRequirements('children_generation')}
 
 请阅读 ${OUTLINE_OUTPUT_FILE}、${originalOnly ? '原方案.md' : '响应文件要求.md、项目概述.md，以及存在的原方案.md 和参考知识库目录'}，然后覆盖写回 ${OUTLINE_OUTPUT_FILE}。
 
@@ -524,6 +545,7 @@ function createLeafAllocationPrompt({ standaloneTechnical = false } = {}) {
     ? '优先为每个目录分配至少 2 个；总目标不足时允许部分目录分配 1 个，表示保留一级目录本身作为叶子且不生成 children。除 1 以外不得分配少于 2 个，禁止形成只有一个子节点的冗余层级。'
     : '每个目录至少分配 2 个。';
   return `请继续使用当前 Pi Session 已读取的技术评分信息、知识库、原方案和目录规划，为多个技术一级目录分配“AI生成”叶子数量。
+${createOutputFileRequirements('leaf_allocation')}
 
 要求：
 1. 阅读 ${OUTLINE_OUTPUT_FILE}、${TECHNICAL_SCORE_GROUPS_FILE}、${SCORE_DIRECTORY_PLAN_FILE} 和 ${LEAF_ALLOCATION_CONTEXT_FILE}。
@@ -548,6 +570,7 @@ function createScorePlanningPrompt({ standaloneTechnical = false } = {}) {
     ? `{"branches":[{"root_id":"从当前目录复制根节点ID","root_title":"评分大项一","score_item_level":1,"mappings":[{"requirement_id":"R1","target_title":"评分大项一"}]}],"extra_titles":[],"allow_root_changes":false}`
     : `{"branches":[{"root_id":"从当前目录复制根节点ID","root_title":"技术方案","score_item_level":2,"mappings":[{"requirement_id":"R1","target_title":"评分大项目录标题","additional_titles":["经批准拆分出的同级标题"],"adjustment_note":"用户批准的调整说明"}]}],"extra_titles":[{"root_id":"从当前目录复制根节点ID","title":"经批准增加的同层级标题","reason":"增加原因"}],"allow_root_changes":false}`;
   return `用户已经确认最终保留的一级目录，${OUTLINE_OUTPUT_FILE} 已由程序重新整理并编号。工作区也已加入技术评分信息和用户选择的参考资料。
+${createOutputFileRequirements('score-planning')}
 
 请完成技术评分项结构化和目录规划：
 1. 阅读 ${OUTLINE_OUTPUT_FILE}、技术评分信息.md，以及存在的原方案.md 和参考知识库目录。
@@ -584,6 +607,7 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
     ? `{"outline":[{"id":null,"title":"评分大项一","description":"评分大项说明","attr":"技术","children":[{"id":null,"title":"响应内容一","description":"具体响应内容","content_mode":"ai-generate"},{"id":null,"title":"响应内容二","description":"具体响应内容","content_mode":"ai-generate"}]}]}`
     : `{"outline":[{"id":null,"title":"投标文件目录","description":"投标文件目录说明","attr":"目录","content_mode":"directory-generate"},{"id":null,"title":"技术方案","description":"技术方案说明","attr":"技术","children":[{"id":null,"title":"评分大项","description":"评分大项说明","children":[{"id":null,"title":"具体方案一","description":"具体方案说明","content_mode":"ai-generate"},{"id":null,"title":"具体方案二","description":"具体方案说明","content_mode":"ai-generate"}]},{"id":null,"title":"另一评分大项","description":"评分大项说明","content_mode":"ai-generate"}]}]}`;
   return `请继续使用当前上下文，为 ${OUTLINE_OUTPUT_FILE} 生成完整目录。生成方式和处理顺序由你自主决定，但必须严格遵循评分项目录规划。
+${createOutputFileRequirements('children_generation')}
 
 要求：
 1. ${branchInstruction}
@@ -613,6 +637,7 @@ function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount, { noTechni
 3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、directory-generate、manual-fill 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
 4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，已有节点必须保留 id，新节点 id 填 null，number 由程序计算；技术一级目录的 id 必须与 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 root_id 一致，不能因增删、移动或重新编号而改变；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。`;
   return `程序计算当前完整目录共有 ${actualLeafCount} 个“AI生成”叶子节点，目标是 ${targetLeafCount} 个。
+${createOutputFileRequirements('leaf_adjustment')}
 
 请先调用一次 ask-user，说明目标数、当前数、差距及目录质量影响，只能按以下顺序提供三个固定选项，不得改名、增删或调整顺序：
 1. “接受当前结果”，custom=false：保持当前目录并进入最终审核。
@@ -632,6 +657,7 @@ function createNoTechnicalScoreReviewPrompt({ targetLeafCount, actualLeafCount, 
     ? ''
     : `\n- “AI生成”叶子数量：程序计算目标为 ${targetLeafCount} 个，当前为 ${actualLeafCount} 个，可接受范围为 ${Math.max(1, targetLeafCount - 2)} 至 ${targetLeafCount + 2} 个。`;
   return `请对当前无技术评分项模式生成的完整技术方案目录执行最终审核，并在用户确认后完成必要修复。
+${createOutputFileRequirements('outline_review')}
 
 以下已提供本阶段最新完整材料，请直接开始审核，无需重复读取这些文件；不要探索工作区或读取评分相关文件。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，直接采用其中的叶子数量和结构检查，不要重新统计或编写脚本。用户已确认招标文件没有技术评分项，不要判断、补造或检查评分项。
 
@@ -663,6 +689,7 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
     ? `一级目录只能保持用户已批准的 ${SCORE_DIRECTORY_PLAN_FILE} 规划，不得提出规划之外的新调整。`
     : '一级目录已经由用户确认，数量、顺序、标题、描述和属性不得修改。';
   return `请对当前完整技术方案目录执行最终审核，并在用户确认后完成必要修复。
+${createOutputFileRequirements('outline_review')}
 
 以下已提供 ${OUTLINE_REVIEW_CONTEXT_FILE}、${OUTLINE_OUTPUT_FILE}、技术评分信息.md 和 ${SCORE_DIRECTORY_PLAN_FILE} 在本阶段开始时的最新完整内容，请直接开始审核，无需重复读取这些文件；不要探索工作区或读取其他文件。后续修改文件后，以修改后的内容为准。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，叶子数量、内容模式数量、最大层级、父节点数量、单子节点和评分节点机械映射均直接采用其中结果，不要重新统计、编写脚本或执行额外结构检查；你只负责评分语义覆盖、近义重复和专业合理性审核。
 
@@ -733,6 +760,45 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     } : {}),
     [OUTLINE_REVIEW_FILE]: OUTLINE_REVIEW_SCHEMA,
   };
+  const ajv = new Ajv({ allErrors: true, strict: true });
+  const outputValidators = Object.fromEntries(
+    Object.entries(jsonValidationSchemas).map(([file, schema]) => [file, ajv.compile(schema)]),
+  );
+
+  // 对必需文件执行非空、JSON 和已有结构校验；占位文件不能视为产物。
+  function validateOutputFile(content, file) {
+    if (!String(content || '').trim()) throw new Error(`${file} 未写入或内容为空，请写入完整的 JSON`);
+    const generated = readJson(content, file);
+    const validate = outputValidators[file];
+    if (!validate(generated)) {
+      throw new Error(`${file} 不符合结构要求：${ajv.errorsText(validate.errors, { dataVar: file })}`);
+    }
+    return generated;
+  }
+
+  // 在运行时修复循环内检查全部阶段产物，通过后才交接并更新业务状态。
+  async function validateStageOutputs(candidate, meta) {
+    const outputs = {};
+    const errors = [];
+    for (const file of STAGE_OUTPUT_FILES[meta.workflow_stage]) {
+      try {
+        outputs[file] = validateOutputFile(
+          file === OUTLINE_OUTPUT_FILE ? candidate.output_content : await meta.readFile(file), file,
+        );
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
+    if (errors.length) throw new Error(errors.join('\n'));
+    if (outputs[OUTLINE_OUTPUT_FILE]) {
+      try {
+        outputs[OUTLINE_OUTPUT_FILE] = buildFinalOutline(outputs[OUTLINE_OUTPUT_FILE], knownNodeIds);
+      } catch (error) {
+        throw new Error(`${OUTLINE_OUTPUT_FILE} 节点身份不符合要求：${error.message}`);
+      }
+    }
+    return outputs;
+  }
 
   let initialFiles;
   let taskInstruction;
@@ -928,6 +994,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     });
     return {
       stage: 'outline_review',
+      prepare_output_files: [OUTLINE_REVIEW_FILE],
       message: 'Agent 正在审核并修复目录',
       prompt: noTechnicalScoreMode
         ? createNoTechnicalScoreReviewPrompt({ targetLeafCount, actualLeafCount, originalOnly, inputFiles: [...files, ...reviewMaterials] })
@@ -937,10 +1004,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   }
 
   if (!restoringOutlineSelection) {
-    const ajv = new Ajv({ allErrors: true, strict: true });
-    const validateOutline = ajv.compile(OUTLINE_JSON_SCHEMA);
     updateAgentState({ status: 'running', phase: 'initial-outline', agent_connection: 'running', session_file: '' });
-    let acceptedInitialOutline;
     const initialResult = await agentService.runTask({
       task_id: task.task_id,
       title: '技术方案一级目录生成',
@@ -948,6 +1012,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       auto_validate_json: true,
       prompt: createInitialPrompt(taskInstruction, { standaloneTechnical, noTechnicalScoreMode }),
       output_file: OUTLINE_OUTPUT_FILE,
+      prepare_output_files: [OUTLINE_OUTPUT_FILE],
       files: initialFiles,
       signal: taskControl.signal,
       persistent_task: {
@@ -958,21 +1023,14 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       initial_stage_index: 0,
       json_validation_schemas: jsonValidationSchemas,
       max_retries: 1,
+      buildRetryPrompt: createOutputRepairPrompt,
       // 在当前 Session 的修复循环内校验一级目录，通过后才进入用户确认。
       validateOutput(candidate) {
-        if (!String(candidate.output_content || '').trim()) {
-          throw new Error(`${OUTLINE_OUTPUT_FILE} 未生成或内容为空，请写入完整的一级目录 JSON`);
-        }
-        const generated = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
-        if (!validateOutline(generated)) {
-          throw new Error(`${OUTLINE_OUTPUT_FILE} 不符合目录结构要求：${ajv.errorsText(validateOutline.errors, { dataVar: OUTLINE_OUTPUT_FILE })}`);
-        }
-        acceptedInitialOutline = buildFinalOutline(generated);
-        return acceptedInitialOutline;
+        return buildFinalOutline(validateOutputFile(candidate.output_content, OUTLINE_OUTPUT_FILE));
       },
       // 将正式身份写回会话，确认和后续任务使用同一份目录。
       async continueTask(_candidate, meta) {
-        await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(acceptedInitialOutline, null, 2) }]);
+        await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(meta.validation_result, null, 2) }]);
         return { complete: true };
       },
       onActivity: publishAgentActivity,
@@ -1088,6 +1146,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       ? createNoTechnicalScoreChildrenPrompt({ targetLeafCount, standaloneTechnical, originalOnly })
       : createScorePlanningPrompt({ standaloneTechnical }),
     output_file: OUTLINE_OUTPUT_FILE,
+    prepare_output_files: noTechnicalScoreMode ? [] : STAGE_OUTPUT_FILES['score-planning'],
     files: noTechnicalScoreMode
       ? [
           { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
@@ -1106,15 +1165,15 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     initial_stage: directoryStage,
     initial_stage_index: 2,
     json_validation_schemas: jsonValidationSchemas,
-    max_retries: 0,
+    max_retries: 1,
+    buildRetryPrompt: createOutputRepairPrompt,
+    validateOutput: validateStageOutputs,
     onActivity: publishAgentActivity,
     onCheckpoint: syncAgentCheckpoint,
     continueTask: async (candidate, meta) => {
       if (meta.workflow_stage === 'outline_review') {
-        const reviewedOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
-        const normalizedReviewedOutline = buildFinalOutline(reviewedOutline, knownNodeIds);
-        outlineReview = readJson(await meta.readFile(OUTLINE_REVIEW_FILE), OUTLINE_REVIEW_FILE);
-        finalOutline = normalizedReviewedOutline;
+        outlineReview = meta.validation_result[OUTLINE_REVIEW_FILE];
+        finalOutline = meta.validation_result[OUTLINE_OUTPUT_FILE];
         knownNodeIds = collectOutlineIds(finalOutline.outline);
         if (!noTechnicalScoreMode) {
           scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, finalOutline.outline);
@@ -1150,7 +1209,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       }
 
       if (meta.workflow_stage === 'score-planning') {
-        scoreDirectoryPlan = readJson(await meta.readFile(SCORE_DIRECTORY_PLAN_FILE), SCORE_DIRECTORY_PLAN_FILE);
+        scoreDirectoryPlan = meta.validation_result[SCORE_DIRECTORY_PLAN_FILE];
         scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, lockedRoots);
         technicalBranches = scoreDirectoryPlan.branches.map((branch) => ({
           root_id: branch.root_id,
@@ -1175,6 +1234,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
           publish('技术方案目录已确认，Agent 正在分配 AI 生成小节', 50);
           return {
             stage: 'leaf_allocation',
+            prepare_output_files: [LEAF_ALLOCATION_FILE],
             message: 'Agent 正在分配 AI 生成小节',
             prompt: createLeafAllocationPrompt({ standaloneTechnical }),
             files: [{
@@ -1196,12 +1256,11 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       }
 
       if (meta.workflow_stage === 'leaf_allocation') {
-        const allocationPayload = readJson(await meta.readFile(LEAF_ALLOCATION_FILE), LEAF_ALLOCATION_FILE);
+        const allocationPayload = meta.validation_result[LEAF_ALLOCATION_FILE];
         return continueWithChildrenGeneration(allocationPayload.allocations);
       }
 
-      const candidateOutline = readJson(candidate.output_content, OUTLINE_OUTPUT_FILE);
-      finalOutline = buildFinalOutline(candidateOutline, knownNodeIds);
+      finalOutline = meta.validation_result[OUTLINE_OUTPUT_FILE];
       knownNodeIds = collectOutlineIds(finalOutline.outline);
       if (!noTechnicalScoreMode) {
         scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, finalOutline.outline);
