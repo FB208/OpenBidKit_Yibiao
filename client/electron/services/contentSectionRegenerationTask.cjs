@@ -18,7 +18,7 @@ function findSection(items, id, prefix = '') {
 // 只提交本次小节与用户要求，资料读取由原会话中的 Agent 自行决定。
 function modificationPrompt(section, file, requirement) {
   return `本次任务是修改小节 ${section.number} ${section.title}，稳定 ID：${section.id}，文件：${file}。
-先读取该文件，再按用户要求使用原生 edit 修改，只修改这个小节。遵守原有受限 HTML 规范和全局事实设定；未要求调整的内容和图片保持不变，原方案表格和图片继续保留。需要配图时使用现有图片工具；HTML/Mermaid 源码通过 generate-image-sources 的 images 列表并发生成，每项提供唯一 image_id、kind、准确的内容与数据 prompt，HTML 另填与正文画框一致的 frame_size。源码保存为图片/下的新文件，按返回的 source_file 调用对应 render 工具；语法或布局问题由你修改源码后重新渲染，再按渲染返回的 asset_ref 引用。仅重试失败项，不覆盖已有图片文件。
+先读取该文件，再按用户要求使用原生 edit 修改，只修改这个小节。遵守原有受限 HTML 规范和全局事实设定；未要求调整的内容和图片保持不变，原方案表格和图片继续保留。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。需要配图时使用现有图片工具；HTML/Mermaid 源码通过 generate-image-sources 的 images 列表并发生成，每项提供唯一 image_id、kind、准确的内容与数据 prompt，HTML 另填与正文画框一致的 frame_size。源码保存为图片/下的新文件，按返回的 source_file 调用对应 render 工具；语法或布局问题由你修改源码后重新渲染，再按渲染返回的 asset_ref 引用。仅重试失败项，不覆盖已有图片文件。
 本次不重新编排、还原，不执行全文字数调整或一致性审计，也不修改正文生成结果.json。完成正文及所需图片后，在最后一次成功文件操作上标记 task_complete=true，程序负责转换 Word。
 用户修改要求：
 ${requirement || '保留本节实质信息、事实参数、承诺及现有图片，整理段落顺序、合并重复表述，并修正含糊或不连贯的表达。'}`;
