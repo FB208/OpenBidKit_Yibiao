@@ -433,16 +433,56 @@ async function checkTask(directory, outputDir) {
     // 首次生成前手工加目录只有 direct 标记，仍按全文分配；全文重生清除 pending，暂停复用编排。
     state = { ...state, outlineData: { outline }, outlineWordControlSnapshot: { minimumWords: 150000, maximumWords: 200000, sectionWords: 800 },
       contentGenerationPlans: {}, contentGenerationSections: {}, contentGenerationRuntime: { direct_generation_item_ids: targets.map(section => section.id) }, contentGenerationTask: null };
+    // 在实际 runner 中模拟工作区写入，核对同轮继续保留草稿，新轮清空结果。
+    const freshPlanningState = structuredClone(state);
+    const draft = '{"plans":[';
+    const planningOutput = path.join(directory, '正文编排结果.json');
+    const interruptedPlanning = new Error('模拟编排中断');
+    let hasPlanningSession = false;
+    let preserveDraft = false;
+    const interruptedAgent = { ...args.agentService,
+      hasPersistentTaskSession: () => hasPlanningSession, deletePersistentTask() {},
+      async runTask(payload) {
+        assert.equal(payload.initial_stage, 'content-planning');
+        assert.equal(payload.persistent_task.mode, hasPlanningSession ? 'resume' : 'create');
+        assert.deepEqual(payload.prepare_output_files, ['正文编排结果.json']);
+        const outputInput = payload.files.find(file => file.path === payload.output_file);
+        assert.equal(Boolean(outputInput), !preserveDraft);
+        // 复现 Runtime：输入覆盖写入，预建输出仅在不存在时创建。
+        for (const file of payload.files) fs.writeFileSync(path.join(directory, file.path), file.content, 'utf8');
+        if (!fs.existsSync(planningOutput)) fs.writeFileSync(planningOutput, '', 'utf8');
+        assert.equal(fs.readFileSync(planningOutput, 'utf8'), preserveDraft ? draft : '');
+        fs.writeFileSync(planningOutput, draft, 'utf8');
+        hasPlanningSession = true;
+        payload.onCheckpoint({ status: 'running', phase: 'content-planning', session_file: 'planning.jsonl' });
+        throw interruptedPlanning;
+      },
+    };
+    await assert.rejects(runContentGenerationTask({ ...args, agentService: interruptedAgent, payload: { regenerate: true } }), error => error === interruptedPlanning);
+    for (const request of [{ resume: true }, { retryFailedSections: true }]) {
+      preserveDraft = true;
+      state.contentGenerationTask.status = request.resume ? 'paused' : 'error';
+      await assert.rejects(runContentGenerationTask({ ...args, agentService: interruptedAgent,
+        previousState: structuredClone(state), payload: request }), error => error === interruptedPlanning);
+    }
+    preserveDraft = false;
+    state = structuredClone(freshPlanningState);
+    await assert.rejects(runContentGenerationTask({ ...args, agentService: interruptedAgent, payload: {} }), error => error === interruptedPlanning);
+    assert.equal(timers.size, 0);
+    state = freshPlanningState;
+    console.log('编排结果文件：新轮清空、同轮暂停及失败继续保留草稿检查通过。');
     let planningRuns = 0;
     const stopAtGeneration = new Error('已检查编排到生成的字数传递');
     const planningService = { ...args.agentService, hasPersistentTaskSession: () => false, deletePersistentTask() {}, async runTask(payload) {
       if (payload.initial_stage === 'content-planning') {
         planningRuns++;
         const input = JSON.parse(payload.files.find(file => file.path === '正文编排目录.json').content);
-        input.outline[0].children.forEach((node, index) => {
-          node.content_plan = { target_words: index ? 6000 : 2000, writing_focus: '施工', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 };
-        });
-        return { output_content: JSON.stringify(input) };
+        assert.equal(payload.output_file, '正文编排结果.json');
+        assert.equal(payload.files.find(file => file.path === payload.output_file).content, '', '新一轮从空白结果开始');
+        assert.ok(payload.json_validation_schemas[payload.output_file]);
+        assert.equal(payload.json_validation_schemas['正文编排目录.json'], undefined, '只对结果文件声明输出 Schema');
+        const plans = input.outline[0].children.map((node, index) => ({ id: node.id, content_plan: { target_words: index ? 6000 : 2000, writing_focus: '施工', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 } }));
+        return { output_content: JSON.stringify({ plans: plans.reverse() }) };
       }
       assert.equal(payload.initial_stage, 'generating');
       const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
@@ -483,10 +523,10 @@ async function checkTask(directory, outputDir) {
           incrementalPlanningRuns++;
           assert.match(payload.prompt, /每节 target_words 固定填 3000/);
           const input = JSON.parse(payload.files.find(file => file.path === '正文编排目录.json').content);
-          for (const node of input.outline[0].children.filter(node => addedIds.includes(node.id))) {
-            node.content_plan = { target_words: 9999, writing_focus: '新增措施', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 };
-          }
-          return { output_content: JSON.stringify(input) };
+          const plans = input.outline[0].children.filter(node => addedIds.includes(node.id)).map(node => ({
+            id: node.id, content_plan: { target_words: 9999, writing_focus: '新增措施', knowledge: { item_ids: [] }, table: { needed: false, purpose: '' }, image_suitability_score: 0 },
+          }));
+          return { output_content: JSON.stringify({ plans }) };
         }
         const input = JSON.parse(payload.files.find(file => file.path === '正文编排决策.json').content);
         assert.deepEqual(input.targets.map(section => section.id), addedIds);

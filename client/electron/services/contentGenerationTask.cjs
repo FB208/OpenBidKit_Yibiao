@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const Ajv = require('ajv');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
@@ -21,10 +22,10 @@ const INTERRUPTED_SECTION_ERROR = '上次生成被中断，请继续生成。';
 const CONTENT_GENERATION_PAUSED = 'CONTENT_GENERATION_PAUSED';
 const CONTENT_PLAN_VERSION = 6;
 const ADDED_SECTION_TARGET_WORDS = 3000;
-const CONTENT_PLANNING_OUTPUT_FILE = '正文编排目录.json';
+const CONTENT_PLANNING_OUTLINE_FILE = '正文编排目录.json';
+const CONTENT_PLANNING_OUTPUT_FILE = '正文编排结果.json';
 const CONTENT_PLANNING_KNOWLEDGE_FILE = '参考知识库轻量条目.json';
 const CONTENT_PLANNING_BID_INFO_FILE = '招标文件关键信息.md';
-const CONTENT_MODES = ['ai-generate', 'template-fill', 'directory-generate', 'manual-fill', 'other'];
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -60,70 +61,27 @@ const CONTENT_PLAN_SCHEMA = {
   },
 };
 
-function createContentPlanningNodeSchema(level, root = false) {
-  const baseProperties = {
-    id: { type: 'string', minLength: 1 },
-    number: { type: 'string', minLength: 1 },
-    title: { type: 'string', minLength: 1 },
-    description: { type: 'string', minLength: 1 },
-    ...(root ? { attr: { type: 'string', enum: ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'] } } : {}),
-  };
-  const baseRequired = ['id', 'number', 'title', 'description', ...(root ? ['attr'] : [])];
-  const aiLeafSchema = {
-    type: 'object',
-    required: [...baseRequired, 'content_mode'],
-    additionalProperties: false,
-    properties: {
-      ...baseProperties,
-      content_mode: { type: 'string', enum: ['ai-generate'] },
-      content_mode_note: { type: 'string' },
-      content_plan: CONTENT_PLAN_SCHEMA,
-    },
-  };
-  const otherLeafSchema = {
-    type: 'object',
-    required: [...baseRequired, 'content_mode'],
-    additionalProperties: false,
-    properties: {
-      ...baseProperties,
-      content_mode: { type: 'string', enum: CONTENT_MODES.filter((mode) => mode !== 'ai-generate') },
-      content_mode_note: { type: 'string' },
-    },
-  };
-  if (level >= 6) return { oneOf: [aiLeafSchema, otherLeafSchema] };
-  return {
-    oneOf: [
-      aiLeafSchema,
-      otherLeafSchema,
-      {
-        type: 'object',
-        required: [...baseRequired, 'children'],
-        additionalProperties: false,
-        properties: {
-          ...baseProperties,
-          children: {
-            type: 'array',
-            minItems: 1,
-            items: createContentPlanningNodeSchema(level + 1),
-          },
-        },
-      },
-    ],
-  };
-}
-
 const CONTENT_PLANNING_JSON_SCHEMA = {
   type: 'object',
-  required: ['outline'],
+  required: ['plans'],
   additionalProperties: false,
   properties: {
-    outline: {
+    plans: {
       type: 'array',
-      minItems: 1,
-      items: createContentPlanningNodeSchema(1, true),
+      items: {
+        type: 'object',
+        required: ['id', 'content_plan'],
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          content_plan: CONTENT_PLAN_SCHEMA,
+        },
+      },
     },
   },
 };
+const contentPlanningAjv = new Ajv({ allErrors: true });
+const validateContentPlanningResult = contentPlanningAjv.compile(CONTENT_PLANNING_JSON_SCHEMA);
 
 function isAiQueueScopePausedError(error) {
   return error?.code === AI_QUEUE_SCOPE_PAUSED;
@@ -584,71 +542,38 @@ function readContentPlanningJson(content) {
   }
 }
 
-// 校验目录结构，只提取本次目标节点的编排，其他节点可尚未编排。
+// 校验模型输出，只按稳定 ID 提取本轮目标编排，不接受目录结构或非目标结果。
 function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds, targetItemIds) {
-  if (!value || !Array.isArray(value.outline)) {
-    throw new Error('正文编排结果缺少完整 outline');
+  if (!validateContentPlanningResult(value)) {
+    throw new Error(`正文编排结果格式错误：${contentPlanningAjv.errorsText(validateContentPlanningResult.errors)}`);
   }
+  const aiLeafIds = new Set(collectLeafContexts(sourceItems).filter(({ item }) => item.content_mode === 'ai-generate').map(({ item }) => item.id));
+  const expectedIds = targetItemIds || aiLeafIds;
   const plans = new Map();
-  function visit(actualItems, expectedItems, root) {
-    if (!Array.isArray(actualItems) || actualItems.length !== expectedItems.length) {
-      throw new Error('正文编排结果改变了目录节点数量');
+  for (const { id, content_plan: rawPlan } of value.plans) {
+    if (!expectedIds.has(id) || !aiLeafIds.has(id)) {
+      throw new Error(`正文编排结果包含非目标 AI 小节：${id}`);
     }
-    expectedItems.forEach((expected, index) => {
-      const actual = actualItems[index] || {};
-      const expectedChildren = normalizeChildren(expected);
-      const actualChildren = Array.isArray(actual.children) ? actual.children : [];
-      const expectedTitle = singleLine(expected?.title) || '未命名章节';
-      const expectedDescription = String(expected?.description || '').trim() || expectedTitle;
-      if (String(actual.id || '').trim() !== String(expected?.id || '').trim()
-        || actual.number !== expected.number
-        || String(actual.title || '').trim() !== expectedTitle
-        || String(actual.description || '').trim() !== expectedDescription) {
-        throw new Error(`正文编排结果修改了目录节点：${expected?.id || 'unknown'}`);
-      }
-      if (root && singleLine(actual.attr) !== (singleLine(expected?.attr) || '其他')) {
-        throw new Error(`正文编排结果修改了一级目录属性：${expected?.id || 'unknown'}`);
-      }
-      if (expectedChildren.length) {
-        if (!actualChildren.length || Object.prototype.hasOwnProperty.call(actual, 'content_plan')) {
-          throw new Error(`正文编排结果修改了分支目录：${expected?.id || 'unknown'}`);
-        }
-        visit(actualChildren, expectedChildren, false);
-        return;
-      }
-      if (actualChildren.length || String(actual.content_mode || '') !== String(expected?.content_mode || '')) {
-        throw new Error(`正文编排结果修改了目录结构或内容模式：${expected?.id || 'unknown'}`);
-      }
-      const expectedNote = String(expected?.content_mode_note || '').trim();
-      if (String(actual.content_mode_note || '').trim() !== expectedNote) {
-        throw new Error(`正文编排结果修改了内容模式说明：${expected?.id || 'unknown'}`);
-      }
-      if (expected?.content_mode !== 'ai-generate') {
-        if (Object.prototype.hasOwnProperty.call(actual, 'content_plan')) {
-          throw new Error(`正文编排结果为非 AI 目录添加了编排：${expected?.id || 'unknown'}`);
-        }
-        return;
-      }
-      if (targetItemIds && !targetItemIds.has(String(expected.id))) return;
-      const rawKnowledgeIds = actual.content_plan?.knowledge?.item_ids;
-      if (Array.isArray(rawKnowledgeIds)
-        && allowedKnowledgeItemIds instanceof Set
-        && rawKnowledgeIds.some((id) => !allowedKnowledgeItemIds.has(String(id || '').trim()))) {
-        throw new Error(`正文编排结果引用了不存在的知识库条目：${expected?.id || 'unknown'}`);
-      }
-      const plan = normalizeContentPlan(actual.content_plan, allowedKnowledgeItemIds);
-      validateContentPlan(plan);
-      if (plan.table.needed && !plan.table.purpose) {
-        throw new Error(`正文编排结果缺少表格用途：${expected?.id || 'unknown'}`);
-      }
-      if (!plan.table.needed && String(actual.content_plan?.table?.purpose || '').trim()) {
-        throw new Error(`正文编排结果为无表格目录填写了表格用途：${expected?.id || 'unknown'}`);
-      }
-      plans.set(String(expected.id), plan);
-    });
+    if (plans.has(id)) throw new Error(`正文编排结果重复提交小节：${id}`);
+    if (allowedKnowledgeItemIds instanceof Set
+      && rawPlan.knowledge.item_ids.some(itemId => !allowedKnowledgeItemIds.has(itemId))) {
+      throw new Error(`正文编排结果引用了不存在的知识库条目：${id}`);
+    }
+    const plan = normalizeContentPlan(rawPlan, allowedKnowledgeItemIds);
+    validateContentPlan(plan);
+    if (plan.table.needed && !plan.table.purpose) {
+      throw new Error(`正文编排结果缺少表格用途：${id}`);
+    }
+    if (!plan.table.needed && rawPlan.table.purpose.trim()) {
+      throw new Error(`正文编排结果为无表格目录填写了表格用途：${id}`);
+    }
+    plans.set(id, plan);
   }
-  visit(value.outline, sourceItems || [], true);
-  return plans;
+  for (const id of expectedIds) {
+    if (!plans.has(id)) throw new Error(`正文编排结果缺少目标节点：${id}`);
+  }
+  // 保持程序分配字数时的目录顺序，不受模型返回数组顺序影响。
+  return new Map([...aiLeafIds].filter(id => plans.has(id)).map(id => [id, plans.get(id)]));
 }
 
 function formatContentPlanningProgress(value) {
@@ -670,30 +595,31 @@ function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, r
       : `表格需求为“${tableRequirementLabel}”，全文共 ${totalSections || 0} 个 AI 生成小节，表格上限为 ${maxTables || 0} 个；在当前表格数量受限的模式下，table.needed=true 表示本节适合使用表格，属于候选建议。程序会在编排完成后根据全局数量限制确定最终结果，不应将候选标记理解为最终保留决定。`;
   const targetText = targetItemIds.length
     ? targetItemIds.map((id) => `- ${id}`).join('\n')
-    : '无。保持文件中已有编排不变，仅完成格式检查并写回。';
+    : '无。结果输出空 plans 数组。';
   const requirementText = String(regenerateRequirement || '').trim()
     ? `\n程序已确认以下节点需要应用本次重新生成的额外要求：\n${regenerateTargetItemIds.map((id) => `- ${id}`).join('\n')}\n\n额外要求：\n${String(regenerateRequirement).trim()}\n`
     : '';
   return `你是投标技术方案正文编排 Agent。工作区已经提供本次任务的全部材料：
 - ${CONTENT_PLANNING_KNOWLEDGE_FILE}：参考知识库轻量条目，只包含 id、标题和简介。
 - ${CONTENT_PLANNING_BID_INFO_FILE}：招标文件关键信息。
-- ${CONTENT_PLANNING_OUTPUT_FILE}：当前最新的完整目录，也是最终输出文件。
+- ${CONTENT_PLANNING_OUTLINE_FILE}：当前最新的完整目录及已有编排，只读参考。
+结果单独写入 ${CONTENT_PLANNING_OUTPUT_FILE}，格式为 {"plans":[{"id":"目标小节稳定 ID","content_plan":{...}}]}。
 
 程序已确定本次需要编排的目录节点：
 ${targetText}
 ${requirementText}
 请严格完成以下工作：
 1. 先读取全部三个文件，结合完整目录中的上下级和同级关系进行整体判断。
-2. 只为 content_mode 为 ai-generate 的叶子节点编排；本次只修改程序列出的目标节点，其他节点及已有 content_plan 保持原样。
-3. 本次目标叶子的 content_plan 必须包含 writing_focus、target_words、knowledge.item_ids、table.needed、table.purpose、image_suitability_score；非 AI 叶子和分支节点不得包含 content_plan。
+2. 完整目录仅供参考，不修改参考文件；plans 只包含程序列出的本次目标 AI 叶子，每个目标恰好一项，不提交非目标节点。
+3. 每项只包含 id 和 content_plan；content_plan 必须包含 writing_focus、target_words、knowledge.item_ids、table.needed、table.purpose、image_suitability_score。image_needed 由程序计算，不输出。
 字数编排要求：${wordInstruction} 字数只统计正文可读文字，不包含 HTML 标签和配图提示词；目标用于写作，不要求删减必要信息或重复凑字。
 4. writing_focus 用 1-2 句话概括本节正文重点，不展开成正文，不编造具体参数、周期、人员、设备、品牌、型号或承诺，并避免与相邻章节重复。
 5. knowledge.item_ids 只能从 ${CONTENT_PLANNING_KNOWLEDGE_FILE} 中选择，可以多选或为空数组，不要编造 id。
 6. ${tableLimitInstruction}
 7. 表格仅在能明显提升职责、步骤、参数、风险、措施或成果等内容的表达清晰度时使用；需要时准确填写用途，不需要时 purpose 留空。
 8. image_suitability_score 是本节配图适配性评分，必须为 0-10 的整数：0 表示不适合配图，10 表示非常适合配图。结合本节标题、说明、写作重点和项目背景，判断图片能否帮助读者理解流程、结构、关系或设备、场景示意等内容；图片带来的理解帮助越明显，评分越高，仅起装饰作用时不应给高分。
-9. id 是稳定身份，number 仅是显示编号；所有结果引用节点时必须使用 id。不得修改目录节点数量、顺序、父子关系、id、number、title、description、attr、content_mode 或 content_mode_note。
-10. 将完整结果覆盖写回 ${CONTENT_PLANNING_OUTPUT_FILE}。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${CONTENT_PLANNING_OUTPUT_FILE}"}；失败后先修改文件再重新校验。`;
+9. id 原样使用目标节点的稳定 ID，不能用显示编号代替。不复制标题、编号、描述或目录树，程序按 ID 保存本次编排。
+10. 用 write 将本次全部目标的编排写入 ${CONTENT_PLANNING_OUTPUT_FILE}；继续任务时可读取已有结果并接着完善，但提交范围始终以本次目标列表为准。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${CONTENT_PLANNING_OUTPUT_FILE}"}；失败后先修改文件再重新校验。`;
 }
 
 function formatRestoreTargetsForPrompt(targets) {
@@ -1738,6 +1664,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   async function runContentPlanningAgent(targetItemIds, regenerateTargetItemIds = targetItemIds) {
     const isIncremental = targetItemIds.every(id => contentRuntime.pending_item_ids.includes(id));
     const hasSession = agentService.hasPersistentTaskSession(CONTENT_PLANNING_AGENT_TASK_KEY);
+    const continuingPlanning = (resume || retryFailedSections) && hasSession
+      && storedPlan.contentGenerationTask?.stats?.agent?.phase === 'content-planning';
     const runId = crypto.randomUUID();
     if (hasSession) {
       agentService.updatePersistentTask(CONTENT_PLANNING_AGENT_TASK_KEY, {
@@ -1778,10 +1706,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         { path: CONTENT_PLANNING_KNOWLEDGE_FILE, content: renderKnowledgeItemsForPrompt(knowledgeItems) },
         { path: CONTENT_PLANNING_BID_INFO_FILE, content: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText) },
         {
-          path: CONTENT_PLANNING_OUTPUT_FILE,
+          path: CONTENT_PLANNING_OUTLINE_FILE,
           content: JSON.stringify({ outline: buildContentPlanningOutline(outlineData.outline, storedContentPlans) }, null, 2),
         },
+        // 新一轮清空结果；同一轮继续时保留草稿供 Agent 修复。
+        ...(!continuingPlanning ? [{ path: CONTENT_PLANNING_OUTPUT_FILE, content: '' }] : []),
       ],
+      prepare_output_files: [CONTENT_PLANNING_OUTPUT_FILE],
       signal: taskControl.signal,
       persistent_task: {
         task_key: CONTENT_PLANNING_AGENT_TASK_KEY,
