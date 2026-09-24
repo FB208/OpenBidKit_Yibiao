@@ -18,8 +18,8 @@ function findSection(items, id, prefix = '') {
 // 只提交本次小节与用户要求，资料读取由原会话中的 Agent 自行决定。
 function modificationPrompt(section, file, requirement) {
   return `本次任务是修改小节 ${section.number} ${section.title}，稳定 ID：${section.id}，文件：${file}。
-先读取该文件，再按用户要求使用原生 edit 修改，只修改这个小节。遵守原有受限 HTML 规范和全局事实设定；未要求调整的内容和图片保持不变，原方案表格和图片继续保留。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。需要配图时使用现有图片工具：本次全部待生成 AI 图片通过 generate-image 的 images 一次提交，提供各项 image_id、prompt 和 size；本次全部待生成 HTML/Mermaid 源码合并到 generate-image-sources 的 images 一次提交，不按类型或固定小批次拆分，由现有队列控制并发，每项提供唯一 image_id、kind、准确的内容与数据 prompt，HTML 另填与正文画框一致的 frame_size。源码保存为图片/下的新文件，将全部待渲染文件按 HTML、Mermaid 分别一次批量提交对应 render 工具，两个工具都使用 images 数组，每项必填 image_id、source_file，HTML 另填 frame_size；单张也使用一项数组。本地渲染队列控制并发，按返回 results 中的 image_id 对应正文图片并逐项检查 status、error 和 HTML 的 layout_issues；语法或布局问题由你修改源码后重新渲染，再按渲染返回的 asset_ref 引用。仅重试失败或需要修正的项，不覆盖已有图片文件。暂停恢复时复用已完成图片及源码，各类剩余待办分别一次提交。
-本次不重新编排、还原，不执行全文字数调整或一致性审计，也不修改正文生成结果.json。完成正文及所需图片后，在最后一次成功文件操作上标记 task_complete=true，程序负责转换 Word。
+先读取该文件，再按用户要求使用原生 edit 修改，只修改这个小节。遵守原有受限 HTML 规范和全局事实设定；未要求调整的内容和图片保持不变，原方案表格和图片继续保留。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。需要配图时先保存 figure 布局，再调用 list-section-images 读取本小节最新图片清单；image_id 沿用清单标识，不自行重编，原图和未要求调整的有效图片直接复用。需要修正结构或提示词时可 read/edit 后重新提取，无须自行编写扫描脚本。使用现有图片工具：本次全部待生成 AI 图片通过 generate-image 的 images 一次提交，提供各项 image_id、prompt 和 size；本次全部待生成 HTML/Mermaid 源码合并到 generate-image-sources 的 images 一次提交，不按类型或固定小批次拆分，由现有队列控制并发，每项提供唯一 image_id、kind、准确的内容与数据 prompt，HTML 另填与正文画框一致的 frame_size。源码保存为图片/下的新文件，将全部待渲染文件按 HTML、Mermaid 分别一次批量提交对应 render 工具，两个工具都使用 images 数组，每项必填 image_id、source_file，HTML 另填 frame_size；单张也使用一项数组。本地渲染队列控制并发，按返回 results 中的 image_id 对应正文图片并逐项检查 status、error 和 HTML 的 layout_issues；语法或布局问题由你修改源码后重新渲染，问题解决后调用 apply-section-images 批量回填，每项提供清单 image_id、图片工具返回的 asset_ref 和清单原引用 previous_asset_ref（未填写时为空字符串）；程序只更新对应 img 的引用。失败或布局问题未解决的项不提交，引用变化时刷新清单后处理。仅重试失败或需要修正的项，不覆盖已有图片文件。暂停恢复时复用已完成图片及源码，各类剩余待办分别一次提交。
+本次不重新编排、还原，不执行全文字数调整或一致性审计，也不修改正文生成结果.json。完成正文及所需图片后，在最后一次成功 edit 或 apply-section-images 操作上标记 task_complete=true，程序负责转换 Word。
 用户修改要求：
 ${requirement || '保留本节实质信息、事实参数、承诺及现有图片，整理段落顺序、合并重复表述，并修正含糊或不连贯的表达。'}`;
 }
@@ -113,8 +113,8 @@ async function runContentSectionRegenerationTask({ agentService, aiService, work
         initial_stage: 'section-modification', output_file: file,
         prompt: modificationPrompt(section, file, runtime.regenerate_requirement),
         max_retries: 1, timeout_ms: 30 * 60 * 1000,
-        active_tools: ['read', 'edit', 'write', 'find', 'ls', 'ask-user', 'report-failure', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image'],
-        create_tools: context => createContentGenerationImageTools({ aiService, signal }, context),
+        active_tools: ['read', 'edit', 'write', 'find', 'ls', 'ask-user', 'report-failure', 'list-section-images', 'apply-section-images', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image'],
+        create_tools: context => createContentGenerationImageTools({ aiService, signal, sections: [{ ...section, file }] }, context),
         validateOutput: () => readSection(),
         onCheckpoint(checkpoint) {
           agentState = { ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: task.task_id };

@@ -16,7 +16,7 @@ async function main() {
   const first = 'b0000000-0000-4000-8000-000000000001';
   const second = 'a0000000-0000-4000-8000-000000000002';
   const file = `正文/${first}.html`;
-  const figure = '<figure data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">原图</template><img data-yb-asset-ref="图片/原图.png" alt="原图"><figcaption>原图</figcaption></figure>';
+  const figure = '<figure id="原图" data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">原图</template><img data-yb-asset-ref="图片/原图.png" alt="原图"><figcaption>原图</figcaption></figure>';
   // 所有产物使用独立临时目录，不触碰用户数据。
   function write(relative, content) {
     const destination = path.join(workspaceDir, relative);
@@ -84,7 +84,9 @@ async function main() {
       assert.equal(payload.task_id, persistent.run_id);
       assert.equal(payload.output_file, file);
       assert.match(payload.prompt, /1.2 改名后的目标/);
-      assert.match(payload.prompt, /generate-image-sources 的 images 列表并发生成/);
+      assert.match(payload.prompt, /generate-image-sources 的 images 一次提交/);
+      assert.match(payload.prompt, /list-section-images/);
+      assert.match(payload.prompt, /apply-section-images/);
       assert.ok(!payload.prompt.includes('其他小节正文'));
       assert.equal(payload.continueTask, undefined);
       if (behavior === 'fail') throw new Error('模拟修改失败');
@@ -93,8 +95,25 @@ async function main() {
       try {
         assert.equal(created.sessionFile, sessionFile);
         assert.ok(created.session.agent.state.messages.some(message => JSON.stringify(message).includes('原正文生成任务')));
-        for (const name of ['generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
+        for (const name of ['list-section-images', 'apply-section-images', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
         assert.ok(!created.session.getActiveToolNames().includes('adjust-sections'));
+        const { Type } = await import('typebox');
+        const imageTools = payload.create_tools({ Type, workspaceDir });
+        const listImages = imageTools.find(tool => tool.name === 'list-section-images');
+        const applyImages = imageTools.find(tool => tool.name === 'apply-section-images');
+        const listed = (await listImages.execute('list', {})).details.results;
+        assert.deepEqual(listed.map(item => item.section_id), [first], '单节工具不读取旧决策文件中的其他 targets');
+        const image = listed[0].images[0];
+        const updatedRef = `图片/单节回填${runs}.png`;
+        fs.copyFileSync(path.join(workspaceDir, '图片/原图.png'), path.join(workspaceDir, updatedRef));
+        const previousHtml = fs.readFileSync(path.join(workspaceDir, file), 'utf8');
+        const results = (await applyImages.execute('apply', { images: [
+          { image_id: image.image_id, asset_ref: updatedRef, previous_asset_ref: image.asset_ref },
+          { image_id: `${second}/原图`, asset_ref: updatedRef, previous_asset_ref: '' },
+        ] })).details.results;
+        assert.deepEqual(results.map(item => item.status), ['success', 'error']);
+        assert.equal(fs.readFileSync(path.join(workspaceDir, file), 'utf8'), previousHtml.replace(image.asset_ref, updatedRef));
+        fs.writeFileSync(path.join(workspaceDir, file), previousHtml, 'utf8');
         const original = fs.readFileSync(path.join(workspaceDir, file), 'utf8').match(/<p>(.*?)<\/p>/)[1];
         let sourceRequested = false;
         created.session.agent.streamFn = () => {

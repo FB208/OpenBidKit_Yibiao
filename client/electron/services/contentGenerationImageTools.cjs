@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { load } = require('cheerio');
+const { applyRangeEdits } = require('../utils/textEdit.cjs');
 
 // Agent 的源码路径和正文图片引用均限定为当前工作区内的相对路径。
 function resolveImageWorkspaceFile(workspaceDir, file) {
@@ -21,6 +23,59 @@ function validateContentImageReferences(workspaceDir, html) {
   });
 }
 
+// 读取最新正文并保留原文位置；不重新序列化 HTML，避免改变正文和图组布局。
+function readSectionImages(workspaceDir, section) {
+  const file = resolveImageWorkspaceFile(workspaceDir, section.file);
+  const html = fs.readFileSync(file, 'utf8');
+  const $ = load(html, { sourceCodeLocationInfo: true }, false);
+  const ids = new Set();
+  const images = $('figure').toArray().map(figure => {
+    const node = $(figure);
+    const id = node.attr('id');
+    if (!id?.trim() || ids.has(id)) throw new Error(`小节 ${section.id} 的 figure id 为空或重复：${id || '空'}`);
+    ids.add(id);
+    const image = node.find('img');
+    const prompt = node.find('template[data-yb-role="prompt"]');
+    const generation = node.attr('data-yb-generation');
+    const frameSize = node.attr('data-yb-size');
+    if (node.find('figure').length || image.length !== 1 || prompt.length !== 1 || !prompt.text().trim()) {
+      throw new Error(`图片 ${id} 必须有一个 img 和一个非空提示词，不能嵌套 figure`);
+    }
+    if (!['aiImage', 'htmlImage', 'mermaid'].includes(generation) || !['square', 'wide', 'tall', 'panorama'].includes(frameSize)) {
+      throw new Error(`图片 ${id} 的生成方式或画框比例无效`);
+    }
+    const reference = image.attr('data-yb-asset-ref') || '';
+    const exists = reference ? fs.existsSync(resolveImageWorkspaceFile(workspaceDir, reference))
+      && fs.statSync(resolveImageWorkspaceFile(workspaceDir, reference)).isFile() : false;
+    return {
+      image_id: `${encodeURIComponent(section.id)}/${encodeURIComponent(id)}`,
+      section_id: section.id, file: section.file, figure_id: id,
+      generation, frame_size: frameSize, prompt: prompt.text().trim(),
+      alt: image.attr('alt') || '', caption: node.find('figcaption').text().trim(),
+      asset_ref: reference, asset_exists: exists,
+      reused_original: reference.startsWith('原图/') || Boolean(section.restored_content?.images?.some(item => item.asset_ref === reference)),
+      location: image[0].sourceCodeLocation,
+    };
+  });
+  if ($('img').length !== images.length) throw new Error(`小节 ${section.id} 存在 figure 之外的图片，请先修复正文结构`);
+  return { file, html, images };
+}
+
+// 仅替换或插入图片引用属性；位置来自解析器，其他原始字符保持不变。
+function imageReferenceEdit(html, image, assetRef) {
+  const location = image.location;
+  if (!location?.startTag) throw new Error(`无法定位图片原始标签：${image.image_id}`);
+  const attribute = location.attrs?.['data-yb-asset-ref'];
+  const value = assetRef.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const text = `data-yb-asset-ref="${value}"`;
+  if (attribute) return { start: attribute.startOffset, end: attribute.endOffset, newText: text };
+  const tag = html.slice(location.startTag.startOffset, location.startTag.endOffset);
+  const closing = tag.search(/\s*\/?>$/);
+  if (closing < 0) throw new Error(`无法定位图片标签结尾：${image.image_id}`);
+  const offset = location.startTag.startOffset + closing;
+  return { start: offset, end: offset, newText: ` ${text}` };
+}
+
 // 并发源码模型只处理当前图片；布局规范随请求提供，不依赖主会话上下文。
 function buildImageSourcePrompt(kind, frameSize) {
   const common = '你负责生成投标文件中一张独立配图的源码。只返回源码，不输出 Markdown 围栏或解释。仅使用本次请求提供的内容和数据，不虚构事实、数值或承诺；你没有检索、文件写入或渲染工具，不负责正文编排、生成其他图片或回填正文。';
@@ -37,7 +92,7 @@ function buildImageSourcePrompt(kind, frameSize) {
 }
 
 // 图片与独立源码均保存在当前工作区；源码生成使用文本队列，转图继续复用本地渲染。
-function createContentGenerationImageTools({ aiService, signal, localImageRenderService }, { Type, workspaceDir }) {
+function createContentGenerationImageTools({ aiService, signal, localImageRenderService, sections = [], beforeApply = () => {} }, { Type, workspaceDir }) {
   // 图片和源码每次生成独立文件，失败或重新生成不会覆盖已有产物。
   function saveImage(buffer, extension) {
     const assetRef = `图片/${crypto.randomUUID()}${extension}`;
@@ -51,7 +106,77 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
   }
 
+  const targets = new Map(sections.map(section => [section.id, section]));
   return [{
+    name: 'list-section-images', label: '读取正文图片清单', executionMode: 'sequential',
+    description: '读取本轮目标小节的最新 HTML，返回每张图片的 image_id、小节、生成方式、比例、提示词、图注、当前引用及文件存在状态。image_id 原样传给图片工具及回填工具，不自行拼接。已有引用不代表布局已检查；reused_original 为原方案图片，只复用、不重新生成。默认读取全部目标，可按 section_ids 只刷新待修复小节。',
+    parameters: Type.Object({ section_ids: Type.Optional(Type.Array(Type.String(), { uniqueItems: true })) }, { additionalProperties: false }),
+    async execute(_callId, { section_ids }, toolSignal) {
+      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
+      combinedSignal.throwIfAborted();
+      const results = (section_ids || [...targets.keys()]).map(id => {
+        combinedSignal.throwIfAborted();
+        try {
+          if (!targets.has(id)) throw new Error(`不能读取非目标小节：${id}`);
+          const { images } = readSectionImages(workspaceDir, targets.get(id));
+          return { section_id: id, status: 'success', images: images.map(({ location, ...image }) => image) };
+        } catch (error) { return { section_id: id, status: 'error', error: error.message }; }
+      });
+      return toolResult({ results });
+    },
+  }, {
+    name: 'apply-section-images', label: '批量回填正文图片', executionMode: 'sequential',
+    description: '批量回填已成功生成并处理完布局问题的图片。image_id 使用清单标识，asset_ref 使用图片工具返回值，previous_asset_ref 使用清单中的原引用（未填写时为空字符串）。按小节合并保存，只修改 img 的 data-yb-asset-ref。引用已变化则先刷新清单；同一地址重复提交不会重复修改。失败或布局问题未解决时不要提交，原图直接复用。检查每项结果，只在本次所需回填全部成功后标记任务完成。',
+    parameters: Type.Object({ images: Type.Array(Type.Object({
+      image_id: Type.String({ minLength: 1 }), asset_ref: Type.String({ minLength: 1 }), previous_asset_ref: Type.String(),
+    }, { additionalProperties: false }), { minItems: 1 }) }, { additionalProperties: false }),
+    async execute(_callId, { images }, toolSignal) {
+      const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
+      combinedSignal.throwIfAborted();
+      beforeApply();
+      if (new Set(images.map(item => item.image_id)).size !== images.length) throw new Error('同一批回填的 image_id 不能重复');
+      const groups = new Map();
+      const results = new Map();
+      for (const item of images) {
+        try {
+          const parts = item.image_id.split('/');
+          const id = decodeURIComponent(parts[0]);
+          if (parts.length !== 2 || !targets.has(id)) throw new Error('图片不属于本次目标小节，请使用清单中的 image_id');
+          if (!groups.has(id)) groups.set(id, []);
+          groups.get(id).push(item);
+        } catch (error) { results.set(item.image_id, { image_id: item.image_id, status: 'error', error: error.message }); }
+      }
+      for (const [id, items] of groups) {
+        combinedSignal.throwIfAborted();
+        try {
+          const { file, html, images: current } = readSectionImages(workspaceDir, targets.get(id));
+          const edits = [];
+          for (const item of items) {
+            const image = current.find(image => image.image_id === item.image_id);
+            if (!image) throw new Error(`图片标识不存在：${item.image_id}`);
+            const asset = resolveImageWorkspaceFile(workspaceDir, item.asset_ref);
+            if (!fs.existsSync(asset) || !fs.statSync(asset).isFile()) throw new Error(`图片文件不存在：${item.asset_ref}`);
+            if (!/\.(?:png|jpe?g|webp|gif|bmp)$/i.test(item.asset_ref)) throw new Error('回填必须使用图片资源，不能使用 HTML/Mermaid 源码');
+            if (image.asset_ref === item.asset_ref) continue;
+            if (image.asset_ref !== item.previous_asset_ref) throw new Error(`图片引用已变化，请刷新清单：${item.image_id}`);
+            edits.push(imageReferenceEdit(html, image, item.asset_ref));
+          }
+          if (edits.length) {
+            const edited = applyRangeEdits(html, edits);
+            if (edited.errors.length) throw new Error(edited.errors.join('；'));
+            combinedSignal.throwIfAborted();
+            const temporary = `${file}.images.tmp`;
+            try { fs.writeFileSync(temporary, edited.content, 'utf8'); fs.renameSync(temporary, file); }
+            finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+          }
+          for (const item of items) results.set(item.image_id, { image_id: item.image_id, section_id: id, status: 'success', asset_ref: item.asset_ref });
+        } catch (error) {
+          for (const item of items) results.set(item.image_id, { image_id: item.image_id, section_id: id, status: 'error', error: error.message });
+        }
+      }
+      return toolResult({ results: images.map(item => results.get(item.image_id)) });
+    },
+  }, {
     name: 'generate-image', label: 'AI 生图',
     description: '将本轮全部待生成 AI 图片通过 images 一次提交，不按章节或固定小批次拆分。内部按主程序生图并发设置生成，超出上限自动排队。每项 image_id 在批内唯一，用于对应正文中的具体图片。返回 results 中各项的状态及 asset_ref；只重试失败项。单张也通过只有一项的 images 提交。',
     executionMode: 'sequential',

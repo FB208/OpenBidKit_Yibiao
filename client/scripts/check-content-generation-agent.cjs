@@ -5,6 +5,82 @@ const path = require('node:path');
 const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, runContentLayoutAgent, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { createContentGenerationImageTools } = require('../electron/services/contentGenerationImageTools.cjs');
 
+// 使用真实解析器与范围替换，逐字验证回填只改变指定属性。
+async function checkImageManifestTools({ Type, workspaceDir, signal }) {
+  const root = fs.mkdtempSync(path.join(workspaceDir, '图片清单-'));
+  fs.mkdirSync(path.join(root, '正文'));
+  fs.mkdirSync(path.join(root, '图片'));
+  fs.mkdirSync(path.join(root, '原图'));
+  const ref = "图片/新 & '图.png";
+  for (const name of [ref, '图片/另一张.png', '原图/现场.png']) fs.writeFileSync(path.join(root, name), '测试图片');
+  const figure = (id, img, kind = 'htmlImage') => `<figure data-yb-size='wide' id='${id}' data-yb-generation='${kind}'><template data-yb-role="prompt">阶段 &amp; 责任</template>${img}<figcaption>标题</figcaption></figure>`;
+  const first = '\ufeff<!-- yibiao:block -->\r\n<p>保留 &amp; 原文</p>\r\n<table data-yb-preset="threeImages"><tr><td>'
+    + figure('同名/图', '<img alt="标题 > 内容" />') + '</td><td>'
+    + figure('第二张', "<img data-yb-asset-ref='' alt='第二张'>") + '</td><td>'
+    + figure('原图', '<img alt="现场" data-yb-asset-ref="原图/现场.png">', 'aiImage') + '</td></tr></table>\r\n';
+  const second = figure('同名/图', '<img alt="另一节">', 'mermaid');
+  const sections = [{ id: '甲', file: '正文/甲.html' }, { id: '乙', file: '正文/乙.html' }];
+  const save = (section, html) => fs.writeFileSync(path.join(root, section.file), html, 'utf8');
+  const read = section => fs.readFileSync(path.join(root, section.file), 'utf8');
+  save(sections[0], first); save(sections[1], second);
+  const { createContentImageProtection } = require('../electron/services/contentGenerationEditTools.cjs');
+  const protection = createContentImageProtection({ workspaceDir: root, files: sections.map(section => section.file) });
+  const tools = createContentGenerationImageTools({ aiService: {}, signal, sections,
+    beforeApply: () => protection.beforeToolCall({ toolCall: { name: 'apply-section-images' } }),
+  }, { Type, workspaceDir: root });
+  const list = tools.find(tool => tool.name === 'list-section-images');
+  const apply = tools.find(tool => tool.name === 'apply-section-images');
+  const listed = (await list.execute('list', {})).details.results;
+  assert.ok(listed.every(section => section.status === 'success'));
+  const [a, b, original] = listed[0].images;
+  const other = listed[1].images[0];
+  assert.notEqual(a.image_id, other.image_id, '不同小节同名 figure 不串图');
+  assert.equal(a.prompt, '阶段 & 责任');
+  assert.equal(a.frame_size, 'wide');
+  assert.equal(a.asset_exists, false);
+  assert.equal(original.reused_original, true);
+  assert.equal(original.asset_exists, true);
+  const job = (image, asset_ref = ref) => ({ image_id: image.image_id, asset_ref, previous_asset_ref: image.asset_ref });
+  // 同节一项失败不写入；其他小节仍成功。
+  const partial = (await apply.execute('partial', { images: [job(a), job(b, '图片/不存在.png'), job(other)] })).details.results;
+  assert.deepEqual(partial.map(item => item.status), ['error', 'error', 'success']);
+  assert.equal(read(sections[0]), first);
+  const escaped = `data-yb-asset-ref="图片/新 &amp; '图.png"`;
+  assert.equal(read(sections[1]), second.replace('<img alt="另一节">', `<img alt="另一节" ${escaped}>`));
+  const done = (await apply.execute('apply', { images: [job(a), job(b, '图片/另一张.png')] })).details.results;
+  assert.ok(done.every(item => item.status === 'success'));
+  const expected = first.replace('<img alt="标题 > 内容" />', `<img alt="标题 > 内容" ${escaped} />`)
+    .replace("data-yb-asset-ref=''", 'data-yb-asset-ref="图片/另一张.png"');
+  assert.equal(read(sections[0]), expected, 'BOM、CRLF、其他属性、正文、图注和图组布局逐字不变');
+  assert.ok((await apply.execute('retry', { images: [job(a), job(b, '图片/另一张.png')] })).details.results.every(item => item.status === 'success'));
+  assert.equal(read(sections[0]), expected);
+  const stale = (await apply.execute('stale', { images: [job(a, '图片/另一张.png')] })).details.results[0];
+  assert.match(stale.error, /引用已变化/);
+  const refreshed = (await list.execute('refresh', { section_ids: ['甲'] })).details.results[0].images;
+  assert.equal(refreshed[0].asset_ref, ref);
+  assert.equal(refreshed[0].asset_exists, true);
+  assert.match((await list.execute('outside', { section_ids: ['其他'] })).details.results[0].error, /非目标/);
+  assert.equal((await apply.execute('outside', { images: [{ ...job(a), image_id: '其他/图' }] })).details.results[0].status, 'error');
+  await assert.rejects(apply.execute('duplicate', { images: [job(a), job(a)] }), /不能重复/);
+  fs.writeFileSync(path.join(root, '图片/源码.html'), '<html></html>');
+  assert.match((await apply.execute('source', { images: [job(a, '图片/源码.html')] })).details.results[0].error, /不能使用 HTML/);
+  for (const broken of [second + second, second.replace("id='同名/图'", ''), '<img alt="孤立图">']) {
+    save(sections[1], broken);
+    assert.equal((await list.execute('invalid', { section_ids: ['乙'] })).details.results[0].status, 'error');
+    assert.equal((await apply.execute('invalid', { images: [job(other)] })).details.results[0].status, 'error');
+    assert.equal(read(sections[1]), broken);
+  }
+  save(sections[1], second);
+  const cancel = new AbortController(); cancel.abort(new Error('暂停回填'));
+  await assert.rejects(apply.execute('cancel', { images: [job(other)] }, cancel.signal), /暂停回填/);
+  assert.equal(read(sections[1]), second);
+  protection.enter();
+  await assert.rejects(apply.execute('protected', { images: [job(other)] }), /不能调用 apply-section-images/);
+  assert.equal(read(sections[1]), second);
+  assert.equal(read(sections[0]), expected);
+  console.log('图片清单及回填：真实解析、同名隔离、图组原文保留、旧引用冲突、部分失败、重试、取消和保护检查通过。');
+}
+
 // 用真实文本队列核对源码并发、独立落盘和渲染交接，不请求外部模型。
 async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   const { createAiRequestQueue } = require('../electron/utils/aiRequestQueue.cjs');
@@ -440,6 +516,7 @@ async function main() {
     };
     checkImageLayoutQuota(fileOptions);
     checkExecutionManifest(fileOptions);
+    await checkImageManifestTools({ Type, workspaceDir, signal });
     await checkRestoredContent({ Type, workspaceDir, fileOptions, signal });
     await checkFactsRequirements({ Type, workspaceDir, fileOptions, signal });
     await checkImageSourceGeneration({ Type, workspaceDir, signal });
@@ -562,7 +639,7 @@ async function main() {
         assert.ok(!JSON.stringify(request.messages).includes('"total_groups"'), '并发小节不接收整轮名额数值');
         return '<!-- yibiao:block -->\n<p id="scenario">项目实施内容</p>';
       } } }, { Type, workspaceDir });
-      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
+      assert.deepEqual(scenarioTools.map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'list-section-images', 'apply-section-images', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
       const result = await scenarioTools[0].execute('settings', { sections: [{ section_id: 'e0000000-0000-4000-8000-000000000011', instructions: allocation, references: '' }] });
       assert.ok(received);
       assert.equal(result.details.results[0].status, 'success');
@@ -864,7 +941,7 @@ async function main() {
             assert.match(payload.prompt, /在并发写作前规划每张图的表达目的、图片类型及生成方式/);
             assert.match(payload.prompt, /核对本轮新增图片的生成方式分布/);
             assert.match(payload.prompt, /暂停、失败重试沿用本轮名额，已完成的布局计入完成数量/);
-            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
+            assert.deepEqual(payload.create_tools({ Type, workspaceDir }).map(tool => tool.name), ['generate-sections', 'repair-sections', 'complete-consistency-round', 'remove-section-tables', 'complete-table-cleanup', 'check-word-count', 'list-section-images', 'apply-section-images', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']);
             payload.validateOutput({}, { workspace_dir: workspaceDir });
             return { workspace_dir: workspaceDir };
           },
@@ -906,7 +983,7 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
   };
   const run = resume => runContentGenerationAgent({ resume, hasKnowledgeBase: true, signal, aiService: {}, agentService, buildFiles: () => files });
   const checkBlocked = payload => {
-    for (const name of ['adjust-sections', 'bash', 'generate-sections', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) {
+    for (const name of ['adjust-sections', 'bash', 'list-section-images', 'apply-section-images', 'generate-sections', 'generate-image', 'generate-image-sources', 'render-html-image', 'render-mermaid-image']) {
       assert.equal(activeTools.includes(name), false);
       assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|暂不执行扩缩写/);
     }
@@ -926,6 +1003,7 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
     await check.execute();
     assert.equal(state.word_adjustment_started, true);
     checkBlocked(payload);
+    await assert.rejects(tools.find(tool => tool.name === 'apply-section-images').execute('protected-direct', { images: [] }), /不能调用 apply-section-images/);
     throw pauseError;
   };
   await assert.rejects(run(false), error => error === pauseError);
