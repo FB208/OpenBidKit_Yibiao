@@ -274,7 +274,7 @@ async function main() {
     assert.equal(runtimeEvents.filter(event => event === 'success').length, successCount + 1);
     assert.equal(failureReports.length, 0);
 
-    // 首稿试验只停用主流程入口；上面的原扩缩写工具及子任务检查仍然保留。
+    // 关闭字数修复时停用主流程入口；扩缩写工具及子任务仍保留。
     decisions.word_control = { minimumWords: 35, maximumWords: 35, checkTotalWords: true };
     saveDecisions();
     let rounds = 0;
@@ -285,7 +285,7 @@ async function main() {
       }
       rounds += 1;
       assert.ok(!options.businessTools.some(tool => tool.name === 'adjust-sections'));
-      assert.match(prompt, /本次暂不执行扩缩写/);
+      assert.match(prompt, /统计完成后保持正文不变/);
     };
     await runContentGenerationAgent({
       signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: () => [], aiService: {},

@@ -784,7 +784,8 @@ function createLocalImageRenderService({ configStore } = {}) {
           HTML_RENDER_TIMEOUT_MS,
           'HTML 布局等待超时',
         );
-        const layoutIssues = await probeHtmlLayoutIssues(win.webContents);
+        // 正文可关闭二次优化；其他调用默认保留现有布局检测。
+        const layoutIssues = options.checkLayout === false ? [] : await probeHtmlLayoutIssues(win.webContents);
         throwIfPaused(options, 'HTML 转图已暂停');
         const captured = await captureFullContent(win.webContents, width, height, {
           ...options,

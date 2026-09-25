@@ -1390,6 +1390,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     restoration_completed: 0,
     generation_total: 0,
     generation_completed: 0,
+    preview_ready_section_ids: (resume || retryFailedSections)
+      ? storedPlan.contentGenerationTask?.stats?.content?.preview_ready_section_ids || [] : [],
     minimum_words: wordControl.minimumWords,
     maximum_words: wordControl.maximumWords,
     section_words: wordControl.sectionWords,
@@ -2326,6 +2328,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           ? readContentGenerationResult(agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).paths.workspaceDir)
           : await runContentGenerationAgent({
           agentService, aiService, resume: continuingBody,
+          generationOptions: storedPlan.contentGenerationOptions,
           hasKnowledgeBase: referenceKnowledgeDocumentIds.length > 0,
           hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
           signal,
@@ -2349,11 +2352,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
             contentStats.generation_total = decisions.targets.length;
             clearInterval(scanTimer);
-            // 文件保存只是进度依据；只有 Agent 最终结果检查通过才能开始转换。
+            // 非空 HTML 只用于进度和目录预览展示，不提前提交正式成功状态或 Word 转换记录。
             const scan = () => {
               try {
-                const count = scanGeneratedSections(workspaceDir, decisions.targets);
-                if (count <= contentStats.generation_completed) return;
+                const readyIds = scanGeneratedSections(workspaceDir, decisions.targets);
+                const count = Math.max(contentStats.generation_completed, readyIds.length);
+                const previousIds = contentStats.preview_ready_section_ids;
+                if (count === contentStats.generation_completed && readyIds.length === previousIds.length
+                  && readyIds.every((id, index) => id === previousIds[index])) return;
+                contentStats.preview_ready_section_ids = readyIds;
                 contentStats.generation_completed = count;
                 publishTaskUpdate({ status: 'running', stats: statsSnapshot() });
               } catch (error) {
@@ -2395,6 +2402,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           },
         });
         clearInterval(scanTimer);
+        contentStats.preview_ready_section_ids = result.sections.map(section => section.section_id);
         if (!targetItemId) {
           await runContentLayoutCheck({
             exporter: createTechnicalPlanExport({ technicalPlanStore: workspaceStore, templateStore, agentService, openXmlHelperService }),
@@ -2429,6 +2437,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }
       contentStats.generation_total = result.sections.length;
       contentStats.generation_completed = result.sections.length;
+      contentStats.preview_ready_section_ids = result.sections.map(section => section.section_id);
       contentStats.generated_html_words = result.sections.reduce((sum, section) => sum + section.words, 0);
       for (const section of result.sections) contentRuntime.section_words[section.section_id] = section.words;
       contentStats.generated_html_workspace = result.workspaceDir;

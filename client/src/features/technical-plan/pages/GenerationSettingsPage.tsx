@@ -544,7 +544,7 @@ function GenerationSettingsPage({
     }
   };
 
-  // 保存表格及三类配图设置，不改变已有正文和配图结果。
+  // 保存正文生成和可选修复设置，不改变已有正文和配图结果。
   const saveContentOptions = async (value: ContentGenerationOptions) => {
     if (generationConfigLocked || contentOptionsBusy) return false;
     const nextOptions = normalizeContentGenerationOptions(value, imageModelAvailable);
@@ -924,6 +924,21 @@ function GenerationSettingsPage({
                   </select>
                 </label>
               </div>
+              <div className="content-generation-config-group">
+                <div className="content-generation-config-row">
+                  <span><strong>字数不达标修复</strong><small>开启后，正文生成完成时按全文字数范围进行扩缩写；关闭时只统计字数。</small></span>
+                  <AppSwitch
+                    checked={draftIllustrationOptions.wordCountRepair}
+                    disabled={contentConfigLocked || contentOptionsBusy}
+                    onCheckedChange={(checked) => void saveContentOptions({
+                      ...draftIllustrationOptions,
+                      tableRequirement: draftTableRequirement,
+                      wordCountRepair: checked,
+                    })}
+                    aria-label="字数不达标修复"
+                  />
+                </div>
+              </div>
               {wordControlRequiresRegeneration && (
                 <div className="outline-word-control-notice">
                   {outlineWordControlSnapshot ? '生成目录后若修改了字数设置，需要重新生成目录才能生效！' : '当前目录缺少字数控制生效配置，请重新生成目录。'}
@@ -1014,6 +1029,21 @@ function GenerationSettingsPage({
                         useHtmlImages: checked,
                       })}
                       aria-label="是否生成 HTML 图片"
+                    />
+                  </div>
+                </div>
+                <div className="content-generation-config-group">
+                  <div className="content-generation-config-row">
+                    <span><strong>HTML图片二次优化</strong><small>开启后检查 HTML 图片的字号、越界、重叠等排版问题，并由 Agent 修复。</small></span>
+                    <AppSwitch
+                      checked={draftIllustrationOptions.htmlImageOptimization}
+                      disabled={contentConfigLocked || contentOptionsBusy}
+                      onCheckedChange={(checked) => void saveContentOptions({
+                        ...draftIllustrationOptions,
+                        tableRequirement: draftTableRequirement,
+                        htmlImageOptimization: checked,
+                      })}
+                      aria-label="HTML图片二次优化"
                     />
                   </div>
                 </div>

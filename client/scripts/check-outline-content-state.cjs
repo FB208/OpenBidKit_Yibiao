@@ -80,8 +80,15 @@ if (!process.versions.electron) {
         assert.equal(database.db.prepare("SELECT name FROM sqlite_master WHERE name = 'task_logs'").get().name, 'task_logs');
       };
       assertRetiredSchemaAbsent();
+      const options = store.loadGenerationConfig().contentGenerationOptions;
+      assert.equal(options.htmlImageOptimization, false);
+      assert.equal(options.wordCountRepair, false);
+      store.saveGenerationConfig({ contentGenerationOptions: { ...options, htmlImageOptimization: true, wordCountRepair: true } });
       database.close();
       open();
+      assert.equal(store.loadGenerationConfig().contentGenerationOptions.htmlImageOptimization, true);
+      assert.equal(store.loadGenerationConfig().contentGenerationOptions.wordCountRepair, true);
+      store.saveGenerationConfig({ contentGenerationOptions: { ...store.loadGenerationConfig().contentGenerationOptions, htmlImageOptimization: false, wordCountRepair: false } });
       assertRetiredSchemaAbsent();
       for (const table of retiredTables) database.db.exec('CREATE TABLE ' + table + ' (marker TEXT); INSERT INTO ' + table + " VALUES ('保留历史数据')");
       database.close();
@@ -554,21 +561,33 @@ if (!process.versions.electron) {
     const { BrowserWindow, ipcMain } = require('electron');
     const { Document, Packer, Paragraph, Table, TableRow, TableCell } = require('docx');
     const { createServer } = await import('vite');
-    const { registerTechnicalPlanIpc } = require('../electron/ipc/technicalPlanIpc.cjs');
     store.updateTechnicalPlanWithoutReload({ outlineData: { outline: ['预览甲', '预览乙', '缺失', '损坏'].map(id => ({ id, title: id, content_mode: 'ai-generate' })) } });
-    registerTechnicalPlanIpc({ technicalPlanStore: store, taskService: {} });
+    const previewWords = new Map();
+    const previewCalls = [];
+    const readPreview = async id => previewWords.get(id) || null;
+    let previewWord = readPreview;
+    ipcMain.handle('technical-plan:preview-content-word', (_event, id) => {
+      previewCalls.push(id);
+      return previewWord(id);
+    });
+    ipcMain.handle('technical-plan:read-content-word', () => { throw new Error('临时预览不得读取正式 Word'); });
     ipcMain.handle('config:load', () => ({}));
+    // 返回真实 DOCX 验证页面解析，正文服务转换由对应服务检查脚本覆盖。
     const writeWord = async (id, text) => {
       const bytes = await Packer.toBuffer(new Document({ sections: [{ children: [
         new Paragraph(text),
         new Table({ rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph('表格内容')] })] })] }),
       ] }] }));
-      fs.mkdirSync(store.getContentWordOutputDir(), { recursive: true });
-      fs.writeFileSync(path.join(store.getContentWordOutputDir(), `${encodeURIComponent(id)}.docx`), bytes);
+      previewWords.set(id, bytes);
     };
     await writeWord('预览甲', '小节甲初稿');
     await writeWord('预览乙', '小节乙正文');
-    fs.writeFileSync(path.join(store.getContentWordOutputDir(), `${encodeURIComponent('损坏')}.docx`), 'invalid-docx');
+    previewWords.set('损坏', Buffer.from('invalid-docx'));
+    fs.mkdirSync(store.getContentWordOutputDir(), { recursive: true });
+    const formalWordPath = path.join(store.getContentWordOutputDir(), `${encodeURIComponent('预览甲')}.docx`);
+    const formalWord = Buffer.from('正式 Word 不被临时预览覆盖');
+    fs.writeFileSync(formalWordPath, formalWord);
+    const formalSections = store.loadTechnicalPlan().contentGenerationSections;
     const html = `<html><body><div id="root" style="height:100vh"></div><script type="module">
       import React from 'react';
       import {createRoot} from 'react-dom/client';
@@ -608,24 +627,57 @@ if (!process.versions.electron) {
       const select = id => evaluate(`Array.from(document.querySelectorAll('.content-outline-item')).find(button=>button.textContent.includes(${JSON.stringify(id)})).click()`);
       const hasText = text => `document.querySelector('.content-word-preview')?.textContent.includes(${JSON.stringify(text)})`;
       await window.loadURL(`http://127.0.0.1:${server.httpServer.address().port}/__word-preview-check.html`);
+      await waitFor(hasText('点击小节查看当前正文'));
+      assert.equal(previewCalls.length, 0, '首次自动选中不转换');
+      const readyTask = { task_id: 'preview-task', type: 'content-generation', status: 'running', progress: 80,
+        stats: { content: { phase: 'generating', preview_ready_section_ids: ['预览甲'] } } };
+      // 预览标识与真实状态独立；已有正文不能掩盖生成中或失败状态。
+      const firstOutlineButton = "Array.from(document.querySelectorAll('.content-outline-item')).find(button=>button.textContent.includes('预览甲'))";
+      for (const [status, label] of Object.entries({ idle: '待生成', running: '生成中', error: '失败', success: '已完成' })) {
+        for (const previewReady of [false, true]) {
+          const task = { ...readyTask, status: status === 'error' ? 'error' : 'running',
+            stats: { content: { ...readyTask.stats.content, preview_ready_section_ids: previewReady ? ['预览甲'] : [] } } };
+          await evaluate(`window.renderPreview(${JSON.stringify({ task, sections: { '预览甲': { status } } })})`);
+          const text = `${label} · ${previewReady ? '可预览' : 'Word 预览'}`;
+          await waitFor(`${firstOutlineButton}?.querySelector('small')?.textContent.includes(${JSON.stringify(text)})`);
+          assert.equal(await evaluate(`${firstOutlineButton}.classList.contains('is-${status}')`), true);
+          assert.equal(await evaluate(`${firstOutlineButton}.classList.contains('is-success')`), status === 'success');
+          assert.equal(await evaluate(`${firstOutlineButton}.textContent.includes('重新生成')`), ['success', 'error'].includes(status));
+          assert.equal(previewCalls.length, 0, '状态与预览标识更新均不自动转换 Word');
+        }
+      }
+      await evaluate('window.renderPreview({sections:{}})');
+      await evaluate(`window.renderPreview({task:${JSON.stringify(readyTask)}})`);
+      await waitFor(`${firstOutlineButton}?.textContent.includes('待生成 · 可预览')`);
+      assert.equal(previewCalls.length, 0, '扫描只更新目录，不转换');
+      assert.equal(await evaluate(`${firstOutlineButton}.textContent.includes('重新生成')`), false, '可预览不改变重新生成权限');
+      await select('预览甲');
       await waitFor(hasText('小节甲初稿'));
       assert.equal(await evaluate(hasText('表格内容')), true);
       assert.equal(await evaluate("document.querySelector('.content-reader-actions').textContent.includes('编辑')"), false);
       assert.equal(await evaluate("!!document.querySelector('.content-word-preview [contenteditable=true]')"), false);
       assert.equal(await evaluate("document.querySelector('.content-word-editor').getBoundingClientRect().height > 200"), true);
       await writeWord('预览甲', '小节甲更新稿');
+      const beforeFormalConversion = previewCalls.length;
       await evaluate("window.renderPreview({contentGenerationRuntime:{html_output:{word_sections:[{section_id:'预览甲',file:'预览甲.docx'}]}}})");
+      await new Promise(resolve => setTimeout(resolve, 150));
+      assert.equal(previewCalls.length, beforeFormalConversion, '正式转换完成不能触发临时转换');
+      assert.equal(await evaluate(hasText('小节甲初稿')), true);
+      await select('预览甲');
       await waitFor(hasText('小节甲更新稿'));
+      assert.equal(previewCalls.length, beforeFormalConversion + 1, '重复点击同一小节重新转换最新内容');
+      await evaluate(`window.renderPreview({task:${JSON.stringify({ ...readyTask, stats: { content: { ...readyTask.stats.content, preview_ready_section_ids: ['预览甲', '预览乙'] } } })}})`);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      assert.equal(previewCalls.length, beforeFormalConversion + 1, '扫描变化不刷新已打开的 Word');
       await select('预览乙');
       await waitFor(hasText('小节乙正文'));
       assert.equal(await evaluate(hasText('小节甲更新稿')), false);
       // 甲的读取故意晚于乙返回，不能把乙的展示覆盖为甲。
-      const readWord = store.readContentWord;
       let releaseRead;
       let readStarted;
       const started = new Promise(resolve => { readStarted = resolve; });
-      store.readContentWord = async id => {
-        const bytes = await readWord(id);
+      previewWord = async id => {
+        const bytes = await readPreview(id);
         if (id === '预览甲') await new Promise(resolve => { releaseRead = resolve; readStarted(); });
         return bytes;
       };
@@ -634,34 +686,53 @@ if (!process.versions.electron) {
       await select('预览乙');
       await waitFor(hasText('小节乙正文'));
       releaseRead();
-      store.readContentWord = readWord;
+      previewWord = readPreview;
       await new Promise(resolve => setTimeout(resolve, 150));
       assert.equal(await evaluate(hasText('小节甲更新稿')), false);
       await select('缺失');
-      await waitFor(hasText('该小节尚未生成 Word'));
+      await waitFor(hasText('该小节尚无可预览正文'));
+      await select('预览乙');
+      await waitFor(hasText('小节乙正文'));
+      previewWord = async () => { throw new Error('临时转换失败'); };
+      await select('预览乙');
+      await waitFor(hasText('Word 预览失败'));
+      assert.equal(await evaluate(hasText('小节乙正文')), false, '同节重转失败不能显示旧预览');
+      previewWord = readPreview;
+      await evaluate("Array.from(document.querySelectorAll('.content-word-preview button')).find(button=>button.textContent==='重新加载').click()");
+      await waitFor(hasText('小节乙正文'));
       await select('损坏');
       await waitFor(hasText('Word 加载失败'));
       await writeWord('损坏', '修复后正文');
       await evaluate("Array.from(document.querySelectorAll('.content-word-preview button')).find(button=>button.textContent==='重新加载').click()");
       await waitFor(hasText('修复后正文'));
+      assert.deepEqual(fs.readFileSync(formalWordPath), formalWord, '临时预览不修改正式 Word');
+      assert.deepEqual(store.loadTechnicalPlan().contentGenerationSections, formalSections, '临时预览不修改正式小节状态');
+      const beforeReload = previewCalls.length;
       await window.loadURL(window.webContents.getURL());
+      await waitFor(hasText('点击小节查看当前正文'));
+      assert.equal(previewCalls.length, beforeReload, '重新进入页面也等待明确点击');
+      await select('预览甲');
       await waitFor(hasText('小节甲更新稿'));
       // 同一小节正在刷新时发生正文清空，旧文档及清空前的迟到响应都必须失效。
       let releaseOldRead;
       let oldReadStarted;
       let delayOnce = true;
       const oldStarted = new Promise(resolve => { oldReadStarted = resolve; });
-      store.readContentWord = async id => {
-        const bytes = await readWord(id);
+      previewWord = async id => {
+        const bytes = await readPreview(id);
         if (id === '预览甲' && delayOnce) {
           delayOnce = false;
           await new Promise(resolve => { releaseOldRead = resolve; oldReadStarted(); });
         }
         return bytes;
       };
-      await evaluate("window.renderPreview({task:{task_id:'regenerating',type:'content-generation',status:'running'}})");
+      await select('预览甲');
       await oldStarted;
-      assert.equal(await evaluate(hasText('小节甲更新稿')), true, '普通重新生成期间保留已有 Word');
+      assert.equal(await evaluate(hasText('小节甲更新稿')), false, '同一小节重转时撤下旧预览');
+      const beforeNewTask = previewCalls.length;
+      await evaluate("window.renderPreview({task:{task_id:'regenerating',type:'content-generation',status:'running'}})");
+      await waitFor(hasText('点击小节查看当前正文'));
+      assert.equal(previewCalls.length, beforeNewTask, '新任务只清除旧预览，不自动转换');
       const unlink = fs.unlinkSync;
       fs.unlinkSync = (file, ...args) => {
         if (path.basename(file).startsWith('__content_word_')) throw new Error('预览暂存清理失败');
@@ -671,29 +742,36 @@ if (!process.versions.electron) {
       finally { fs.unlinkSync = unlink; }
       const latestState = store.loadTechnicalPlan();
       await evaluate(`window.renderPreview({outlineData:${JSON.stringify(latestState.outlineData)},task:undefined,contentGenerationRuntime:undefined})`);
-      await waitFor(hasText('该小节尚未生成 Word'));
+      await waitFor(hasText('点击小节查看当前正文'));
       releaseOldRead();
-      store.readContentWord = readWord;
+      previewWord = readPreview;
       await new Promise(resolve => setTimeout(resolve, 150));
       assert.equal(await evaluate(hasText('小节甲更新稿')), false);
 
       await writeWord('预览甲', '重新生成的正文');
       await evaluate("window.renderPreview({task:{task_id:'new-task',type:'content-generation',status:'success'},contentGenerationRuntime:{html_output:{word_sections:[{section_id:'预览甲',file:'预览甲.docx'}]}}})");
+      await waitFor(hasText('点击小节查看当前正文'));
+      assert.equal(previewCalls.length, beforeNewTask, '清空和正式任务完成都不发起预览');
+      await select('预览甲');
       await waitFor(hasText('重新生成的正文'));
+      await writeWord('预览甲', '完成后再次读取最新正文');
+      await select('预览甲');
+      await waitFor(hasText('完成后再次读取最新正文'));
       const replacement = { outline: [{ id: '预览甲', title: '同编号的新小节', content_mode: 'ai-generate' }] };
       store.saveOutline({ outlineData: replacement, reason: 'replace' });
       await evaluate(`window.renderPreview({outlineData:${JSON.stringify(replacement)}})`);
-      await waitFor(hasText('该小节尚未生成 Word'));
-      assert.equal(await evaluate(hasText('重新生成的正文')), false);
+      await waitFor(hasText('点击小节查看当前正文'));
+      assert.equal(await evaluate(hasText('完成后再次读取最新正文')), false);
       await writeWord('预览甲', '尺寸检查正文');
       await evaluate("Array.from(document.querySelectorAll('.content-word-preview button')).find(button=>button.textContent==='重新加载').click()");
       await waitFor(hasText('尺寸检查正文'));
       window.setSize(960, 720);
       assert.equal(await evaluate("document.querySelector('.content-word-editor').getBoundingClientRect().height > 100"), true);
-      console.log('Word 页面：只读、切换、转换刷新、异常重试、重进、清空缓存、迟到响应及同编号新小节检查通过。');
+      console.log('Word 页面：明确点击、同节重转、扫描不转、正式状态隔离、异常重试、新任务及清空隔离、迟到响应检查通过。');
     } finally {
       window?.destroy();
       await server.close();
+      for (const channel of ['technical-plan:preview-content-word', 'technical-plan:read-content-word', 'config:load']) ipcMain.removeHandler(channel);
     }
   }
 
@@ -758,7 +836,7 @@ if (!process.versions.electron) {
         if (key === 'technical-plan-content-generation') bodyDeletes++;
       } };
       const createService = () => scope.module.exports.createTaskService({
-        technicalPlanStore: store, agentService, aiService: {},
+        technicalPlanStore: store, agentService, aiService: { getConfig: () => ({ image_model: { status: 'available' } }) },
         rejectionCheckStore: { loadRejectionCheck: () => ({}) }, duplicateCheckStore: { loadDuplicateCheck: () => ({}) },
       });
       createService().startContentGeneration({ regenerate });

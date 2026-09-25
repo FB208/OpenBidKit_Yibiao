@@ -237,6 +237,7 @@ const bridge = {
     selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
     readContentWord: (sectionId) => ipcRenderer.invoke('technical-plan:read-content-word', sectionId),
+    previewContentWord: (sectionId) => ipcRenderer.invoke('technical-plan:preview-content-word', sectionId),
     readTenderSourceMarkdown: (sourceId) => ipcRenderer.invoke('technical-plan:read-tender-source-markdown', sourceId),
     updateStep: (step) => ipcRenderer.invoke('technical-plan:update-step', step),
     saveBidAnalysisConfig: (payload) => ipcRenderer.invoke('technical-plan:save-bid-analysis-config', payload),

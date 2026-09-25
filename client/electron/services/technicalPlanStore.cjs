@@ -52,6 +52,8 @@ const defaultContentGenerationOptions = Object.freeze({
   useAiImages: true,
   useMermaidImages: true,
   useHtmlImages: true,
+  htmlImageOptimization: false,
+  wordCountRepair: false,
   htmlImageTypes: defaultHtmlImageTypes,
   tableRequirement: 'heavy',
 });
@@ -352,6 +354,8 @@ function normalizeContentGenerationOptions(options) {
     useAiImages: hasOwn(source, 'useAiImages') ? Boolean(source.useAiImages) : defaultContentGenerationOptions.useAiImages,
     useMermaidImages: hasOwn(source, 'useMermaidImages') ? Boolean(source.useMermaidImages) : defaultContentGenerationOptions.useMermaidImages,
     useHtmlImages: hasOwn(source, 'useHtmlImages') ? Boolean(source.useHtmlImages) : defaultContentGenerationOptions.useHtmlImages,
+    htmlImageOptimization: Boolean(source.htmlImageOptimization),
+    wordCountRepair: Boolean(source.wordCountRepair),
     htmlImageTypes: String(source.htmlImageTypes || defaultContentGenerationOptions.htmlImageTypes),
     tableRequirement: ['none', 'light', 'moderate', 'heavy'].includes(source.tableRequirement) ? source.tableRequirement : defaultContentGenerationOptions.tableRequirement,
   };
@@ -671,13 +675,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         id, bid_analysis_mode, bid_section_mode, outline_mode, outline_expansion_mode,
         minimum_words, maximum_words, section_words, global_facts_mode, export_template_id, export_template_scope,
         use_ai_images, use_mermaid_images,
-        use_html_images, html_image_types, table_requirement, image_quantity,
+        use_html_images, html_image_types, table_requirement, image_quantity, html_image_optimization, word_count_repair,
         created_at, updated_at
       ) VALUES (
         1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
         @minimum_words, @maximum_words, @section_words, @global_facts_mode, @export_template_id, @export_template_scope,
         @use_ai_images, @use_mermaid_images,
-        @use_html_images, @html_image_types, @table_requirement, @image_quantity,
+        @use_html_images, @html_image_types, @table_requirement, @image_quantity, @html_image_optimization, @word_count_repair,
         @created_at, @updated_at
       )
     `).run({
@@ -697,6 +701,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       html_image_types: content.htmlImageTypes,
       table_requirement: content.tableRequirement,
       image_quantity: content.imageQuantity,
+      html_image_optimization: toDbBool(content.htmlImageOptimization),
+      word_count_repair: toDbBool(content.wordCountRepair),
       created_at: timestamp,
       updated_at: timestamp,
     });
@@ -742,6 +748,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         htmlImageTypes: row.html_image_types,
         tableRequirement: row.table_requirement,
         imageQuantity: row.image_quantity,
+        htmlImageOptimization: fromDbBool(row.html_image_optimization),
+        wordCountRepair: fromDbBool(row.word_count_repair),
       },
     });
   }
@@ -769,6 +777,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         html_image_types = @html_image_types,
         table_requirement = @table_requirement,
         image_quantity = @image_quantity,
+        html_image_optimization = @html_image_optimization,
+        word_count_repair = @word_count_repair,
         updated_at = @updated_at
       WHERE id = 1
     `).run({
@@ -788,6 +798,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       html_image_types: content.htmlImageTypes,
       table_requirement: content.tableRequirement,
       image_quantity: content.imageQuantity,
+      html_image_optimization: toDbBool(content.htmlImageOptimization),
+      word_count_repair: toDbBool(content.wordCountRepair),
       updated_at: now(),
     });
     replaceGenerationList('technical_plan_generation_bid_tasks', 'task_id', normalized.bidAnalysisSelectedTaskIds);

@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildContentGenerationFiles, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { runContentGenerationTask, prepareContentGenerationStart } = require('../electron/services/contentGenerationTask.cjs');
-const { scanGeneratedSections, convertContentSections } = require('../electron/services/contentGenerationOutput.cjs');
+const { scanGeneratedSections, previewContentSection, convertContentSections } = require('../electron/services/contentGenerationOutput.cjs');
 
 // 验证基准公式、整数分配及计划保存/再读取，避免只检查提示词文本。
 function checkContentWordPlanning() {
@@ -68,6 +68,11 @@ function checkContentWordPlanning() {
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64');
 const body = '<!-- yibiao:block -->\n<p>施工准备与检查</p>\n<!-- yibiao:block -->\n<table><tbody><tr><td><p>责任</p></td><td><p>项目组</p></td></tr></tbody></table>\n<!-- yibiao:block -->\n<figure id="现场图" data-yb-generation="aiImage" data-yb-size="wide"><template data-yb-role="prompt">复用现场图片</template><img alt="现场" data-yb-asset-ref="原图/现场 图片.png"><figcaption>现场情况</figcaption></figure>';
+const pendingImageTable = '<table data-yb-preset="threeImages"><tbody><tr>'
+  + '<td><figure data-yb-size="wide"><img alt="待生成"><figcaption>待生成图片</figcaption></figure></td>'
+  + '<td><figure data-yb-size="wide"><img data-yb-asset-ref="原图/尚未写入.png"><figcaption>等待文件写入</figcaption></figure></td>'
+  + '<td><figure data-yb-size="wide"><img data-yb-asset-ref="原图/现场 图片.png"><figcaption>已生成图片</figcaption></figure></td>'
+  + '</tr></tbody></table>';
 
 // 使用真实 Agent 输入格式，目录顺序刻意与文件名排序不同。
 function createFixture(directory) {
@@ -89,6 +94,86 @@ function createFixture(directory) {
   const targets = JSON.parse(fs.readFileSync(path.join(directory, '正文编排决策.json'), 'utf8')).targets;
   fs.mkdirSync(path.join(directory, '正文'), { recursive: true });
   return { outline, targets };
+}
+
+// 临时预览只读取最新会话内容，缺图处理、成功和失败清理均不触碰正式产物。
+async function checkContentPreview(directory, outputDir) {
+  const { targets } = createFixture(directory);
+  const sectionId = targets[0].id;
+  const htmlFile = path.join(directory, targets[0].file);
+  const temporaryDirs = [];
+  const originalMkdtemp = fs.mkdtempSync;
+  fs.mkdtempSync = (...args) => {
+    const result = originalMkdtemp(...args);
+    if (path.basename(result).startsWith('yibiao-content-preview-')) temporaryDirs.push(result);
+    return result;
+  };
+  let calls = 0;
+  let fail = false;
+  const args = {
+    sectionId,
+    agentService: { loadPersistentTask: key => {
+      assert.equal(key, 'technical-plan-content-generation');
+      return { paths: { workspaceDir: directory } };
+    } },
+    openXmlHelperService: { async createRestrictedHtmlDocx(html, config, options) {
+      calls++;
+      assert.equal(config.page.size, 'A4');
+      assert.equal(options.assetRoot, directory);
+      assert.equal(options.copyAssets, true);
+      if (fail) throw new Error('临时转换失败');
+      return { bytes: Buffer.from(html) };
+    } },
+  };
+  try {
+    assert.equal(await previewContentSection({ ...args, agentService: { loadPersistentTask: () => null } }), null);
+    assert.equal(await previewContentSection(args), null);
+    fs.writeFileSync(htmlFile, ' \n', 'utf8');
+    assert.equal(await previewContentSection(args), null);
+    assert.equal(calls, 0);
+    fs.mkdirSync(path.join(directory, '原图'), { recursive: true });
+    fs.writeFileSync(path.join(directory, '原图/现场 图片.png'), png);
+    fs.mkdirSync(outputDir, { recursive: true });
+    const formalFile = path.join(outputDir, `${sectionId}.docx`);
+    fs.writeFileSync(formalFile, '正式 Word 不变', 'utf8');
+    const source = body + pendingImageTable;
+    fs.writeFileSync(htmlFile, source, 'utf8');
+    const templateFile = path.join(directory, '所选模板配置.json');
+    const templateSource = fs.readFileSync(templateFile, 'utf8');
+    fs.unlinkSync(templateFile);
+    await assert.rejects(previewContentSection(args), { code: 'ENOENT' }, '有正文但模板缺失时必须报告错误');
+    fs.writeFileSync(templateFile, templateSource, 'utf8');
+    const first = await previewContentSection(args);
+    assert.ok(first instanceof Uint8Array);
+    const preview = Buffer.from(first).toString('utf8');
+    assert.match(preview, /图片生成中：待生成图片/);
+    assert.match(preview, /图片生成中：等待文件写入/);
+    assert.match(preview, /<table data-yb-preset="threeImages">/);
+    assert.match(preview, /data-yb-asset-ref="原图\/现场 图片.png"/);
+    assert.doesNotMatch(preview, /尚未写入\.png/);
+    assert.equal(fs.readFileSync(htmlFile, 'utf8'), source);
+    fs.writeFileSync(htmlFile, source.replace('施工准备与检查', '第二次更新后的正文'), 'utf8');
+    const second = await previewContentSection(args);
+    assert.match(Buffer.from(second).toString('utf8'), /第二次更新后的正文/);
+    assert.equal(calls, 2, '每次点击必须重新转换，不复用缓存');
+    fail = true;
+    await assert.rejects(previewContentSection(args), /临时转换失败/);
+    assert.equal(temporaryDirs.length, 3);
+    assert.equal(new Set(temporaryDirs).size, 3, '每个请求使用独立临时目录');
+    assert.ok(temporaryDirs.every(item => !fs.existsSync(item)), '成功和失败均清理临时 Word 目录');
+    assert.equal(fs.readFileSync(formalFile, 'utf8'), '正式 Word 不变');
+    assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
+    const originalAccess = fs.accessSync;
+    try {
+      fs.accessSync = () => { const error = new Error('图片读取被拒绝'); error.code = 'EACCES'; throw error; };
+      await assert.rejects(previewContentSection(args), /图片读取被拒绝/);
+    } finally {
+      fs.accessSync = originalAccess;
+    }
+    console.log('临时 Word：每次读取最新正文、缺图副本占位、真实读取错误、独立目录及成功/失败清理通过。');
+  } finally {
+    fs.mkdtempSync = originalMkdtemp;
+  }
 }
 
 // 手动推进真实任务注册的十秒回调，无需等待或调用外部 AI。
@@ -150,12 +235,25 @@ async function checkTask(directory, outputDir) {
         fs.writeFileSync(path.join(directory, '正文/other.html'), body);
         fs.writeFileSync(path.join(directory, '正文/a0000000-0000-4000-8000-000000000010.html.tmp'), body);
         fs.writeFileSync(path.join(directory, '正文/a0000000-0000-4000-8000-000000000010.html'), '  \n');
-        assert.equal(scanGeneratedSections(directory, targets), 0);
+        assert.deepEqual(scanGeneratedSections(directory, targets), []);
         for (const [index, section] of targets.entries()) {
           await generate.execute('generate', { sections: [{ section_id: section.id, instructions: '施工', references: '' }] });
           assert.equal(state.contentGenerationTask.stats.content.generation_completed, index);
           tick(10000);
           assert.equal(state.contentGenerationTask.stats.content.generation_completed, index + 1);
+          assert.deepEqual(scanGeneratedSections(directory, targets), targets.slice(0, index + 1).map(item => item.id));
+          assert.deepEqual(state.contentGenerationTask.stats.content.preview_ready_section_ids, targets.slice(0, index + 1).map(item => item.id));
+          if (index === 0) {
+            fs.writeFileSync(path.join(directory, targets[0].file), '', 'utf8');
+            fs.writeFileSync(path.join(directory, targets[1].file), body, 'utf8');
+            tick(10000);
+            assert.deepEqual(state.contentGenerationTask.stats.content.preview_ready_section_ids, [targets[1].id], '数量相同但小节变化也须发布');
+            assert.equal(state.contentGenerationTask.stats.content.generation_completed, 1, '预览扫描不改变原累计进度');
+            fs.writeFileSync(path.join(directory, targets[0].file), body, 'utf8');
+            fs.writeFileSync(path.join(directory, targets[1].file), '', 'utf8');
+            tick(10000);
+            assert.deepEqual(state.contentGenerationTask.stats.content.preview_ready_section_ids, [targets[0].id]);
+          }
           const progress = state.contentGenerationTask.progress;
           tick(10000);
           assert.equal(state.contentGenerationTask.progress, progress);
@@ -803,6 +901,34 @@ async function checkRealWord(directory, outputDir, hasTables = true) {
       assert.match(xml, /<w:drawing[ >]/);
       assert.ok(zip.getEntries().some(entry => /(^|\/)media\/.+\.png$/i.test(entry.entryName)));
     }
+    if (hasTables) {
+      const section = result.sections[0];
+      const sourceFile = path.join(directory, section.file);
+      const source = fs.readFileSync(sourceFile, 'utf8');
+      const formalFile = path.join(outputDir, outputs[0].file);
+      const formalBytes = fs.readFileSync(formalFile);
+      const args = { sectionId: section.section_id, agentService: { loadPersistentTask: () => ({ paths: { workspaceDir: directory } }) }, openXmlHelperService: service };
+      try {
+        const previewSource = source + pendingImageTable;
+        fs.writeFileSync(sourceFile, previewSource, 'utf8');
+        const previewBytes = await previewContentSection(args);
+        const previewZip = new AdmZip(Buffer.from(previewBytes));
+        const previewXml = previewZip.readAsText('word/document.xml');
+        assert.match(previewXml, /图片生成中：待生成图片/);
+        assert.match(previewXml, /图片生成中：等待文件写入/);
+        assert.match(previewXml, /已生成图片/);
+        assert.match(previewXml, /<w:tbl[ >]/);
+        assert.match(previewXml, /<w:drawing[ >]/);
+        assert.equal(fs.readFileSync(sourceFile, 'utf8'), previewSource, '缺图占位不能回写源 HTML');
+        fs.writeFileSync(sourceFile, `${previewSource}<p>临时预览第二次更新</p>`, 'utf8');
+        const updatedZip = new AdmZip(Buffer.from(await previewContentSection(args)));
+        assert.match(updatedZip.readAsText('word/document.xml'), /临时预览第二次更新/);
+        assert.deepEqual(fs.readFileSync(formalFile), formalBytes, '临时预览不能覆盖正式 Word');
+        console.log('真实临时 Word：图片表格缺图占位、已有图片保留、重新点击读取最新正文及正式产物隔离通过。');
+      } finally {
+        fs.writeFileSync(sourceFile, source, 'utf8');
+      }
+    }
     await assert.rejects(service.createRestrictedHtmlDocx(body.replace('原图/现场 图片.png', '原图/不存在.png'), { page: {} }, { assetRoot: directory, copyAssets: true }));
     assert.equal(fs.readdirSync(path.join(app.getPath(), 'workspace')).some(name => name.startsWith('restricted-html-assets-')), false);
     assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
@@ -870,6 +996,7 @@ async function main() {
     checkImageModelStartup();
     checkRetiredStageCleanup();
     checkExportNumbering();
+    await checkContentPreview(path.join(directory, '临时预览会话'), path.join(directory, '临时预览正式产物'));
     const agentDir = path.join(directory, 'agent-runtime', '正文会话');
     const outputDir = path.join(directory, '独立用户数据', 'workspace', 'technical-plan');
     await checkTask(agentDir, outputDir);

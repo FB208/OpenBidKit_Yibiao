@@ -7,6 +7,8 @@ export const defaultContentGenerationOptions: ContentGenerationOptions = {
   useAiImages: false,
   useMermaidImages: true,
   useHtmlImages: true,
+  htmlImageOptimization: false,
+  wordCountRepair: false,
   htmlImageTypes: DEFAULT_HTML_IMAGE_TYPES,
   tableRequirement: 'heavy',
 };
@@ -27,6 +29,8 @@ export function normalizeContentGenerationOptions(
     useAiImages: Boolean(options?.useAiImages ?? fallback.useAiImages) && imageModelAvailable,
     useMermaidImages: Boolean(options?.useMermaidImages ?? fallback.useMermaidImages),
     useHtmlImages: Boolean(options?.useHtmlImages ?? fallback.useHtmlImages),
+    htmlImageOptimization: Boolean(options?.htmlImageOptimization ?? fallback.htmlImageOptimization),
+    wordCountRepair: Boolean(options?.wordCountRepair ?? fallback.wordCountRepair),
     htmlImageTypes: String(options?.htmlImageTypes ?? fallback.htmlImageTypes),
     tableRequirement: isContentTableRequirement(options?.tableRequirement) ? options.tableRequirement : fallback.tableRequirement,
   };

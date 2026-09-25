@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 33;
+PRAGMA user_version = 34;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   html_image_types TEXT NOT NULL DEFAULT '',
   table_requirement TEXT NOT NULL DEFAULT 'heavy',
   image_quantity TEXT NOT NULL DEFAULT 'light',
+  html_image_optimization INTEGER NOT NULL DEFAULT 0,
+  word_count_repair INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

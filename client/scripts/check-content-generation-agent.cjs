@@ -25,7 +25,7 @@ async function checkImageManifestTools({ Type, workspaceDir, signal }) {
   save(sections[0], first); save(sections[1], second);
   const { createContentImageProtection } = require('../electron/services/contentGenerationEditTools.cjs');
   const protection = createContentImageProtection({ workspaceDir: root, files: sections.map(section => section.file) });
-  const tools = createContentGenerationImageTools({ aiService: {}, signal, sections,
+  const tools = createContentGenerationImageTools({ htmlImageOptimization: true, aiService: {}, signal, sections,
     beforeApply: () => protection.beforeToolCall({ toolCall: { name: 'apply-section-images' } }),
   }, { Type, workspaceDir: root });
   const list = tools.find(tool => tool.name === 'list-section-images');
@@ -104,7 +104,7 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
     async renderHtmlToPng(source, options) { rendering.push({ source, frame: options.frameSize }); return png; },
     async renderMermaidToPng(source) { rendering.push({ source }); return png; },
   };
-  const tools = createContentGenerationImageTools({ aiService, signal, localImageRenderService: renderer }, { Type, workspaceDir });
+  const tools = createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal, localImageRenderService: renderer }, { Type, workspaceDir });
   const tool = tools.find(item => item.name === 'generate-section-images');
   const jobs = [
     { image_id: '进度图', kind: 'html', frame_size: 'wide', prompt: '进度：准备2天，实施3天' },
@@ -145,7 +145,7 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
     assert.equal(retry.status, 'success');
     assert.notEqual(retry.source_file, results[0].source_file, '重新生成不得覆盖旧源码');
   }
-  aiService.chat = async () => html;
+  aiService.chat = async () => `\`\`\`html\n${html}\n\`\`\``;
   renderer.renderHtmlToPng = async () => { throw new Error('模拟转图失败'); };
   const failed = (await tool.execute('render-error', { images: [jobs[0]] })).details.results[0];
   assert.equal(failed.stage, 'render');
@@ -160,9 +160,48 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   aiService.chat = async () => html;
   renderer.renderHtmlToPng = async () => ({ ...png, layout_issues: ['越界'] });
   assert.equal((await tool.execute('initial-layout', { images: [jobs[0]] })).details.results[0].status, 'needs_repair');
-  for (const invalid of ['', '```html\n<div>围栏</div>\n```']) {
+  // 默认关闭二次优化：首次生成及重渲染跳过布局审核，真正的转图失败仍报错。
+  const uncheckedTools = createContentGenerationImageTools({ aiService, signal, localImageRenderService: renderer }, { Type, workspaceDir });
+  renderer.renderHtmlToPng = async (_source, options) => {
+    assert.equal(options.checkLayout, false);
+    return { ...png, layout_issues: [] };
+  };
+  for (const [name, params] of [['generate-section-images', { images: [jobs[0]] }], ['render-html-image', repairParams]]) {
+    const result = (await uncheckedTools.find(item => item.name === name).execute('unchecked', params)).details.results[0];
+    assert.equal(result.status, 'success');
+    assert.deepEqual(result.layout_issues, []);
+  }
+  renderer.renderHtmlToPng = async () => { throw new Error('模拟转图失败'); };
+  assert.equal((await uncheckedTools.find(item => item.name === 'render-html-image').execute('unchecked-error', repairParams)).details.results[0].status, 'error');
+  // 从实际生成工具检查源码提取：不重新请求模型，保存和渲染收到同一份源码。
+  for (const kind of ['html', 'mermaid']) {
+    const source = kind === 'html' ? '<div>中文与行内 ``` 标记</div>\r\n  <p>保留缩进</p>'
+      : 'flowchart LR\r\n  A["准备"] --> B["交付"]';
+    for (const response of [source, `\`\`\`${kind}\n${source}\n\`\`\``, `\`\`\`\n${source}\n\`\`\``, ` \r\n\`\`\`${kind.toUpperCase()} \r\n${source}\r\n\`\`\` \r\n`]) {
+      let calls = 0, renders = 0;
+      aiService.chat = async () => { calls++; return response; };
+      renderer[kind === 'html' ? 'renderHtmlToPng' : 'renderMermaidToPng'] = async actual => {
+        renders++;
+        assert.equal(actual, source);
+        return { ...png, layout_issues: [] };
+      };
+      const result = (await tool.execute('extract-source', { images: [{ ...jobs[0], kind }] })).details.results[0];
+      assert.equal(result.status, 'success', result.error);
+      assert.equal(calls, 1);
+      assert.equal(renders, 1);
+      assert.equal(fs.readFileSync(path.join(workspaceDir, result.source_file), 'utf8'), source);
+    }
+  }
+  renderer.renderHtmlToPng = async () => assert.fail('包装错误不应进入渲染');
+  for (const invalid of ['', '```html\n```', '```html\n \n```', '```html\n<div>未闭合</div>',
+    '解释文字\n```html\n<div>内容</div>\n```', '```html\n<div>内容</div>\n```\n解释文字',
+    '```html\n<div>第一段</div>\n```\n```html\n<div>第二段</div>\n```',
+    '```mermaid\nflowchart LR\nA-->B\n```', '```json\n{}\n```']) {
     aiService.chat = async () => invalid;
-    assert.equal((await tool.execute('invalid-source', { images: [jobs[0]] })).details.results[0].status, 'error');
+    const result = (await tool.execute('invalid-source', { images: [jobs[0]] })).details.results[0];
+    assert.equal(result.status, 'error');
+    assert.match(result.error, /配图源码|配图围栏语言/);
+    assert.equal(result.source_file, undefined);
   }
   aiService.chat = async () => assert.fail('缺少画布比例不得请求模型');
   assert.match((await tool.execute('missing-size', { images: [{ ...jobs[0], frame_size: undefined }] })).details.results[0].error, /frame_size/);
@@ -171,7 +210,7 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
     const taskCancel = new AbortController(), toolCancel = new AbortController();
     let cancelled = 0;
     aiService.chat = request => new Promise((_resolve, reject) => request.signal.addEventListener('abort', () => { cancelled++; reject(request.signal.reason); }, { once: true }));
-    const cancellable = createContentGenerationImageTools({ aiService, signal: taskCancel.signal }, { Type, workspaceDir }).find(item => item.name === tool.name);
+    const cancellable = createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal: taskCancel.signal }, { Type, workspaceDir }).find(item => item.name === tool.name);
     const before = fs.readdirSync(path.join(workspaceDir, '图片'));
     const running = cancellable.execute('cancel-sources', { images: jobs.slice(0, 3) }, toolCancel.signal);
     (cancelTask ? taskCancel : toolCancel).abort(new Error('取消源码生成'));
@@ -214,7 +253,7 @@ async function checkImagePauseSession({ workspaceDir }) {
       reject(options.createPauseError());
     }; });
   } };
-  const created = await createPiSession({ ...base, createTools: context => createContentGenerationImageTools({ aiService, signal: controller.signal, localImageRenderService: renderer }, context) });
+  const created = await createPiSession({ ...base, createTools: context => createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal: controller.signal, localImageRenderService: renderer }, context) });
   const jobs = [
     { image_id: '完成图片', kind: 'ai', prompt: 'AI图', size: '1024x1024' },
     { image_id: '完成源码', kind: 'mermaid', prompt: '待转图' },
@@ -253,7 +292,7 @@ async function checkImagePauseSession({ workspaceDir }) {
     resumed = await createPiSession({ ...base, sessionFile: created.sessionFile });
     assert.ok(resumed.session.agent.state.messages.some(message => message.role === 'toolResult' && JSON.stringify(message).includes(image.asset_ref)), '重新打开原会话仍能找到已完成图片');
     const { Type } = await import('typebox');
-    const repairs = createContentGenerationImageTools({
+    const repairs = createContentGenerationImageTools({ htmlImageOptimization: true,
       aiService: { chat: () => assert.fail('恢复转图不得重新生成源码'), generateImage: () => assert.fail('不重新生成成功图片') },
       signal: new AbortController().signal,
       localImageRenderService: { async renderMermaidToPng() { return { buffer: Buffer.from('恢复图片'), width: 100, height: 80 }; } },
@@ -477,7 +516,7 @@ async function checkTableCleanup({ Type, workspaceDir, fileOptions, signal }) {
   let failFirst = true;
   const service = {
     hasPersistentTaskSession: () => true,
-    loadPersistentTask: () => ({ state: savedState }),
+    loadPersistentTask: () => ({ state: savedState, paths: { workspaceDir } }),
     updatePersistentTask(_key, patch) { savedState = { ...savedState, ...structuredClone(patch) }; },
     async runTask(payload) {
       if (payload.primary_session) {
@@ -647,7 +686,7 @@ async function main() {
         } },
         agentService: {
           hasPersistentTaskSession: () => resume,
-          loadPersistentTask: () => ({ state: {} }),
+          loadPersistentTask: () => ({ state: {}, paths: { workspaceDir: noKnowledgeDir } }),
           updatePersistentTask() {},
           async runTask(payload) {
             assert.doesNotMatch(payload.prompt, /知识库|索引|编排知识条目/);
@@ -689,7 +728,7 @@ async function main() {
     assert.match(input.word_requirements, /1000.*2000/);
     assert.match(input.word_requirements, /content_plan.target_words/);
     assert.equal(input.targets[0].content_plan.target_words, 750);
-    assert.match(input.word_requirements, /本次暂不执行生成后的扩缩写/);
+    assert.match(input.word_requirements, /由主 Agent 统一检查总字数/);
     assert.equal(input.targets[0].content_plan.image_suitability_score, 8);
     assert.match(input.image_requirements, /少图：按本轮布局名额/);
     assert.deepEqual(input.image_layout_quota, { total_groups: 2, single: 1, imageText: 1, threeImages: 0, fourImages: 0 });
@@ -851,7 +890,7 @@ async function main() {
       const renderer = {};
       const method = kind === 'html' ? 'renderHtmlToPng' : 'renderMermaidToPng';
       const pause = new AbortController();
-      const renderTool = createContentGenerationImageTools({ aiService: {}, signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(tool => tool.name === `render-${kind}-image`);
+      const renderTool = createContentGenerationImageTools({ htmlImageOptimization: true, aiService: {}, signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(tool => tool.name === `render-${kind}-image`);
       const renderParams = { images: [{ image_id: '实施图', source_file: sourceFile, ...(kind === 'html' ? { frame_size: 'wide' } : {}) }] };
       assert.deepEqual(renderTool.parameters.required, ['images']);
       assert.equal(renderTool.parameters.properties.images.items.required.includes('frame_size'), kind === 'html');
@@ -910,7 +949,7 @@ async function main() {
         const taskCancel = new AbortController(), toolCancel = new AbortController();
         const inFlight = [];
         renderer[method] = (_text, options) => new Promise(resolve => inFlight.push({ resolve, options }));
-        const cancellable = createContentGenerationImageTools({ aiService: {}, signal: taskCancel.signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(item => item.name === renderTool.name);
+        const cancellable = createContentGenerationImageTools({ htmlImageOptimization: true, aiService: {}, signal: taskCancel.signal, localImageRenderService: renderer }, { Type, workspaceDir }).find(item => item.name === renderTool.name);
         const running = cancellable.execute('cancel-batch', { images: batchImages }, toolCancel.signal);
         inFlight[0].resolve({ buffer: Buffer.from('已完成'), width: 100, height: 80, layout_issues: [] });
         await new Promise(resolve => setImmediate(resolve));
@@ -1035,7 +1074,7 @@ async function main() {
             assert.match(payload.prompt, /每张源码生成完成立即本地转图/);
             assert.match(payload.prompt, /有 source_file 的失败或未完成项直接读取/);
             assert.match(payload.prompt, /两个 render 工具都使用 images 数组/);
-            assert.match(payload.prompt, /needs_repair 表示布局仍需修复/);
+            assert.match(payload.prompt, /按工具说明处理未成功项；success 图片直接回填/);
             assert.match(payload.prompt, /global_facts_requirements（当前事实模式的中文要求）/);
             assert.doesNotMatch(payload.prompt, /本次使用已还原底稿/);
             assert.match(payload.prompt, /知识库\/索引.json定位参考文档/);
@@ -1056,6 +1095,7 @@ async function main() {
       assert.equal(updates, resume ? 2 : 1);
       assert.equal(result.sections[0].words, 6);
     }
+    await checkRepairOptions({ Type, workspaceDir, files, signal });
     await checkImageProtectionLifecycle({ Type, workspaceDir, files, signal });
     await checkTableCleanup({ Type, workspaceDir: path.join(workspaceDir, '去表格'), fileOptions, signal });
     await checkLayoutSupplement({ Type, workspaceDir, signal });
@@ -1065,6 +1105,46 @@ async function main() {
   } finally {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
+}
+
+// 验证两项开关由程序独立控制；模型只接收当前有效的指令和工具。
+async function checkRepairOptions({ Type, workspaceDir, files, signal }) {
+  const file = path.join(workspaceDir, '正文编排决策.json');
+  const original = fs.readFileSync(file, 'utf8');
+  try {
+    const decisions = JSON.parse(original);
+    decisions.word_control = { minimumWords: 1000000, maximumWords: 0, checkTotalWords: true };
+    const content = JSON.stringify(decisions);
+    fs.writeFileSync(file, content, 'utf8');
+    const snapshot = files.map(item => item.path === '正文编排决策.json' ? { ...item, content } : item);
+    for (const wordCountRepair of [false, true]) for (const htmlImageOptimization of [false, true]) {
+      for (const resume of [false, true]) {
+        const service = {
+          hasPersistentTaskSession: () => resume,
+          loadPersistentTask: () => ({ state: {} }),
+          updatePersistentTask() {},
+          async runTask(payload) {
+            const tools = payload.create_tools({ Type, workspaceDir });
+            assert.equal(tools.some(tool => tool.name === 'adjust-sections'), wordCountRepair);
+            assert.equal(payload.prompt.includes('差额大于10000字时调用 adjust-sections'), wordCountRepair);
+            for (const name of ['generate-section-images', 'render-html-image']) {
+              assert.equal(tools.find(tool => tool.name === name).description.includes('needs_repair'), htmlImageOptimization);
+            }
+            assert.doesNotMatch(tools.find(tool => tool.name === 'render-mermaid-image').description, /needs_repair|layout_issues/);
+            const modelInput = [payload.prompt, ...snapshot.map(item => item.content), ...tools.map(tool => tool.description)].join('\n');
+            assert.doesNotMatch(modelInput, /word_count_repair|html_image_optimization|字数不达标修复|HTML图片二次优化|关闭后不审核/);
+            const next = payload.continueTask({}, { workspace_dir: workspaceDir });
+            assert.equal(next.stage, wordCountRepair ? 'generating' : 'auditing');
+            if (wordCountRepair) assert.match(next.prompt, /正文尚未满足总字数要求/);
+            return { workspace_dir: workspaceDir };
+          },
+        };
+        await runContentGenerationAgent({ agentService: service, aiService: {}, signal, resume,
+          generationOptions: { wordCountRepair, htmlImageOptimization },
+          buildFiles: () => { assert.equal(resume, false, '恢复不重建输入'); return snapshot; } });
+      }
+    }
+  } finally { fs.writeFileSync(file, original, 'utf8'); }
 }
 
 // 使用真实正文适配器核对保护启用、提前提交及暂停恢复，不启动模型或改动输入快照。
@@ -1090,7 +1170,7 @@ async function checkImageProtectionLifecycle({ Type, workspaceDir, files, signal
   const checkBlocked = payload => {
     for (const name of ['adjust-sections', 'bash', 'list-section-images', 'apply-section-images', 'generate-sections', 'generate-section-images', 'render-html-image', 'render-mermaid-image']) {
       assert.equal(activeTools.includes(name), false);
-      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|暂不执行扩缩写/);
+      assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|当前阶段仅统计字数/);
     }
     assert.throws(() => payload.before_file_write({ toolName: 'write', filePath: sectionFile, content: '<p>覆盖正文</p>' }), /正文编辑只能/);
   };
@@ -1212,7 +1292,7 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
       } },
       agentService: {
         hasPersistentTaskSession: () => resume,
-          loadPersistentTask: () => ({ state: {} }),
+        loadPersistentTask: () => ({ state: {} }),
         updatePersistentTask() {},
         async runTask(payload) {
           assert.match(payload.prompt, /本次使用已还原底稿/);
@@ -1304,7 +1384,10 @@ async function checkLocalRendering(workspaceDir) {
   const { Type } = await import('typebox');
   const { nativeImage } = require('electron');
   const renderer = require('../electron/services/localImageRenderService.cjs').getLocalImageRenderService();
-  const tools = createContentGenerationImageTools({ aiService: { async chat(request) { return request.messages[1].content; } }, signal: new AbortController().signal }, { Type, workspaceDir });
+  const tools = createContentGenerationImageTools({ htmlImageOptimization: true, aiService: { async chat(request) {
+    const kind = request.messages[0].content.includes('生成 Mermaid 源码') ? 'mermaid' : 'html';
+    return `\`\`\`${kind}\n${request.messages[1].content}\n\`\`\``;
+  } }, signal: new AbortController().signal }, { Type, workspaceDir });
   const styles = `<style>
     *{box-sizing:border-box}body{margin:0;padding:88px;background:#f8fafc;font:28px "Microsoft YaHei",sans-serif;color:#24344b;display:flex;flex-direction:column}
     header{flex:none;border-bottom:3px solid #2563eb;padding-bottom:20px;margin-bottom:24px;font-size:38px;font-weight:bold}
@@ -1355,12 +1438,20 @@ async function checkLocalRendering(workspaceDir) {
   const overflowResult = await renderer.renderHtmlToPng(overflow, { frameSize: 'square' });
   assert.deepEqual({ width: overflowResult.width, height: overflowResult.height }, { width: 2480, height: 2480 });
   assert.ok(overflowResult.layout_issues.some(issue => issue.includes('元素超出画布内容区域')), '无文字图形的纵向越界也应反馈，且不扩大截图');
+  const unchecked = await renderer.renderHtmlToPng(overflow, { frameSize: 'square', checkLayout: false });
+  assert.deepEqual(unchecked.layout_issues, [], '关闭二次优化时跳过实际布局检测');
+  assert.deepEqual({ width: unchecked.width, height: unchecked.height }, { width: overflowResult.width, height: overflowResult.height });
   const clipped = '<div style="height:32px;overflow:hidden;font-size:32px">第一行<br>第二行</div>';
   const clippedResult = await renderer.probeHtmlLayoutOnly(clipped, { frameSize: 'wide' });
   assert.ok(clippedResult.layout_issues.some(issue => issue.includes('裁切')), '隐藏溢出的文字仍应反馈裁切');
-  fs.writeFileSync(path.join(workspaceDir, '实施流程.mmd'), 'flowchart LR\nA["准备"] --> B["实施"] --> C["交付"]', 'utf8');
+  const mermaidSource = 'flowchart LR\nA["准备"] --> B["实施"] --> C["交付"]';
+  const generatedMermaid = (await tools.find(tool => tool.name === 'generate-section-images').execute('fenced-mermaid', {
+    images: [{ image_id: '流程图', kind: 'mermaid', prompt: mermaidSource }],
+  })).details.results[0];
+  assert.equal(generatedMermaid.status, 'success', generatedMermaid.error);
+  assert.equal(fs.readFileSync(path.join(workspaceDir, generatedMermaid.source_file), 'utf8'), mermaidSource);
   const mermaidResults = (await tools.find(tool => tool.name === 'render-mermaid-image').execute('mermaid', { images: [
-    { image_id: '流程图', source_file: '实施流程.mmd' }, { image_id: '同源第二图', source_file: '实施流程.mmd' },
+    { image_id: '流程图', source_file: generatedMermaid.source_file }, { image_id: '同源第二图', source_file: generatedMermaid.source_file },
   ] })).details.results;
   assert.deepEqual(mermaidResults.map(item => item.status), ['success', 'success']);
   assert.notEqual(mermaidResults[0].asset_ref, mermaidResults[1].asset_ref);

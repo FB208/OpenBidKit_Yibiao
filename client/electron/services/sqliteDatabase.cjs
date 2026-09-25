@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 33;
+const schemaVersion = 34;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -1147,6 +1147,12 @@ function addTechnicalPlanImageQuantity(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'image_quantity', "TEXT NOT NULL DEFAULT 'light'");
 }
 
+/** 保存正文可选修复开关；默认不执行二次优化或字数修复。 */
+function addTechnicalPlanRepairOptions(db) {
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'html_image_optimization', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'word_count_repair', 'INTEGER NOT NULL DEFAULT 0');
+}
+
 function createExportTemplatesSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_templates (
@@ -1507,6 +1513,14 @@ const schemaHealthColumnGroups = [
       image_quantity: "TEXT NOT NULL DEFAULT 'light'",
     },
   },
+  {
+    version: 34,
+    table: 'technical_plan_generation_config',
+    columns: {
+      html_image_optimization: 'INTEGER NOT NULL DEFAULT 0',
+      word_count_repair: 'INTEGER NOT NULL DEFAULT 0',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1731,6 +1745,11 @@ const migrations = [
     version: 33,
     description: '技术方案新增图片数量配置',
     up: addTechnicalPlanImageQuantity,
+  },
+  {
+    version: 34,
+    description: '技术方案新增 HTML 图片二次优化和字数不达标修复开关',
+    up: addTechnicalPlanRepairOptions,
   },
 ];
 

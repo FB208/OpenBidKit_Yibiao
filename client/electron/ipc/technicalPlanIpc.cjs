@@ -1,6 +1,8 @@
 const { ipcMain, shell } = require('electron');
+const { previewContentSection } = require('../services/contentGenerationOutput.cjs');
 
-function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
+// 注册技术方案接口，正文预览转换交给输出服务处理。
+function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentService, openXmlHelperService }) {
   ipcMain.handle('technical-plan:load-state', () => technicalPlanStore.loadTechnicalPlan());
   ipcMain.handle('technical-plan:load-generation-config', () => technicalPlanStore.loadGenerationConfig());
   ipcMain.handle('technical-plan:save-generation-config', (_event, partial) => technicalPlanStore.saveGenerationConfig(partial));
@@ -12,6 +14,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService }) {
   ipcMain.handle('technical-plan:select-bid-section', (_event, selectedSection) => technicalPlanStore.selectBidSection(selectedSection));
   ipcMain.handle('technical-plan:read-tender-markdown', () => technicalPlanStore.readTenderMarkdown());
   ipcMain.handle('technical-plan:read-content-word', (_event, sectionId) => technicalPlanStore.readContentWord(sectionId));
+  ipcMain.handle('technical-plan:preview-content-word', (_event, sectionId) => previewContentSection({ sectionId, agentService, openXmlHelperService }));
   ipcMain.handle('technical-plan:read-tender-source-markdown', (_event, sourceId) => technicalPlanStore.readTenderSourceMarkdown(sourceId));
   ipcMain.handle('technical-plan:update-step', (_event, step) => technicalPlanStore.updateStep(step));
   ipcMain.handle('technical-plan:save-bid-analysis-config', (_event, payload) => technicalPlanStore.saveBidAnalysisConfig(payload));

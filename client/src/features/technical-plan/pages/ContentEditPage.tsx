@@ -193,6 +193,7 @@ function ContentEditPage({
   const allLeaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
   const leaves = useMemo(() => allLeaves.filter((item) => item.content_mode === 'ai-generate'), [allLeaves]);
   const [selectedItemId, setSelectedItemId] = useState('');
+  const [wordPreviewRequest, setWordPreviewRequest] = useState<{ sectionId: string; context: object; version: number }>();
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [draftContent, setDraftContent] = useState('');
@@ -213,12 +214,11 @@ function ContentEditPage({
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedIsWord = selectedIsLeaf && selectedItem?.content_mode === 'ai-generate';
-  // 只在当前小节的转换记录改变时刷新，其他小节的进度不重复加载 Word。
-  const selectedWordConverted = Boolean(contentGenerationRuntime?.html_output?.word_sections.some((section) => section.section_id === selectedItemId));
-  const wordRefreshKey = `${task?.task_id || ''}:${selectedWordConverted}`;
-  // 清空任务或目录快照变化时使旧预览失效；普通转换进度沿用当前文档。
+  // 清空、目录变化或新任务使旧预览失效；扫描和正式转换进度不触发临时转换。
   const hasContentTask = Boolean(task || contentGenerationRuntime?.html_output);
-  const wordContentContext = useMemo(() => ({}), [outlineData, hasContentTask]);
+  const wordContentContext = useMemo(() => ({}), [outlineData, hasContentTask, task?.task_id]);
+  const wordRequestVersion = wordPreviewRequest?.sectionId === selectedItemId && wordPreviewRequest.context === wordContentContext
+    ? wordPreviewRequest.version : 0;
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
   const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
   const running = task?.status === 'running';
@@ -229,6 +229,7 @@ function ContentEditPage({
   const phaseVisible = taskInFlight || paused || taskFailed;
   const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting;
   const contentStats = task?.stats?.content;
+  const previewReadySectionIds = useMemo(() => new Set(contentStats?.preview_ready_section_ids || []), [contentStats?.preview_ready_section_ids]);
   const originalRestoration = hasOriginalPlan && typeof contentStats?.original_restoration?.total_words === 'number' && contentStats.original_restoration.source_hash === originalPlanContentHash
     ? contentStats?.original_restoration : undefined;
   const developerStageGate = developerMode && paused ? contentStats?.developer_stage_gate : undefined;
@@ -529,6 +530,7 @@ function ContentEditPage({
     await window.yibiao?.tasks.startContentGeneration({
       regenerate,
       generationOptions: {
+        ...savedGenerationOptions,
         useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
         useMermaidImages: savedGenerationOptions.useMermaidImages,
         useHtmlImages: savedGenerationOptions.useHtmlImages,
@@ -654,10 +656,19 @@ function ContentEditPage({
     }
   };
 
+  // 每次明确点击都读取最新正文；重复点击同一小节也生成新的临时 Word。
+  const selectOutlineItem = (item: OutlineItem) => {
+    setSelectedItemId(item.id);
+    if (!item.children?.length && item.content_mode === 'ai-generate') {
+      setWordPreviewRequest((previous) => ({ sectionId: item.id, context: wordContentContext, version: (previous?.version || 0) + 1 }));
+    }
+  };
+
   const renderTree = (items: OutlineItem[], level = 0): ReactNode => items.map((item) => {
     const meta = outlineMeta.get(item.id);
     const status = meta?.status || 'idle';
     const isLeaf = !item.children?.length;
+    const previewReady = isLeaf && item.content_mode === 'ai-generate' && previewReadySectionIds.has(item.id);
     const leafCount = meta?.leafCount || 0;
     const words = meta?.words || 0;
     const modeLabel = isLeaf && item.content_mode ? OUTLINE_CONTENT_MODE_LABELS[item.content_mode] : '';
@@ -667,12 +678,12 @@ function ContentEditPage({
         <button
           type="button"
           className={`content-outline-item is-${status}${selectedItemId === item.id ? ' is-active' : ''}`}
-          onClick={() => setSelectedItemId(item.id)}
+          onClick={() => selectOutlineItem(item)}
         >
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
             <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
-            <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · Word 预览` : `${modeLabel || '未标记'} · ${statusLabels[status]} · ${words} 字` : `${leafCount} 个小节`}</small>
+            <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}` : `${modeLabel || '未标记'} · ${statusLabels[status]} · ${words} 字` : `${leafCount} 个小节`}</small>
           </span>
           {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
             <Popover.Root
@@ -845,7 +856,7 @@ function ContentEditPage({
           </div>
 
           {selectedItem && selectedIsWord ? (
-            <ContentWordPreview key={selectedItem.id} sectionId={selectedItem.id} refreshKey={wordRefreshKey} contentContext={wordContentContext} />
+            <ContentWordPreview key={selectedItem.id} sectionId={selectedItem.id} requestVersion={wordRequestVersion} contentContext={wordContentContext} />
           ) : selectedItem && selectedIsLeaf && editing && !isPreviewing ? (
             <MarkdownEditor
               value={draftContent}

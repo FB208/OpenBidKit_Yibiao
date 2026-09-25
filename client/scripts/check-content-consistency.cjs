@@ -109,7 +109,7 @@ async function check() {
       assert.equal(savedState.consistency.round, 1);
       for (const name of ['check-word-count', 'adjust-sections', 'generate-sections', 'generate-image', 'bash']) {
         assert.equal(activeTools.includes(name), false);
-        assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|暂不执行扩缩写/);
+        assert.throws(() => payload.before_tool_call({ toolCall: { name }, args: {} }), /正文编辑期间不能|当前阶段仅统计字数/);
       }
       // 审计修复使字数变多，即使移除字数配置，完成分支也不能再访问字数检查。
       const decisionFile = path.join(workspaceDir, '正文编排决策.json');

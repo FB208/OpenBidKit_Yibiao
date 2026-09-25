@@ -50,6 +50,8 @@ export interface ContentGenerationOptions {
   useAiImages: boolean;
   useMermaidImages: boolean;
   useHtmlImages: boolean;
+  htmlImageOptimization: boolean;
+  wordCountRepair: boolean;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
 }
@@ -134,6 +136,8 @@ export interface BackgroundTaskState {
       };
       generation_total: number;
       generation_completed: number;
+      /** 已有非空 HTML 的小节，仅用于预览展示，不代表正式流程完成。 */
+      preview_ready_section_ids?: string[];
       generated_html_words?: number;
       generated_html_workspace?: string;
       word_conversion_total?: number;

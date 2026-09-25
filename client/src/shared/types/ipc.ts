@@ -747,6 +747,7 @@ export interface YibiaoBridge {
     selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
     readContentWord: (sectionId: string) => Promise<Uint8Array | null>;
+    previewContentWord: (sectionId: string) => Promise<Uint8Array | null>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<void>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;

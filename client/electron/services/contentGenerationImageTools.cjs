@@ -76,6 +76,24 @@ function imageReferenceEdit(html, image, assetRef) {
   return { start: offset, end: offset, newText: ` ${text}` };
 }
 
+// 仅剥除完整包裹源码的一对围栏，保留源码内部字符，不拼接多个代码块。
+function extractImageSource(response, kind) {
+  const text = response.trim();
+  const fences = [...text.matchAll(/^[ \t]*`{3,}[^\r\n]*\r?$/gm)];
+  if (!fences.length) {
+    if (!text) throw new Error('配图源码不能为空');
+    return text;
+  }
+  const wrapped = text.match(/^```([^\r\n`]*)\r?\n([\s\S]*?)(?:\r?\n)?[ \t]*```$/);
+  if (fences.length !== 2 || !wrapped) {
+    throw new Error('配图源码须为纯源码或完整包裹源码的一对围栏，不能包含围栏外说明、多个代码块或未闭合围栏');
+  }
+  const language = wrapped[1].trim().toLowerCase();
+  if (language && language !== kind) throw new Error(`配图围栏语言应为 ${kind}，实际为 ${language}`);
+  if (!wrapped[2].trim()) throw new Error('配图源码不能为空');
+  return wrapped[2];
+}
+
 // 并发源码模型只处理当前图片；布局规范随请求提供，不依赖主会话上下文。
 function buildImageSourcePrompt(kind, frameSize) {
   const common = '你负责生成投标文件中一张独立配图的源码。只返回源码，不输出 Markdown 围栏或解释。仅使用本次请求提供的内容和数据，不虚构事实、数值或承诺；你没有检索、文件写入或渲染工具，不负责正文编排、生成其他图片或回填正文。';
@@ -92,7 +110,7 @@ function buildImageSourcePrompt(kind, frameSize) {
 }
 
 // 图片与独立源码均保存在当前工作区；源码生成使用文本队列，转图继续复用本地渲染。
-function createContentGenerationImageTools({ aiService, signal, localImageRenderService, sections = [], beforeApply = () => {} }, { Type, workspaceDir }) {
+function createContentGenerationImageTools({ aiService, signal, localImageRenderService, htmlImageOptimization = false, sections = [], beforeApply = () => {} }, { Type, workspaceDir }) {
   // 图片和源码每次生成独立文件，失败或重新生成不会覆盖已有产物。
   function saveImage(buffer, extension) {
     const assetRef = `图片/${crypto.randomUUID()}${extension}`;
@@ -113,7 +131,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     const pauseOptions = { isPauseRequested: () => combinedSignal.aborted, createPauseError: () => combinedSignal.reason };
     const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, result.source_file), 'utf8');
     const rendered = result.kind === 'html'
-      ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: result.frame_size })
+      ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: result.frame_size, checkLayout: htmlImageOptimization })
       : await renderer.renderMermaidToPng(source, pauseOptions);
     combinedSignal.throwIfAborted();
     Object.assign(result, {
@@ -152,7 +170,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
   const targets = new Map(sections.map(section => [section.id, section]));
   return [{
     name: 'list-section-images', label: '读取正文图片清单', executionMode: 'sequential',
-    description: '读取本轮目标小节的最新 HTML，返回每张图片的 image_id、小节、生成方式、比例、提示词、图注、当前引用及文件存在状态。image_id 原样传给图片工具及回填工具，不自行拼接。已有引用不代表布局已检查；reused_original 为原方案图片，只复用、不重新生成。默认读取全部目标，可按 section_ids 只刷新待修复小节。',
+    description: '读取本轮目标小节的最新 HTML，返回每张图片的 image_id、小节、生成方式、比例、提示词、图注、当前引用及文件存在状态。image_id 原样传给图片工具及回填工具，不自行拼接。reused_original 为原方案图片，只复用、不重新生成。默认读取全部目标，可按 section_ids 只刷新待修复小节。',
     parameters: Type.Object({ section_ids: Type.Optional(Type.Array(Type.String(), { uniqueItems: true })) }, { additionalProperties: false }),
     async execute(_callId, { section_ids }, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
@@ -169,7 +187,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     },
   }, {
     name: 'apply-section-images', label: '批量回填正文图片', executionMode: 'sequential',
-    description: '批量回填已成功生成并处理完布局问题的图片。image_id 使用清单标识，asset_ref 使用图片工具返回值，previous_asset_ref 使用清单中的原引用（未填写时为空字符串）。按小节合并保存，只修改 img 的 data-yb-asset-ref。引用已变化则先刷新清单；同一地址重复提交不会重复修改。失败或布局问题未解决时不要提交，原图直接复用。检查每项结果，只在本次所需回填全部成功后标记任务完成。',
+    description: '批量回填图片工具返回 status=success 的图片。image_id 使用清单标识，asset_ref 使用图片工具返回值，previous_asset_ref 使用清单中的原引用（未填写时为空字符串）。按小节合并保存，只修改 img 的 data-yb-asset-ref。引用已变化则先刷新清单；同一地址重复提交不会重复修改。未成功的项不要提交，原图直接复用。检查每项结果，只在本次所需回填全部成功后标记任务完成。',
     parameters: Type.Object({ images: Type.Array(Type.Object({
       image_id: Type.String({ minLength: 1 }), asset_ref: Type.String({ minLength: 1 }), previous_asset_ref: Type.String(),
     }, { additionalProperties: false }), { minItems: 1 }) }, { additionalProperties: false }),
@@ -221,7 +239,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     },
   }, {
     name: 'generate-section-images', label: '批量生成正文图片', executionMode: 'sequential',
-    description: '通过 images 一次提交本轮全部待生成 AI、HTML、Mermaid 图片，image_id 原样使用正文图片清单标识，不按类型或小批次拆分。AI 使用生图队列，HTML/Mermaid 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列；超限自动排队。返回逐项 status、stage、asset_ref、source_file 和 HTML layout_issues。success 才可回填；needs_repair 须修改源码后转图。有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。暂停结果保留已完成产物，恢复仅补未完成项。',
+    description: `通过 images 一次提交本轮全部待生成 AI、HTML、Mermaid 图片，image_id 原样使用正文图片清单标识，不按类型或小批次拆分。AI 使用生图队列，HTML/Mermaid 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列；超限自动排队。返回逐项 status、stage、asset_ref、source_file 和 error。success 图片直接回填。${htmlImageOptimization ? 'HTML 返回 needs_repair 时，按 layout_issues 修改源码后转图，直到成功。' : ''}有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。暂停结果保留已完成产物，恢复仅补未完成项。`,
     parameters: Type.Object({ images: Type.Array(Type.Union(['ai', 'html', 'mermaid'].map(kind => Type.Object({
       image_id: Type.String({ minLength: 1, description: '正文图片清单中的 image_id，批内唯一。' }),
       kind: Type.Literal(kind),
@@ -245,12 +263,12 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
           Object.assign(result, generated, { status: 'success', asset_ref: saveImage(fs.readFileSync(generated.file_path), path.extname(generated.file_path)) });
         } else {
           if (!['html', 'mermaid'].includes(kind)) throw new Error('图片 kind 必须为 ai、html 或 mermaid');
-          const source = (await aiService.chat({
+          const response = await aiService.chat({
             signal: combinedSignal, logTitle: `Agent 配图源码-${kind}-${image_id}`,
             messages: [{ role: 'system', content: buildImageSourcePrompt(kind, frame_size) }, { role: 'user', content: prompt }],
-          })).trim();
+          });
           combinedSignal.throwIfAborted();
-          if (!source || source.startsWith('```')) throw new Error('配图源码不能为空或包含 Markdown 围栏，请只返回源码');
+          const source = extractImageSource(response, kind);
           result.source_file = saveImage(Buffer.from(source, 'utf8'), kind === 'html' ? '.html' : '.mmd');
           result.stage = 'render';
           await renderImage(result, combinedSignal);
@@ -259,7 +277,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     },
   }, ...['html', 'mermaid'].map(kind => ({
     name: `render-${kind}-image`, label: kind === 'html' ? '批量 HTML 转图片' : '批量 Mermaid 转图片',
-    description: `将本轮全部待渲染的 ${kind === 'html' ? 'HTML' : 'Mermaid'} 文件通过 images 一次提交，单张也使用一项数组，不逐张或分小批等待。读取工作区已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，由现有本地渲染队列控制并发并转为 PNG。返回 results 中每项的 image_id、status、asset_ref、像素尺寸和源码路径或 error${kind === 'html' ? '，并保留各项 layout_issues' : ''}；status=needs_repair 表示布局仍需修复，不可回填。只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
+    description: `将本轮全部待渲染的 ${kind === 'html' ? 'HTML' : 'Mermaid'} 文件通过 images 一次提交，单张也使用一项数组，不逐张或分小批等待。读取工作区已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，由现有本地渲染队列控制并发并转为 PNG。返回 results 中每项的 image_id、status、asset_ref、像素尺寸和源码路径或 error。success 图片直接回填。${kind === 'html' && htmlImageOptimization ? '返回 needs_repair 时，按 layout_issues 修改源码后重新渲染，直到成功。' : ''}只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
     executionMode: 'sequential',
     parameters: Type.Object({
       images: Type.Array(Type.Object({
