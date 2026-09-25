@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { countReadableWords } = require('../utils/wordCount.cjs');
+const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 const { createContentGenerationImageTools, validateContentImageReferences } = require('./contentGenerationImageTools.cjs');
 const { countHtmlWords, checkWordCount, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
@@ -243,13 +244,13 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
             const restoredContext = section.restored_content
               ? `\n\n本节已还原底稿（完整内容）：\n${read(section.restored_content.file)}`
               : '';
-            const html = checkSectionHtml(await aiService.chat({
+            const html = checkSectionHtml(extractAiSource(await aiService.chat({
               signal: combinedSignal, logTitle: `Agent HTML正文-${section.number}-${section.title}`,
               messages: [
                 { role: 'system', content: `${writingInstructions(decisions.has_knowledge_base)}\n\n本次事实处理要求：\n${decisions.global_facts_requirements}\n\n${rules}\n\n配图类型对照表（据此确定新增图片的生成类型）：\n${imageTypes}\n\n本次配图要求：\n${decisions.image_requirements}${section.restored_content ? `\n\n本节还原处理要求（原表格、原图保留规则优先于新增限制）：\n${decisions.restoration_requirements}` : ''}` },
                 { role: 'user', content: `项目概述：\n${overview}\n\n全局事实设定（完整内容）：\n${facts}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n补充参考资料摘录：\n${job.references || '未提供'}\n\n按本节 content_plan.target_words 的目标字数生成正文，0 表示不设目标；不能用全文上下限或其他小节字数代替本节目标。按本节 content_plan 执行：table.needed=false 时不新增数据表格；仅按本节写作要求中主 Agent 分配的布局、组数、表达目的和生成方式新增图片，不自行改变生成方式，不自行分配全局名额或独立承担 AI 图片占比目标；未分配布局时不新增配图；无图、无允许类型或 image_needed=false 时不留新增配图块，并发正文写作阶段只生成新增图片的受限 HTML 结构，填写生成类型、用途说明、替代文本及必要图注，暂不填写图片资源引用。主 Agent 生成图片后补入工具返回的 asset_ref；已有原图直接使用提供的资源引用。你没有文件检索或图片生成工具，仅核对本次请求提供的材料；规范中要求主 Agent 读取文件、生成图片及提交结果清单的操作不由你执行，只返回本节 HTML，不虚构图片路径。${restoredContext}` },
               ],
-            }));
+            }), 'html'));
             combinedSignal.throwIfAborted();
             const target = path.join(workspaceDir, section.file);
             fs.mkdirSync(path.dirname(target), { recursive: true });

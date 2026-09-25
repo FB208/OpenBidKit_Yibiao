@@ -161,6 +161,7 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   renderer.renderHtmlToPng = async () => ({ ...png, layout_issues: ['越界'] });
   assert.equal((await tool.execute('initial-layout', { images: [jobs[0]] })).details.results[0].status, 'needs_repair');
   // 默认关闭二次优化：首次生成及重渲染跳过布局审核，真正的转图失败仍报错。
+  aiService.chat = async () => `介绍文字\n\`\`\`html\n${html}\n\`\`\`\n总结说明`;
   const uncheckedTools = createContentGenerationImageTools({ aiService, signal, localImageRenderService: renderer }, { Type, workspaceDir });
   renderer.renderHtmlToPng = async (_source, options) => {
     assert.equal(options.checkLayout, false);
@@ -175,9 +176,9 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   assert.equal((await uncheckedTools.find(item => item.name === 'render-html-image').execute('unchecked-error', repairParams)).details.results[0].status, 'error');
   // 从实际生成工具检查源码提取：不重新请求模型，保存和渲染收到同一份源码。
   for (const kind of ['html', 'mermaid']) {
-    const source = kind === 'html' ? '<div>中文与行内 ``` 标记</div>\r\n  <p>保留缩进</p>'
+    const source = kind === 'html' ? '<div>中文与行内 ``` 标记</div>\r\n<!-- 行尾 ```\r\n保留注释 -->\r\n  <p>保留缩进</p>'
       : 'flowchart LR\r\n  A["准备"] --> B["交付"]';
-    for (const response of [source, `\`\`\`${kind}\n${source}\n\`\`\``, `\`\`\`\n${source}\n\`\`\``, ` \r\n\`\`\`${kind.toUpperCase()} \r\n${source}\r\n\`\`\` \r\n`]) {
+    for (const response of [source, `介绍文字\n\`\`\`${kind}\n${source}\n\`\`\``, `\`\`\`${kind}\n${source}\n\`\`\`\n总结说明`, `介绍文字\r\n  \`\`\`${kind}\r\n${source}\r\n  \`\`\`\r\n总结说明`, `\`\`\`${kind}\n${source}\n\`\`\``, `\`\`\`\n${source}\n\`\`\``, ` \r\n\`\`\`${kind.toUpperCase()} \r\n${source}\r\n\`\`\` \r\n`]) {
       let calls = 0, renders = 0;
       aiService.chat = async () => { calls++; return response; };
       renderer[kind === 'html' ? 'renderHtmlToPng' : 'renderMermaidToPng'] = async actual => {
@@ -194,13 +195,14 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   }
   renderer.renderHtmlToPng = async () => assert.fail('包装错误不应进入渲染');
   for (const invalid of ['', '```html\n```', '```html\n \n```', '```html\n<div>未闭合</div>',
-    '解释文字\n```html\n<div>内容</div>\n```', '```html\n<div>内容</div>\n```\n解释文字',
+    '介绍\n```html\n<div>未闭合</div>\n总结', '介绍\n```html\n```\n总结',
+    '```html\n<div>内容</div>\n```html', '````html\n<div>内容</div>\n```',
     '```html\n<div>第一段</div>\n```\n```html\n<div>第二段</div>\n```',
     '```mermaid\nflowchart LR\nA-->B\n```', '```json\n{}\n```']) {
     aiService.chat = async () => invalid;
     const result = (await tool.execute('invalid-source', { images: [jobs[0]] })).details.results[0];
     assert.equal(result.status, 'error');
-    assert.match(result.error, /配图源码|配图围栏语言/);
+    assert.match(result.error, /AI 源码|源码围栏语言/);
     assert.equal(result.source_file, undefined);
   }
   aiService.chat = async () => assert.fail('缺少画布比例不得请求模型');
@@ -403,6 +405,7 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     assert.match(decisions.global_facts_requirements, /不得覆盖或改变全局事实/);
     const wordScope = checkTotalWords ? /由主 Agent 统一检查总字数/ : /本次仅统计目标小节字数，不承担全文字数达标/;
     assert.match(decisions.word_requirements, wordScope);
+    const sectionHtml = '<!-- yibiao:block -->\r\n<p id="facts">项目实施内容</p>';
     let generated = false;
     let edited = false;
     const tools = createContentGenerationTools({ signal,
@@ -418,7 +421,7 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
         assert.match(request.messages[1].content, /按本节 content_plan.target_words 的目标字数生成正文/);
         assert.match(request.messages[1].content, /没有文件检索或图片生成工具，仅核对本次请求提供的材料/);
         generated = true;
-        return '<!-- yibiao:block -->\n<p id="facts">项目实施内容</p>';
+        return mode === 'fabricate' ? sectionHtml : `正文说明\r\n\`\`\`${mode === 'omit' ? 'html' : ''}\r\n${sectionHtml}\r\n\`\`\`\r\n总结说明`;
       } },
       agentService: { async runTask(request) {
         assert.ok(request.prompt.includes(decisions.global_facts_requirements));
@@ -429,6 +432,7 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     const params = { sections: [{ section_id: decisions.targets[0].id, instructions: '补充实施措施', references: '' }] };
     const generatedResult = await tools.find(tool => tool.name === 'generate-sections').execute('generate', params);
     assert.equal(generatedResult.details.results[0].status, 'success');
+    assert.equal(fs.readFileSync(path.join(directory, decisions.targets[0].file), 'utf8'), sectionHtml, '正文入口只保存提取后的 HTML，内部换行保持原样');
     assert.equal(tools.some(tool => tool.name === 'adjust-sections'), false);
     const editedResult = await tools.find(tool => tool.name === 'repair-sections').execute('repair', params);
     assert.equal(editedResult.details.results[0].status, 'success');

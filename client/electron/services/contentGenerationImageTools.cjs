@@ -3,6 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { load } = require('cheerio');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
+const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 
 // Agent 的源码路径和正文图片引用均限定为当前工作区内的相对路径。
 function resolveImageWorkspaceFile(workspaceDir, file) {
@@ -74,24 +75,6 @@ function imageReferenceEdit(html, image, assetRef) {
   if (closing < 0) throw new Error(`无法定位图片标签结尾：${image.image_id}`);
   const offset = location.startTag.startOffset + closing;
   return { start: offset, end: offset, newText: ` ${text}` };
-}
-
-// 仅剥除完整包裹源码的一对围栏，保留源码内部字符，不拼接多个代码块。
-function extractImageSource(response, kind) {
-  const text = response.trim();
-  const fences = [...text.matchAll(/^[ \t]*`{3,}[^\r\n]*\r?$/gm)];
-  if (!fences.length) {
-    if (!text) throw new Error('配图源码不能为空');
-    return text;
-  }
-  const wrapped = text.match(/^```([^\r\n`]*)\r?\n([\s\S]*?)(?:\r?\n)?[ \t]*```$/);
-  if (fences.length !== 2 || !wrapped) {
-    throw new Error('配图源码须为纯源码或完整包裹源码的一对围栏，不能包含围栏外说明、多个代码块或未闭合围栏');
-  }
-  const language = wrapped[1].trim().toLowerCase();
-  if (language && language !== kind) throw new Error(`配图围栏语言应为 ${kind}，实际为 ${language}`);
-  if (!wrapped[2].trim()) throw new Error('配图源码不能为空');
-  return wrapped[2];
 }
 
 // 并发源码模型只处理当前图片；布局规范随请求提供，不依赖主会话上下文。
@@ -268,7 +251,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
             messages: [{ role: 'system', content: buildImageSourcePrompt(kind, frame_size) }, { role: 'user', content: prompt }],
           });
           combinedSignal.throwIfAborted();
-          const source = extractImageSource(response, kind);
+          const source = extractAiSource(response, kind);
           result.source_file = saveImage(Buffer.from(source, 'utf8'), kind === 'html' ? '.html' : '.mmd');
           result.stage = 'render';
           await renderImage(result, combinedSignal);
