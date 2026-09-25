@@ -53,7 +53,7 @@ function globalFactsInstructions(mode) {
 
 // 正文写作共用规则，事实要求由编排决策中的同一段中文说明提供。
 function writingInstructions(hasKnowledgeBase) {
-  return `根据项目背景、章节描述和编排重点编写投标正文。明确说明与本节相关的实施措施、执行条件、责任分工或交付成果。内容应准确、具体、可执行，使用正式、简洁的书面语言，避免宣传性表述、缺少具体内容的概括和重复表达。\n使用参考资料时，应将适用内容整理为当前项目的方案表述，不在正文中提及${hasKnowledgeBase ? '知识库、' : ''}历史文档或素材来源。涉及具体事实时，以全局事实设定为准。\n只输出受限 HTML 正文，不输出 Markdown、代码围栏、外层章节标题或解释。内部层次用普通段落、列表或无编号加粗引导语；有序列表仅用于步骤、流程和时间顺序。\n正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。`;
+  return `根据项目背景、章节描述和编排重点编写投标正文。明确说明与本节相关的实施措施、执行条件、责任分工或交付成果。内容应准确、具体、可执行，使用正式、简洁的书面语言，避免宣传性表述、缺少具体内容的概括和重复表达。\n使用参考资料时，应将适用内容整理为当前项目的方案表述，不在正文中提及${hasKnowledgeBase ? '知识库、' : ''}历史文档或素材来源。全局事实设定用于统一项目事实口径，不是本节必须逐项覆盖的写作清单。本节内容范围以标题、章节描述和编排重点为准。仅在说明本节内容确有需要时使用相关事实，不为覆盖全局事实增加无关段落，也不在各节重复罗列项目概况、人员、设备或制度。写作内容和全局事实不冲突即可，不要求完全引用全局事实。全局事实未明确的信息，按本次事实缺失处理要求执行。\n只输出受限 HTML 正文，不输出 Markdown、代码围栏、外层章节标题或解释。内部层次用普通段落、列表或无编号加粗引导语；有序列表仅用于步骤、流程和时间顺序。\n正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。`;
 }
 
 // 按本轮可配图目标分配布局组数；整数余数避免浮点误差改变同分顺序。
@@ -217,6 +217,7 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
   const targets = new Map(decisions.targets.map(section => [section.id, section]));
   const savedIds = new Set(decisions.targets.filter(section => fs.existsSync(path.join(workspaceDir, section.file))).map(section => section.id));
   const overview = read(INPUT_FILES.overview);
+  const facts = read(INPUT_FILES.facts);
   const rules = read(INPUT_FILES.rules);
   const imageTypes = read(INPUT_FILES.imageTypes);
   const template = read(INPUT_FILES.template);
@@ -224,10 +225,10 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
   const validateHtml = (root, html) => { checkSectionHtml(html); validateContentImageReferences(root, html); };
   return [{
     name: 'generate-sections', label: '批量生成正文小节',
-    description: `将本轮全部待生成目标小节放入一次调用的 sections 数组，统一提交生成受限 HTML；程序队列按用户配置控制实际并发，超出上限的任务自动排队，各节独立落盘。先按本轮布局名额统一分配，将本节布局、组数、每张图的表达目的、图片类型和生成方式写入 instructions；未分配布局时明确不新增配图。先检索相关${decisions.has_knowledge_base ? '知识库和' : ''}全局事实，把需要的参考原文摘录传入。失败小节可单独重试。`,
+    description: `将本轮全部待生成目标小节放入一次调用的 sections 数组，统一提交生成受限 HTML；程序队列按用户配置控制实际并发，超出上限的任务自动排队，各节独立落盘。先按本轮布局名额统一分配，将本节布局、组数、每张图的表达目的、图片类型和生成方式写入 instructions；未分配布局时明确不新增配图。程序自动提供本轮完整全局事实，无需重复摘录；按需检索${decisions.has_knowledge_base ? '知识库等' : ''}补充资料，将相关原文摘录传入。失败小节可单独重试。`,
     executionMode: 'sequential',
     parameters: Type.Object({ sections: Type.Array(Type.Object({
-      section_id: Type.String({ description: '必填，原样填写正文编排决策 targets 中本节的 id，不使用 number，不省略。' }), instructions: Type.String({ description: '本节写作要求，字数遵守 content_plan.target_words，包含主 Agent 分配的布局、组数及每张图的表达目的、图片类型和生成方式（aiImage/htmlImage/mermaid）；未分配布局时明确“不新增配图”。' }), references: Type.String({ description: `从${decisions.has_knowledge_base ? '知识库、' : ''}全局事实检索得到的相关原文摘录，注明来源；无相关资料时填空字符串。` }),
+      section_id: Type.String({ description: '必填，原样填写正文编排决策 targets 中本节的 id，不使用 number，不省略。' }), instructions: Type.String({ description: '本节写作要求，字数遵守 content_plan.target_words，包含主 Agent 分配的布局、组数及每张图的表达目的、图片类型和生成方式（aiImage/htmlImage/mermaid）；未分配布局时明确“不新增配图”。' }), references: Type.String({ description: `${decisions.has_knowledge_base ? '知识库等' : ''}补充资料的相关原文摘录，注明来源；完整全局事实由程序提供，无补充资料时填空字符串。` }),
     }, { additionalProperties: false }), { minItems: 1 }) }, { additionalProperties: false }),
     async execute(_callId, params, toolSignal, onUpdate) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
@@ -240,13 +241,13 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
           try {
             combinedSignal.throwIfAborted();
             const restoredContext = section.restored_content
-              ? `\n\n本节已还原底稿（完整内容）：\n${read(section.restored_content.file)}\n\n全局事实设定（发生冲突时以此为准）：\n${read(INPUT_FILES.facts)}`
+              ? `\n\n本节已还原底稿（完整内容）：\n${read(section.restored_content.file)}`
               : '';
             const html = checkSectionHtml(await aiService.chat({
               signal: combinedSignal, logTitle: `Agent HTML正文-${section.number}-${section.title}`,
               messages: [
                 { role: 'system', content: `${writingInstructions(decisions.has_knowledge_base)}\n\n本次事实处理要求：\n${decisions.global_facts_requirements}\n\n${rules}\n\n配图类型对照表（据此确定新增图片的生成类型）：\n${imageTypes}\n\n本次配图要求：\n${decisions.image_requirements}${section.restored_content ? `\n\n本节还原处理要求（原表格、原图保留规则优先于新增限制）：\n${decisions.restoration_requirements}` : ''}` },
-                { role: 'user', content: `项目概述：\n${overview}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n参考资料与事实摘录：\n${job.references || '未提供'}\n\n按本节 content_plan.target_words 的目标字数生成正文，0 表示不设目标；不能用全文上下限或其他小节字数代替本节目标。按本节 content_plan 执行：table.needed=false 时不新增数据表格；仅按本节写作要求中主 Agent 分配的布局、组数、表达目的和生成方式新增图片，不自行改变生成方式，不自行分配全局名额或独立承担 AI 图片占比目标；未分配布局时不新增配图；无图、无允许类型或 image_needed=false 时不留新增配图块，并发正文写作阶段只生成新增图片的受限 HTML 结构，填写生成类型、用途说明、替代文本及必要图注，暂不填写图片资源引用。主 Agent 生成图片后补入工具返回的 asset_ref；已有原图直接使用提供的资源引用。你没有文件检索或图片生成工具，仅核对本次请求提供的材料；规范中要求主 Agent 读取文件、生成图片及提交结果清单的操作不由你执行，只返回本节 HTML，不虚构图片路径。${restoredContext}` },
+                { role: 'user', content: `项目概述：\n${overview}\n\n全局事实设定（完整内容）：\n${facts}\n\n本节编排决策：\n${JSON.stringify(section, null, 2)}\n\n字数要求：\n${decisions.word_requirements}\n\n用户额外要求：\n${decisions.user_requirement}\n\n受限 HTML 模板：\n${template}\n\n所选模板配置：\n${config}\n\n本节写作要求：\n${job.instructions}\n\n补充参考资料摘录：\n${job.references || '未提供'}\n\n按本节 content_plan.target_words 的目标字数生成正文，0 表示不设目标；不能用全文上下限或其他小节字数代替本节目标。按本节 content_plan 执行：table.needed=false 时不新增数据表格；仅按本节写作要求中主 Agent 分配的布局、组数、表达目的和生成方式新增图片，不自行改变生成方式，不自行分配全局名额或独立承担 AI 图片占比目标；未分配布局时不新增配图；无图、无允许类型或 image_needed=false 时不留新增配图块，并发正文写作阶段只生成新增图片的受限 HTML 结构，填写生成类型、用途说明、替代文本及必要图注，暂不填写图片资源引用。主 Agent 生成图片后补入工具返回的 asset_ref；已有原图直接使用提供的资源引用。你没有文件检索或图片生成工具，仅核对本次请求提供的材料；规范中要求主 Agent 读取文件、生成图片及提交结果清单的操作不由你执行，只返回本节 HTML，不虚构图片路径。${restoredContext}` },
               ],
             }));
             combinedSignal.throwIfAborted();
@@ -282,7 +283,7 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
 function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan, wordAdjustmentEnabled) {
   return `你负责本次投标文件受限 HTML 正文生成，使用一个持久会话完成任务。
 1. 先阅读正文编排决策.json（本轮执行清单）、项目概述.md和受限HTML生成规范.md，三个文件必须完整阅读；执行清单中的 reference_files 提供完整目录及资料位置，正文完整目录.json 按需读取。参考正文模板.html和所选模板配置.json。模板只是结构示例，不照抄示例正文，不要求每节套用全部元素。
-2. ${hasKnowledgeBase ? '已选择知识库，可通过知识库/索引.json定位参考文档。编排中的 knowledge.item_ids 对应索引条目的 id；根据条目所属文档读取相关原文。索引标题和简介用于定位，具体内容以文档原文为准。知识库和' : ''}全局事实设定.md是参考项。生成正文时，涉及人员、时间、地点、参数、职责或承诺等具体事实，应检索并阅读相关设定；不涉及的内容无需逐项阅读。一致性审计阶段的阅读范围按审计指令执行。主 Agent 负责检索并提供参考摘录，并发正文模型核对请求中提供的材料；编辑子 Agent 按需读取工作区文件。具体事实以全局事实设定为准，并遵守正文编排决策.json中的 global_facts_requirements（当前事实模式的中文要求）。
+2. ${hasKnowledgeBase ? '已选择知识库，可通过知识库/索引.json定位参考文档。编排中的 knowledge.item_ids 对应索引条目的 id；根据条目所属文档读取相关原文。索引标题和简介用于定位，具体内容以文档原文为准。' : ''}程序自动向每个小节写作请求提供全局事实设定.md的完整内容，无需为传递事实重复摘录；你可按需阅读，以安排本节写作重点和配图。主 Agent 负责按需检索并提供补充资料摘录，并发正文模型核对请求中提供的材料；编辑子 Agent 按需读取工作区文件。一致性审计阶段的阅读范围按审计指令执行。遵守正文编排决策.json中的 global_facts_requirements（当前事实模式的中文要求）。
 3. 只生成正文编排决策.json中 targets 列出的 AI 生成叶子小节，完整目录按需用于了解上下级和相邻章节。execution_summary 已汇总全文 AI 小节数、本轮目标数与目标字数、未设置字数目标的小节数、配图候选及表格入选 ID；image_layout_quota 已计算本轮布局名额，直接使用这些结果，通常无需再写脚本重复统计。如发现信息不一致，可读取相关文件核实。completed_sections 仅记录本轮启动前已成功完成的非目标小节，不是实时进度；本轮暂停恢复时结合工具结果和实际文件继续，不能仅因 HTML 存在就认定图片、审计等步骤全部完成。遵守写作重点、表格和配图标记、全文及每小节字数要求、用户额外要求。各节篇幅以 content_plan.target_words 为准，不重新分配全文目标。每节输出路径已给定，禁止修改输入文件和业务数据库。${hasOriginalPlan ? '本次使用已还原底稿：阅读 restoration_requirements，并在生成每节前完整阅读其 restored_content.file；工具会自动加入本节完整底稿、原图引用对应关系和全局事实。已超过生效字数要求的底稿只整理、不扩写；冲突以全局事实设定为准。保留原表格和原图，以下配图与表格限制仅用于新增内容；原图直接引用已复制文件，不重新生图。无底稿小节按正常流程生成。' : ''}
 4. 先完整阅读配图类型对照表.md及 image_requirements（用户配图要求），读取 image_layout_quota（本轮新增布局名额）：total_groups 为总组数，single、imageText、threeImages、fourImages 分别为单张图片、图片表格、三列图片、四宫格的组数。结合本轮 targets 中 image_needed=true 小节的主题、写作重点和适配评分统一分配布局，并按 image_requirements 的本轮 AI 图片占比要求，在并发写作前规划每张图的表达目的、图片类型及生成方式；名额为零时不安排新增配图。可在合适小节安排多组，不要求逐节平均分配；单张图片与图片表格可互换，但合计组数不变，三列图片和四宫格保持各自组数。暂停、失败重试沿用本轮名额，已完成的布局计入完成数量，只补未完成部分，不重新分配一整轮。检索需要的参考资料并完成本轮安排后，调用一次 generate-sections，将本轮全部待生成小节一次性放入 sections 数组提交，不自行按章节或固定小批次拆分调用，也不等待一部分小节完成后再提交其余小节。程序中的 AI 服务队列会按用户设置的并发上限运行，超出上限的任务自动排队，空出名额后自动启动后续任务，无需你控制批次。每项都必须包含 section_id、instructions 和 references，section_id 原样使用 targets 中对应小节的 id；无参考摘录时 references 填空字符串，不省略字段。暂停恢复时一次提交剩余待生成小节，失败重试只提交失败项，保留已完成内容；工具会自动加入本节编排、项目概述、HTML规范、模板、配图类型对照表、字数及配图要求，你负责在各节 instructions 中写明布局、组数和每组表达目的，并逐图指定图片类型和生成方式（aiImage/htmlImage/mermaid），以及本节写作要求，并提供准确的参考摘录；未分配布局的小节明确写“不新增配图”。全局名额由你统筹，不得让每个并发任务自行分配或承担整轮名额。文本并发遵循用户现有模型配置，不要使用bash或脚本直接调用外部模型。
 5. 正文布局保存后，调用 list-section-images 获取本轮最新图片清单；通常不必编写扫描脚本，发现结构或提示词问题仍可 read/edit 修复后重新提取。清单提供小节、figure、生成方式、比例、提示词及当前引用，image_id 原样沿用到图片工具和回填工具，不能自行重编；reused_original=true 的图片直接复用，文件缺失时修复原引用，不重新生图。已有有效图片无需重复生成。配图前完整阅读配图类型对照表.md，并遵守正文编排决策.json 的 image_requirements（用户配图要求）。无图不安排图片或占位，不调用配图工具；有图时按已分配的布局及逐图确定的生成方式完成配图；生成方式遵守类型开关和对照表，布局本身不绑定 AI、HTML 或 Mermaid，无须覆盖全部已开启类型。在当前会话中完成所需图片：通过 generate-section-images 的 images 一次提交本轮全部待生成 AI、HTML、Mermaid 图片，不按章节、类型或固定小批次拆分；每项提供清单 image_id、kind（ai/html/mermaid）、prompt。AI 项 size 必填，逐图读取对应 figure 的 data-yb-size，按 square=1:1、wide=3:2、tall=3:4、panorama=16:9 选择匹配的具体生图尺寸；当前金龙 gpt-image-2-1k 的 tall 使用已验证的 768x1024。不能把画框名称作为尺寸，不得省略 size 或整批统一使用默认方图；prompt 中保留相同的宽高比例和横向/竖向构图方向。HTML 项必填 frame_size，与正文画框一致。HTML/Mermaid 的 prompt 写明图片类型、表达目的、准确内容和数据，不只给文件路径或要求并发模型自行检索。程序同时向既有生图和文本队列提交任务，超限自动排队；每张源码生成完成立即本地转图，不等其他源码或 AI 图完成。整批结束后按 results 的 image_id 检查 status、stage 和 error，按工具说明处理未成功项；success 图片直接回填。有 source_file 的失败或未完成项直接读取、必要时修改源码后调用 render-html-image 或 render-mermaid-image，不重复生成成功源码；无源码的失败项才重新调用生成工具。两个 render 工具都使用 images 数组，每项必填 image_id 和 source_file，HTML 另填 frame_size，单张也使用一项数组；将需要重新渲染的项按类型分别批量提交。设计宽度1240px，square/wide/tall/panorama对应高度1240/827/1653/698px，尺寸包含程序统一设置的四周40px内边距；以 body 为画布，用 Flex/Grid 合理铺满内部区域，不额外包一层画布或重复添加外层边距。采用正式简洁的配色和清晰层次，不在底部留下大块空白，不靠无意义文字或空卡片填满；Mermaid 图的语法问题通过修改已保存的 .mmd 源文件并调用 render-mermaid-image 修复。源码保存在图片/目录，配图 HTML 可使用 CSS，不受正文受限 HTML 标签限制。图片生成成功后，调用 apply-section-images 批量回填：每项传清单中的 image_id、图片工具返回的 asset_ref，以及清单原 asset_ref 作为 previous_asset_ref（未填写时为空字符串）。程序仅更新对应 img 的引用，不必手工复制编辑正文；引用变化或回填失败时刷新清单再处理。不要提交状态非 success 的项，不填写 src，不虚构路径，不把源码嵌入正文。图组中每张图片均须生成。暂停恢复时先核对会话中工具返回的逐项产物与最新图片清单，复用成功图片及已保存源码；只将无源码的剩余生成任务混合提交，已有源码的剩余项使用对应 render 工具。执行错误按工具反馈修复，失败不得默认为成功或改换生成方式。

@@ -383,6 +383,7 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     const directory = path.join(workspaceDir, `事实模式-${mode}`);
     const checkTotalWords = mode !== 'omit';
     const files = buildContentGenerationFiles({ ...fileOptions, globalFactsMode: mode, checkTotalWords,
+      globalFacts: [{ title: '班次', content: '岗位实行四班三运转。' }, { title: '维修时限', content: '故障维修时限为两小时。' }],
       targets: fileOptions.targets.slice(0, 1), wordControl: { minimumWords: 20000 }, documentIds: [],
     });
     for (const file of files) {
@@ -396,6 +397,7 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
     for (const mapping of ['思维导图=mermaid', '组织架构图=html', '时序图=html', '状态图=html', '原理示意图=ai', '其他=ai']) {
       assert.ok(imageTypes.split(/\r?\n/).includes(mapping));
     }
+    const facts = files.find(file => file.path === '全局事实设定.md').content;
     assert.equal(decisions.global_facts_mode, mode);
     assert.match(decisions.global_facts_requirements, expected);
     assert.match(decisions.global_facts_requirements, /不得覆盖或改变全局事实/);
@@ -407,6 +409,9 @@ async function checkFactsRequirements({ Type, workspaceDir, fileOptions, signal 
       consistency: { get: () => ({ status: 'running' }), save() {} },
       aiService: { async chat(request) {
         assert.ok(request.messages[0].content.includes(decisions.global_facts_requirements));
+        assert.equal(request.messages[1].content.split(facts).length - 1, 1, '参考摘录为空时仍提供全部事实分组');
+        assert.match(request.messages[0].content, /写作内容和全局事实不冲突即可，不要求完全引用全局事实/);
+        assert.match(request.messages[0].content, /不为覆盖全局事实增加无关段落/);
         assert.ok(request.messages[0].content.includes(imageTypes), '并发正文模型必须收到工作区对照表全文');
         assert.match(request.messages[1].content, wordScope);
         assert.match(request.messages[1].content, /target_words.*750/s);
@@ -690,7 +695,7 @@ async function main() {
           updatePersistentTask() {},
           async runTask(payload) {
             assert.doesNotMatch(payload.prompt, /知识库|索引|编排知识条目/);
-            assert.match(payload.prompt, /全局事实设定.md是参考项/);
+            assert.match(payload.prompt, /程序自动向每个小节写作请求提供全局事实设定.md的完整内容/);
             assert.equal(payload.files.length, resume ? 0 : noKnowledgeFiles.length);
             const [tool] = payload.create_tools({ Type, workspaceDir: noKnowledgeDir });
             assert.doesNotMatch(tool.description, /知识库/);
@@ -969,7 +974,8 @@ async function main() {
     }
     console.log('批量转图：全量派发、乱序结果对应、部分失败、布局反馈、单项重试及取消保留成功项通过。');
 
-    const jobs = input.targets.map(item => ({ section_id: item.id, instructions: '落实责任', references: '全局事实：工期六十天' }));
+    const facts = files.find(file => file.path === '全局事实设定.md').content;
+    const jobs = input.targets.map(item => ({ section_id: item.id, instructions: '落实责任', references: '' }));
     const html = '<!-- yibiao:block -->\n<p id="s_1_p001">具体实施措施</p>';
     const pending = [];
     const progress = [];
@@ -978,15 +984,15 @@ async function main() {
       assert.match(request.messages[0].content, /【待填写】/);
       assert.match(request.messages[0].content, /不在正文中提及知识库/);
       assert.ok(request.messages[0].content.includes(input.image_requirements));
-      assert.match(request.messages[1].content, /六十天/);
+      assert.equal(request.messages[1].content.split(facts).length - 1, 1, '普通生成及失败、暂停重试均完整注入一次全局事实');
       assert.match(request.messages[1].content, /A3/);
       return new Promise((resolve, reject) => pending.push({ resolve, reject }));
     } };
     const [tool] = createContentGenerationTools({ aiService, signal, onProgress: event => progress.push(event) }, { Type, workspaceDir });
     assert.match(tool.description, /本轮全部待生成目标小节放入一次调用的 sections 数组/);
     assert.match(tool.description, /超出上限的任务自动排队/);
-    assert.match(tool.description, /知识库和全局事实/);
-    assert.match(JSON.stringify(tool.parameters), /知识库、全局事实/);
+    assert.match(tool.description, /程序自动提供本轮完整全局事实/);
+    assert.match(JSON.stringify(tool.parameters), /知识库等补充资料/);
     const batch = tool.execute('batch', { sections: jobs }, signal);
     assert.equal(pending.length, 2, '两个请求必须同时启动，不能等第一节完成才开始第二节');
     pending[0].resolve(html);
@@ -1278,6 +1284,8 @@ async function checkRestoredContent({ Type, workspaceDir, fileOptions, signal })
       resolveOriginalImagePath(ref) { assert.equal(resume, false); assert.equal(ref, reference); copied++; return imagePath; },
       aiService: { async chat(request) {
         const [system, user] = request.messages;
+        const facts = files.find(file => file.path === '全局事实设定.md').content;
+        assert.equal(user.content.split(facts).length - 1, 1, '还原小节和普通小节均只注入一次完整事实');
         if (request.logTitle.includes('准备')) {
           assert.ok(user.content.includes(source));
           assert.match(user.content, /六十天/);
