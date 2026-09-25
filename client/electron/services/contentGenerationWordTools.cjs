@@ -59,7 +59,10 @@ function createContentGenerationWordTools({ agentService, signal, activity, vali
     parameters: Type.Object({}),
     async execute() {
       if (activity.pending) throw new Error('仍有生成或编辑任务运行，请等待全部结束再检查字数');
-      return result(enterAdjustment());
+      onActivity?.({ progress: { step: 'word-check', label: '正在统计正文总字数' } });
+      const words = enterAdjustment();
+      onActivity?.({ progress: { step: 'word-check', label: `实际 ${words.total_words} 字${words.check_total_words ? `，${words.in_range ? '已达标' : `距有效范围相差 ${words.difference} 字`}` : '，本轮仅统计字数'}`, done: true } });
+      return result(words);
     },
   }, {
     name: 'adjust-sections', label: '并发扩缩写正文', executionMode: 'sequential',

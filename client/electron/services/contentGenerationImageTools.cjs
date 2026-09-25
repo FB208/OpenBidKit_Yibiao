@@ -93,7 +93,11 @@ function buildImageSourcePrompt(kind, frameSize) {
 }
 
 // 图片与独立源码均保存在当前工作区；源码生成使用文本队列，转图继续复用本地渲染。
-function createContentGenerationImageTools({ aiService, signal, localImageRenderService, htmlImageOptimization = false, sections = [], beforeApply = () => {} }, { Type, workspaceDir }) {
+function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, sections = [], beforeApply = () => {} }, { Type, workspaceDir }) {
+  // 进度只发给业务程序，不增加模型上下文或工具调用。
+  const report = (step, label, items, extra = {}) => onActivity?.({ progress: { step, label, unit: '张', items, ...extra } });
+  const imageProgress = result => ({ id: result.image_id, status: result.status || 'rendering', kind: result.kind,
+    source_ready: Boolean(result.source_file), source_file: result.source_file, asset_ref: result.asset_ref });
   // 图片和源码每次生成独立文件，失败或重新生成不会覆盖已有产物。
   function saveImage(buffer, extension) {
     const assetRef = `图片/${crypto.randomUUID()}${extension}`;
@@ -113,6 +117,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     const renderer = localImageRenderService || require('./localImageRenderService.cjs').getLocalImageRenderService();
     const pauseOptions = { isPauseRequested: () => combinedSignal.aborted, createPauseError: () => combinedSignal.reason };
     const source = fs.readFileSync(resolveImageWorkspaceFile(workspaceDir, result.source_file), 'utf8');
+    report('images', '正在生成图片与本地转图', [imageProgress(result)]);
     const rendered = result.kind === 'html'
       ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: result.frame_size, checkLayout: htmlImageOptimization })
       : await renderer.renderMermaidToPng(source, pauseOptions);
@@ -129,6 +134,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
     combinedSignal.throwIfAborted();
     if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批图片的 image_id 不能重复');
+    report('images', '正在生成图片与本地转图', images.map(image => ({ id: image.image_id, kind: image.kind, status: image.source_file ? 'rendering' : 'generating', source_ready: Boolean(image.source_file) })));
     let completed = 0;
     const results = await Promise.all(images.map(async image => {
       const result = { image_id: image.image_id, kind: image.kind,
@@ -142,6 +148,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       } catch (error) {
         Object.assign(result, { status: combinedSignal.aborted ? 'cancelled' : 'error', error: error.message });
       }
+      report('images', '正在生成图片与本地转图', [imageProgress(result)]);
       onUpdate?.(toolResult({ completed: ++completed, total: images.length, result }));
       return result;
     }));
@@ -158,6 +165,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     async execute(_callId, { section_ids }, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
+      report('image-list', '正在整理正文图片清单', (section_ids || [...targets.keys()]).map(id => ({ id, status: 'running' })), { unit: '节' });
       const results = (section_ids || [...targets.keys()]).map(id => {
         combinedSignal.throwIfAborted();
         try {
@@ -166,6 +174,10 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
           return { section_id: id, status: 'success', images: images.map(({ location, ...image }) => image) };
         } catch (error) { return { section_id: id, status: 'error', error: error.message }; }
       });
+      report('image-list', '图片清单检查完成', results.map(result => ({ id: result.section_id, status: result.status })), { unit: '节', done: true });
+      const images = results.flatMap(result => result.images || []);
+      const items = images.filter(image => !image.reused_original).map(image => ({ id: image.image_id, kind: ({ aiImage: 'ai', htmlImage: 'html', mermaid: 'mermaid' })[image.generation], ...(image.asset_exists ? { status: 'success', asset_ref: image.asset_ref } : {}) }));
+      if (results.every(result => result.status === 'success')) report('images', `图片清单已整理，复用原图 ${images.filter(image => image.reused_original).length} 张`, items, { inventory: results.filter(result => result.status === 'success').map(result => result.section_id) });
       return toolResult({ results });
     },
   }, {
@@ -178,6 +190,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
       beforeApply();
+      report('image-apply', '正在回填图片地址', images.map(image => ({ id: image.image_id, status: 'running' })));
       if (new Set(images.map(item => item.image_id)).size !== images.length) throw new Error('同一批回填的 image_id 不能重复');
       const groups = new Map();
       const results = new Map();
@@ -218,7 +231,9 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
           for (const item of items) results.set(item.image_id, { image_id: item.image_id, section_id: id, status: 'error', error: error.message });
         }
       }
-      return toolResult({ results: images.map(item => results.get(item.image_id)) });
+      const ordered = images.map(item => results.get(item.image_id));
+      report('image-apply', '正在回填图片地址', ordered.map(item => ({ id: item.image_id, status: item.status })));
+      return toolResult({ results: ordered });
     },
   }, {
     name: 'generate-section-images', label: '批量生成正文图片', executionMode: 'sequential',

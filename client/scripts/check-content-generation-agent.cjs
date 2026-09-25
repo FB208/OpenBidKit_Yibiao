@@ -104,7 +104,10 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
     async renderHtmlToPng(source, options) { rendering.push({ source, frame: options.frameSize }); return png; },
     async renderMermaidToPng(source) { rendering.push({ source }); return png; },
   };
-  const tools = createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal, localImageRenderService: renderer }, { Type, workspaceDir });
+  const progressEvents = [];
+  const tools = createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal, localImageRenderService: renderer,
+    onActivity: event => progressEvents.push(structuredClone(event.progress)),
+  }, { Type, workspaceDir });
   const tool = tools.find(item => item.name === 'generate-section-images');
   const jobs = [
     { image_id: '进度图', kind: 'html', frame_size: 'wide', prompt: '进度：准备2天，实施3天' },
@@ -135,6 +138,11 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   assert.match(results[2].error, /模拟源码生成失败/);
   assert.equal(results[0].frame_size, 'wide');
   assert.equal(updates.at(-1).completed, jobs.length);
+  const imageEvents = id => progressEvents.flatMap(event => event.items || []).filter(item => item.id === id);
+  assert.deepEqual(imageEvents('进度图').map(item => item.status), ['generating', 'rendering', 'success']);
+  assert.equal(imageEvents('进度图')[1].source_ready, true);
+  assert.deepEqual(imageEvents('失败图').map(item => item.status), ['generating', 'error']);
+  assert.deepEqual(imageEvents('现场图').map(item => item.status), ['generating', 'success']);
   for (const [index, source] of [html, mermaid].entries()) {
     assert.equal(fs.readFileSync(path.join(workspaceDir, results[index].source_file), 'utf8'), source);
     assert.equal(fs.readFileSync(path.join(workspaceDir, results[index].asset_ref), 'utf8'), '图片');
@@ -155,8 +163,10 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
   const repair = tools.find(item => item.name === 'render-html-image');
   const repairParams = { images: [{ image_id: failed.image_id, source_file: failed.source_file, frame_size: 'wide' }] };
   assert.equal((await repair.execute('layout', repairParams)).details.results[0].status, 'needs_repair');
+  assert.equal(imageEvents(failed.image_id).at(-1).status, 'needs_repair');
   renderer.renderHtmlToPng = async () => png;
   assert.equal((await repair.execute('repair', repairParams)).details.results[0].status, 'success');
+  assert.equal(imageEvents(failed.image_id).at(-1).status, 'success');
   aiService.chat = async () => html;
   renderer.renderHtmlToPng = async () => ({ ...png, layout_issues: ['越界'] });
   assert.equal((await tool.execute('initial-layout', { images: [jobs[0]] })).details.results[0].status, 'needs_repair');
@@ -212,7 +222,10 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
     const taskCancel = new AbortController(), toolCancel = new AbortController();
     let cancelled = 0;
     aiService.chat = request => new Promise((_resolve, reject) => request.signal.addEventListener('abort', () => { cancelled++; reject(request.signal.reason); }, { once: true }));
-    const cancellable = createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal: taskCancel.signal }, { Type, workspaceDir }).find(item => item.name === tool.name);
+    const cancelledProgress = [];
+    const cancellable = createContentGenerationImageTools({ htmlImageOptimization: true, aiService, signal: taskCancel.signal,
+      onActivity: event => cancelledProgress.push(...(event.progress.items || [])),
+    }, { Type, workspaceDir }).find(item => item.name === tool.name);
     const before = fs.readdirSync(path.join(workspaceDir, '图片'));
     const running = cancellable.execute('cancel-sources', { images: jobs.slice(0, 3) }, toolCancel.signal);
     (cancelTask ? taskCancel : toolCancel).abort(new Error('取消源码生成'));
@@ -221,6 +234,7 @@ async function checkImageSourceGeneration({ Type, workspaceDir, signal }) {
     assert.equal(output.details.cancelled, true);
     assert.ok(output.details.results.every(item => item.status === 'cancelled'));
     assert.equal(cancelled, 3);
+    assert.equal(cancelledProgress.filter(item => item.status === 'cancelled').length, 3);
     assert.deepEqual(fs.readdirSync(path.join(workspaceDir, '图片')), before);
   }
   console.log('混合配图：生图与源码重叠、源码逐张转图、独立队列、部分失败、布局修复及取消检查通过。');

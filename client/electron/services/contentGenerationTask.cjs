@@ -1199,6 +1199,60 @@ function percentageFor(completed, total) {
   return clampPercentage((Math.max(0, Number(completed) || 0) / normalizedTotal) * 100);
 }
 
+// 只合并程序已知的任务状态；同一 ID 重试覆盖原状态，不把失败算作完成。
+function recordContentWorkflowProgress(stats, event) {
+  const previous = stats.workflow_progress || { steps: {} };
+  const round = stats.phase === 'auditing' ? stats.consistency_round : 0;
+  const key = `${stats.phase}/${round}/${event.step}`;
+  const old = previous.steps[key] || { items: {} };
+  const items = { ...old.items };
+  if (event.inventory) {
+    const keep = new Set(event.items.map(item => item.id));
+    for (const id of Object.keys(items)) {
+      if (event.inventory.includes(decodeURIComponent(id.split('/')[0])) && !keep.has(id)) delete items[id];
+    }
+  }
+  for (const item of event.items || []) items[item.id] = { status: 'pending', ...items[item.id], ...item };
+  const steps = { ...previous.steps, [key]: { ...old, items, unit: event.unit || old.unit,
+    total: event.total ?? (event.inventory ? Object.keys(items).length : old.total), done: event.done === true } };
+  if (event.inventory) {
+    const applyKey = `${stats.phase}/${round}/image-apply`;
+    const applied = { ...steps[applyKey]?.items };
+    for (const id of Object.keys(applied)) if (!items[id]) delete applied[id];
+    for (const item of event.items) if (item.asset_ref) applied[item.id] = { status: 'success' };
+    steps[applyKey] = { unit: '张', total: Object.keys(items).length, items: applied };
+  }
+  const changed = previous.phase !== stats.phase || previous.round !== round || previous.step !== event.step;
+  stats.workflow_progress = { phase: stats.phase, round, step: event.step, label: event.label,
+    started_at: changed ? now() : previous.started_at, activity: '', steps };
+  return changed || event.done || (event.items || []).some(item => ['error', 'needs_repair', 'cancelled'].includes(item.status));
+}
+
+// 展示计数来自成功结果，源码就绪只推进图片阶段的一部分。
+function contentWorkflowDetail(stats) {
+  const workflow = stats.workflow_progress;
+  if (!workflow || workflow.phase !== stats.phase || ['sections-completed', 'word-completed', 'done'].includes(stats.phase)) return null;
+  const data = workflow.steps[`${workflow.phase}/${workflow.round}/${workflow.step}`];
+  const items = Object.values(data.items);
+  const completed = items.filter(item => item.status === 'success').length;
+  const failed = items.filter(item => ['error', 'needs_repair'].includes(item.status)).length;
+  const running = items.filter(item => ['running', 'generating', 'rendering'].includes(item.status)).length;
+  const cancelled = items.filter(item => item.status === 'cancelled').length;
+  const total = Math.max(data.total || 0, items.length);
+  const pending = Math.max(0, total - completed - failed - running - cancelled);
+  const detail = workflow.step === 'images'
+    ? ['ai', 'html', 'mermaid'].flatMap(kind => {
+      const group = items.filter(item => item.kind === kind);
+      if (!group.length) return [];
+      const source = kind === 'ai' ? '' : `，源码已保存 ${group.filter(item => item.source_ready).length}`;
+      return `${({ ai: 'AI图片', html: 'HTML图片', mermaid: 'Mermaid图片' })[kind]} ${group.filter(item => item.status === 'success').length}/${group.length}${source}`;
+    }).join('；') : '';
+  return { step: workflow.step, step_label: workflow.label, completed, total, unit: data.unit,
+    failed, running, cancelled, pending, indeterminate: !data.unit && !data.done,
+    started_at: workflow.started_at, activity: workflow.activity, detail_text: detail,
+    done: data.done };
+}
+
 // 将当前正文子阶段的计数统一为插件和 Renderer 可直接消费的进度明细。
 function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 'full') {
   const stats = contentStats || {};
@@ -1251,6 +1305,31 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     step = 'done';
   }
 
+  const workflow = contentWorkflowDetail(stats);
+  if (phase === 'generating' && ['html', 'html-single'].includes(progressMode)) {
+    // 对应整篇任务的 18→43→65→67→70；单节任务使用同一相对分配。
+    phaseProgress *= 25 / 52;
+    const step = workflow?.step;
+    const fraction = workflow?.total ? workflow.completed / workflow.total : 0;
+    if (step === 'images') {
+      const items = Object.values(stats.workflow_progress.steps[`generating/0/images`].items);
+      const ready = items.reduce((sum, item) => sum + (item.status === 'success' ? 1 : item.source_ready ? 0.3 : 0), 0);
+      phaseProgress = (25 + 22 * (workflow.total ? ready / workflow.total : 1)) / 52 * 100;
+    } else if (step === 'image-apply') phaseProgress = (47 + 2 * fraction) / 52 * 100;
+    else if (step === 'word-check' || step === 'word-adjust') phaseProgress = (49 + (step === 'word-adjust' ? fraction : 0)) / 52 * 100;
+    else if (step === 'result-check') phaseProgress = (workflow.done ? 52 : 51) / 52 * 100;
+    const images = stats.workflow_progress?.steps['generating/0/images'];
+    if (images && !(step === 'result-check' && workflow.done)) {
+      const entries = Object.values(images.items);
+      if (entries.some(item => item.status !== 'success')) {
+        const ready = entries.reduce((sum, item) => sum + (item.status === 'success' ? 1 : item.source_ready ? 0.3 : 0), 0);
+        phaseProgress = Math.min(phaseProgress, (25 + 22 * ready / Math.max(1, entries.length)) / 52 * 100);
+      }
+    }
+    if (stats.generation_completed < stats.generation_total) phaseProgress = Math.min(phaseProgress, percentageFor(stats.generation_completed, stats.generation_total) * 25 / 52);
+  }
+  // 无计数的活动保留原阶段计数，避免 Word 转换或审计显示成 0/0。
+  const activity = workflow ? { ...workflow, ...(workflow.unit ? {} : { completed, total, ...(phase === 'word-converting' ? { unit: '节', indeterminate: false } : {}) }) } : {};
   return {
     mode: progressMode,
     phase,
@@ -1260,6 +1339,7 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     total: Math.max(0, Number(total) || 0),
     step,
     step_label: stepLabel,
+    ...activity,
   };
 }
 
@@ -1386,6 +1466,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     phase: continuingLayout ? 'layout-checking' : continuingTableCleanup ? 'table-cleaning' : continuingConsistency ? 'auditing' : 'planning',
     planning_total: 0,
     planning_completed: 0,
+    workflow_progress: resume || retryFailedSections ? structuredClone(previousState?.contentGenerationTask?.stats?.content?.workflow_progress) : undefined,
     restoration_total: 0,
     restoration_completed: 0,
     generation_total: 0,
@@ -1403,6 +1484,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     table_cleanup_total: 0,
     table_cleanup_completed: 0,
   };
+  // 上一次中断的执行中状态只恢复为待处理，不伪装为仍有请求在运行。
+  for (const step of Object.values(contentStats.workflow_progress?.steps || {})) {
+    for (const item of Object.values(step.items)) if (['running', 'generating', 'rendering'].includes(item.status)) item.status = 'pending';
+  }
+  if (contentStats.workflow_progress) contentStats.workflow_progress.started_at = now();
+  let progressTimer;
   // 同一原方案继续任务时保留已完成的统计，全文重新生成则等待本轮还原结果。
   const previousOriginalRestoration = previousState?.contentGenerationTask?.stats?.content?.original_restoration;
   if (hasOriginalPlan && !fullRegenerate && typeof previousOriginalRestoration?.total_words === 'number' && previousOriginalRestoration.source_hash === originalPlanSourceHash) {
@@ -1535,6 +1622,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   // 所有正文任务更新都在这里补充累计进度和当前阶段明细。
   function buildTaskUpdate(partial = {}) {
+    clearTimeout(progressTimer);
+    progressTimer = undefined;
     const latestLog = (partial.logs || logs || []).at(-1) || '';
     const progressDetail = buildContentPhaseProgress(contentStats, latestLog, progressMode);
     const calculatedProgress = buildContentOverallProgress(progressMode, progressDetail, partial.status);
@@ -1548,6 +1637,29 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         stats: { ...partial.stats, content: { ...partial.stats.content, output_progress: progressDetail } },
       } : {}),
     };
+  }
+
+  // 高频逐项进度最多每 250ms 发布一次；阶段切换、失败和结束立即发布。
+  function reportWorkflowProgress(progress) {
+    const immediate = recordContentWorkflowProgress(contentStats, progress);
+    const publish = () => publishTaskUpdate({ status: 'running', stats: statsSnapshot() });
+    if (immediate) publish();
+    else if (!progressTimer) progressTimer = setTimeout(publish, 250);
+  }
+
+  // 原生工具活动只描述正在做什么，不推测 Agent 已完成多少分析。
+  function handleContentActivity(event = {}) {
+    if (event.progress) { reportWorkflowProgress(event.progress); return; }
+    if (event.visible === false || !event.message) return;
+    if (event.operation === 'edit' && contentStats.phase === 'generating' && storedPlan.contentGenerationOptions?.wordCountRepair
+      && contentStats.workflow_progress?.steps['generating/0/word-check']?.done) {
+      recordContentWorkflowProgress(contentStats, { step: 'word-adjust', label: '正在按字数差额修复正文' });
+    }
+    if (contentStats.workflow_progress?.phase !== contentStats.phase) {
+      recordContentWorkflowProgress(contentStats, { step: 'agent', label: CONTENT_PHASE_LABELS[contentStats.phase] });
+    }
+    contentStats.workflow_progress = { ...contentStats.workflow_progress, activity: event.message };
+    if (!progressTimer) progressTimer = setTimeout(() => publishTaskUpdate({ status: 'running', logs: [...logs, `正文流程：${contentStats.workflow_progress.activity}`], stats: statsSnapshot() }), 250);
   }
 
   function updateTask(partial = {}, workspaceState, eventPatch, options) {
@@ -1645,6 +1757,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
+  if (contentStats.phase === 'planning' && !completedStages.has('planning')) reportWorkflowProgress({ step: 'preparing', label: '正在准备知识资料和编排输入' });
   const knowledgeReferences = loadContentKnowledgeReferences(knowledgeBaseService, referenceKnowledgeDocumentIds, (message) => {
     logs = [...logs, message];
   });
@@ -1690,6 +1803,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     logs = [...logs, `正文编排 Agent 已启动，本次处理 ${targetItemIds.length} 个目录节点。`];
     publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
 
+    reportWorkflowProgress({ step: 'planning', label: '正在准备编排资料并生成小节编排' });
     const agentResult = await agentService.runTask({
       task_id: runId,
       title: '技术方案正文编排',
@@ -1726,6 +1840,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       },
       max_retries: 0,
       onActivity(event = {}) {
+        handleContentActivity(event);
         const title = formatContentPlanningProgress(event.message);
         if (!title || event.visible === false) return;
         const message = `正文编排 Agent：${title}`;
@@ -1742,6 +1857,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       },
     });
 
+    reportWorkflowProgress({ step: 'planning-save', label: '正在校验并保存小节编排结果' });
     const plans = extractContentPlanningPlans(
       readContentPlanningJson(agentResult.output_content),
       outlineData.outline,
@@ -2142,6 +2258,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }
     }
     contentStats.planning_completed = tasksToRun.length;
+    reportWorkflowProgress({ step: 'planning-save', label: '小节编排结果已保存', done: true });
     const tableCandidates = planningTargets.filter(({ item }) => contentPlans.get(item.id)?.table.needed);
     const selectedTableIds = runLimits.maxTablesForRun === null
       ? new Set(tableCandidates.map(({ item }) => item.id))
@@ -2183,6 +2300,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     contentStats.phase = 'restoring';
     contentStats.restoration_total = targets.length;
     contentStats.restoration_completed = 0;
+    reportWorkflowProgress({ step: 'restoration-prepare', label: '正在准备原方案与分片资料' });
     logs = [...logs, `开始原方案还原：完整原方案交由 Agent 分析，${targets.length} 个候选小节。`];
     const runtime = syncRuntime({ phase: 'restoring' });
     checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
@@ -2237,9 +2355,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         auto_validate_json: true,
         max_retries: 1,
         validateOutput: result => validateOriginalRestoration(parseAgentJsonContent(result?.output_content), validationContext),
-        onActivity: createAgentActivityProgressHandler(() => {
-          publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
-        }, 0, 'Agent 正在按语义还原完整原方案'),
+        onActivity: handleContentActivity,
         onCheckpoint(checkpoint = {}) {
           updateContentAgentState({
             task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY,
@@ -2268,6 +2384,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     } finally {
       clearInterval(pauseWatcher);
     }
+    reportWorkflowProgress({ step: 'restoration-save', label: '正在校验并保存原方案还原结果' });
     const outputContent = String(agentResult.output_content || '');
     // 持久会话返回的结果也须通过现有原文完整性检查后才能写入业务正文。
     const result = validateOriginalRestoration(parseAgentJsonContent(outputContent), validationContext);
@@ -2351,6 +2468,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           onWorkspaceReady(workspaceDir) {
             const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
             contentStats.generation_total = decisions.targets.length;
+            const steps = contentStats.workflow_progress?.steps || {};
+            for (const item of Object.values(steps['generating/0/images']?.items || {})) {
+              if (item.source_file && !fs.existsSync(path.join(workspaceDir, item.source_file))) item.source_ready = false;
+              if (item.status === 'success' && item.asset_ref && !fs.existsSync(path.join(workspaceDir, item.asset_ref))) item.status = 'pending';
+            }
             clearInterval(scanTimer);
             // 非空 HTML 只用于进度和目录预览展示，不提前提交正式成功状态或 Word 转换记录。
             const scan = () => {
@@ -2372,9 +2494,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             scanTimer = setInterval(scan, 10000);
           },
           onConsistencyProgress(state) {
+            const changedRound = contentStats.phase !== 'auditing' || contentStats.consistency_round !== state.round;
             contentStats.phase = 'auditing';
             contentStats.consistency_round = state.round;
             contentStats.consistency_status = state.status;
+            if (changedRound || state.status !== 'running') recordContentWorkflowProgress(contentStats, { step: 'audit',
+              label: state.status === 'completed' ? '一致性审计及修复完成' : `第 ${state.round}/3 轮一致性审计${state.status === 'round-completed' ? '结论已提交' : '：正在核对材料'}`, done: state.status !== 'running' });
             contentStats.consistency_summary = state.summary || '';
             contentStats.consistency_remaining_issues = state.remaining_issues;
             if (state.status === 'completed') {
@@ -2392,11 +2517,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
           },
           onCheckpoint: checkpoint => updateContentAgentState(checkpoint),
-          onActivity(event = {}) {
-            if (event.visible === false || !event.message) return;
-            publishTaskUpdate({ status: 'running', logs: [...logs, `正文生成 Agent：${event.message}`], stats: statsSnapshot() });
-          },
+          onActivity: handleContentActivity,
           onProgress(result) {
+            contentStats.generation_completed = result.completed;
+            contentStats.preview_ready_section_ids = [...new Set([...contentStats.preview_ready_section_ids, result.section_id])];
             logs = [...logs, `正文文件已保存：${result.section_id}，${result.words} 字（${result.completed}/${result.total}）。`];
             publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
           },
@@ -2407,11 +2531,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           await runContentLayoutCheck({
             exporter: createTechnicalPlanExport({ technicalPlanStore: workspaceStore, templateStore, agentService, openXmlHelperService }),
             taskKey: CONTENT_GENERATION_AGENT_TASK_KEY, agentService, result, signal, resume: continuingLayout, layoutDocument,
+            onActivity: handleContentActivity,
             supplement: layout => runContentLayoutAgent({ agentService, signal, layout,
               onCheckpoint: checkpoint => updateContentAgentState({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY }),
-              onActivity(event = {}) {
-                if (event.visible !== false && event.message) publishTaskUpdate({ status: 'running', logs: [...logs, `格式自检 Agent：${event.message}`], stats: statsSnapshot() });
-              },
+              onActivity: handleContentActivity,
             }),
             onProgress(state) {
               contentStats.phase = 'layout-checking';
@@ -2469,7 +2592,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       }
       const wordSections = await convertContentSections({
         result, outputDir: contentRuntime.html_output.word_output_dir,
-        openXmlHelperService, signal, completed: contentRuntime.html_output.word_sections,
+        openXmlHelperService, signal, completed: contentRuntime.html_output.word_sections, onActivity: handleContentActivity,
         onProgress(wordSections) {
           logs = [...logs, `Word 已保存：${wordSections.at(-1).file}（${wordSections.length}/${result.sections.length}）。`];
           saveConvertedSections(wordSections);
@@ -2614,6 +2737,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       stats: statsSnapshot(),
     });
     throw error;
+  } finally {
+    clearTimeout(progressTimer);
   }
 }
 

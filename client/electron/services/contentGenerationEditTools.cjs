@@ -80,6 +80,9 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
   if (new Set(ids).size !== ids.length || ids.some(id => !targets.has(id))) throw new Error('只能编辑本次目标小节，一批不能重复提交同一小节');
   const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
   const { global_facts_requirements: factsRequirements } = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+  const step = ({ '正文扩缩写': 'word-adjust', '一致性修复': 'consistency-repair', '正文去表格': 'table-repair', '格式自检补写': 'layout-supplement' })[title];
+  const report = items => onActivity?.({ progress: { step, label: `正在${title}`, unit: '节', items } });
+  report(ids.map(id => ({ id, status: 'running' })));
   activity.pending += 1;
   try {
     const results = await Promise.all(jobs.map(async job => {
@@ -98,7 +101,10 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
           title: `${title}-${section.number}-${section.title}`, primary_session: false,
           failure_handled_by_parent: true,
           workspace_dir: workspaceDir, active_tools: SECTION_EDIT_CHILD_TOOLS,
-          before_tool_call: childProtection.beforeToolCall, before_file_write: childProtection.beforeWrite,
+          before_tool_call: context => {
+            childProtection.beforeToolCall(context);
+            onActivity?.({ message: `${title}：${section.number} ${section.title}，${context.toolCall.name === 'edit' ? '正在修改' : '正在读取核对'}` });
+          }, before_file_write: childProtection.beforeWrite,
           output_file: section.file, summary_enabled: false, signal: combinedSignal,
           max_retries: 1, timeout_ms: 30 * 60 * 1000,
           prompt: `你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。${readingInstructions}再按以下要求${title}：\n${job.instructions}\n本项目事实缺失处理要求（仅适用于本任务允许补充的内容，不扩大本次编辑范围）：${factsRequirements}\n只使用原生 edit 修改这一个小节文件；不要改其他小节、输入资料或结果清单。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局均受写入前保护，不得删除、替换或修改；可以调整图文表格中的普通说明文字。工具因图片保护拒绝编辑时，本次修改未写入文件。重新读取目标文件，将编辑范围限定为允许修改的普通文字，并原样保留受保护的图片块、引用、顺序和布局后重试。保留受限 HTML 结构、原有图片及引用、${preserveDataTables ? '原表格、' : '表格中的全部数据和含义、'}实质信息、事实参数和承诺。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。${instructions} 事实冲突以全局事实设定.md为准，按需读取。无法完成时调用 report-failure。edit 返回文本未匹配等错误时，重新读取最新文件，依据实际原文修正编辑参数并重试。修改由当前子任务直接写入目标 HTML，不以返回补丁文本代替文件修改。完成本次要求后在最后一次成功 edit 上标记 task_complete=true${preserveDataTables ? '' : '；重试时若已无数据表格，核实信息完整后可以在 read 上标记完成'}，不承担全文达标或修改其他小节的任务。${input}`,
@@ -107,9 +113,11 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
         });
         combinedSignal.throwIfAborted();
         const result = { section_id: section.id, status: 'success' };
+        report([{ id: section.id, status: 'success' }]);
         onResult(result);
         return result;
       } catch (error) {
+        report([{ id: section.id, status: combinedSignal.aborted ? 'cancelled' : 'error' }]);
         return { section_id: section.id, status: 'error', error: error.message };
       }
     }));

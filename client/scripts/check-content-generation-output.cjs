@@ -238,7 +238,7 @@ async function checkTask(directory, outputDir) {
         assert.deepEqual(scanGeneratedSections(directory, targets), []);
         for (const [index, section] of targets.entries()) {
           await generate.execute('generate', { sections: [{ section_id: section.id, instructions: '施工', references: '' }] });
-          assert.equal(state.contentGenerationTask.stats.content.generation_completed, index);
+          assert.equal(state.contentGenerationTask.stats.content.generation_completed, index + 1, '正文成功写入应立即更新主进度');
           tick(10000);
           assert.equal(state.contentGenerationTask.stats.content.generation_completed, index + 1);
           assert.deepEqual(scanGeneratedSections(directory, targets), targets.slice(0, index + 1).map(item => item.id));
@@ -258,14 +258,51 @@ async function checkTask(directory, outputDir) {
           tick(10000);
           assert.equal(state.contentGenerationTask.progress, progress);
         }
-        assert.equal(state.contentGenerationTask.progress, 70);
+        assert.equal(state.contentGenerationTask.progress, 43, '正文写完只完成正文子阶段，为图片保留进度');
         assert.equal(conversions, 0, '仅有 HTML 文件时不能触发转换');
+        const imageIds = targets.map(section => `${section.id}/fig1`);
+        const feedback = progress => payload.onActivity({ progress });
+        const flush = () => payload.onCheckpoint({ status: 'running' });
+        const detail = () => state.contentGenerationTask.progress_detail;
+        feedback({ step: 'images', label: '生成图片', unit: '张', inventory: targets.map(section => section.id), items: imageIds.map((id, i) => ({ id, kind: i ? 'html' : 'ai', status: 'pending' })) });
+        feedback({ step: 'images', label: '生成图片', unit: '张', items: [{ id: imageIds[0], status: 'success' }, { id: imageIds[1], status: 'rendering', source_ready: true }] });
+        flush();
+        assert.equal(detail().completed, 1);
+        assert.equal(detail().running, 1);
+        assert.match(detail().detail_text, /源码已保存 1/);
+        assert.ok(state.contentGenerationTask.progress > 43 && state.contentGenerationTask.progress < 65);
+        feedback({ step: 'images', label: '生成图片', unit: '张', items: [{ id: imageIds[1], status: 'needs_repair' }] });
+        assert.equal(detail().failed, 1);
+        assert.equal(detail().completed, 1, '待修复不能算作成功');
+        const partialProgress = state.contentGenerationTask.progress;
+        feedback({ step: 'image-apply', label: '回填图片', unit: '张', items: [{ id: imageIds[0], status: 'success' }] });
+        assert.equal(detail().total, 2, '只回填成功图片不能缩小整体分母');
+        assert.equal(state.contentGenerationTask.progress, partialProgress, '剩余图片失败时不能提前走完整个图片阶段');
+        feedback({ step: 'images', label: '重试图片', unit: '张', items: [{ id: imageIds[1], status: 'rendering', source_ready: true }] });
+        assert.equal(detail().failed, 0);
+        feedback({ step: 'images', label: '重试图片', unit: '张', items: [{ id: imageIds[1], status: 'success' }] });
+        flush();
+        assert.equal(detail().total, 2);
+        assert.equal(detail().completed, 2);
+        assert.equal(state.contentGenerationTask.progress, 65);
+        feedback({ step: 'image-apply', label: '回填图片', unit: '张', items: imageIds.map(id => ({ id, status: 'success' })) });
+        assert.equal(state.contentGenerationTask.progress, 67);
+        assert.equal(detail().completed, 2);
+        feedback({ step: 'word-check', label: '字数检查完成', done: true });
+        assert.equal(detail().step, 'word-check');
         fs.mkdirSync(path.join(directory, '原图'), { recursive: true });
         fs.writeFileSync(path.join(directory, '原图/现场 图片.png'), png);
         fs.writeFileSync(path.join(directory, '正文生成结果.json'), JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 10 })) }));
         payload.validateOutput(null, { workspace_dir: directory });
         assert.equal(payload.continueTask({}, { workspace_dir: directory }).stage, 'auditing');
         assert.equal(state.contentGenerationTask.stats.content.consistency_round, 1);
+        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', items: targets.map(section => ({ id: section.id, status: 'running' })) });
+        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', items: [{ id: targets[0].id, status: 'success' }, { id: targets[1].id, status: 'error' }] });
+        assert.equal(detail().failed, 1);
+        assert.equal(detail().completed, 1);
+        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', items: [{ id: targets[1].id, status: 'success' }] });
+        flush();
+        assert.equal(detail().completed, 2);
         assert.equal(conversions, 0, '审计完成前不得转 Word');
         await tools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '无矛盾', remaining_issues: [] });
         assert.equal(payload.continueTask({}, { workspace_dir: directory }).complete, true);
@@ -369,7 +406,13 @@ async function checkTask(directory, outputDir) {
       const retryAgent = { ...args.agentService,
         loadPersistentTask: () => ({ paths: { workspaceDir: directory }, state: persistentState }),
         updatePersistentTask(_key, partial) { Object.assign(persistentState, partial); },
-        async runTask() { throw failure; },
+        async runTask(payload) {
+          if (stage === '配图') payload.onActivity({ progress: { step: 'images', label: '生成图片', unit: '张', items: [
+            { id: 'saved', kind: 'ai', status: 'success', asset_ref: '原图/现场 图片.png' },
+            { id: 'waiting', kind: 'html', status: 'rendering', source_ready: true },
+          ] } });
+          throw failure;
+        },
       };
       await assert.rejects(runContentGenerationTask({ ...args, agentService: retryAgent,
         previousState: structuredClone(state), payload: { resume: true } }), error => error === failure);
@@ -390,6 +433,14 @@ async function checkTask(directory, outputDir) {
           assert.equal(persistentState.word_adjustment_started, stage === '扩缩写', '重试不得重置扩缩写保护状态');
           if (stage === '扩缩写') assert.match(payload.prompt, /本次恢复时已处于图片保护阶段/);
           const tools = payload.create_tools({ Type, workspaceDir: directory });
+          if (stage === '配图') {
+            payload.onCheckpoint({ status: 'running' });
+            const progress = state.contentGenerationTask.progress_detail;
+            assert.equal(progress.completed, 1, '恢复保留成功图片数量');
+            assert.equal(progress.pending, 1, '中断的执行中项目恢复为待处理');
+            assert.equal(progress.running, 0);
+            assert.equal(progress.total, 2);
+          }
           assert.equal(payload.continueTask({}, { workspace_dir: directory }).stage, 'auditing');
           await tools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '复核通过', remaining_issues: [] });
           assert.equal(payload.continueTask({}, { workspace_dir: directory }).complete, true);
@@ -846,6 +897,13 @@ function checkProgressView(task) {
   const reloaded = { ...task };
   delete reloaded.progress_detail;
   assert.deepEqual(evaluate(reloaded), [100, '转换完成', '2/2']);
+  const images = { ...reloaded, progress: 56, stats: { content: { phase: 'generating', output_progress: {
+    mode: 'html', phase: 'generating', phase_label: '正文生成', step: 'images', step_label: '生成图片', completed: 3, total: 8, unit: '张',
+  } } } };
+  assert.deepEqual(evaluate(images), [56, '正文生成', '3/8张'], '重开页面后必须读取已保存图片计数');
+  images.stats.content.output_progress.unit = undefined;
+  images.stats.content.output_progress.indeterminate = true;
+  assert.deepEqual(evaluate(images), [56, '正文生成', '处理中']);
 }
 
 // 已删除阶段不能留下进度空档，覆盖审计埋点也必须固定为关闭。

@@ -114,7 +114,7 @@ function analyzeLayout(layout, sources, targetIds, twoColumn = false) {
 }
 
 // 临时导出、一次并发补写、一次复查；阶段状态随正文 Session 保存，恢复时不重新分配名额。
-async function runContentLayoutCheck({ exporter, taskKey, agentService, result, signal, resume, supplement, onProgress,
+async function runContentLayoutCheck({ exporter, taskKey, agentService, result, signal, resume, supplement, onProgress, onActivity,
   layoutDocument = readWordLayout }) {
   let state = resume ? agentService.loadPersistentTask(taskKey).state.layout_check : null;
   const save = next => {
@@ -135,10 +135,14 @@ async function runContentLayoutCheck({ exporter, taskKey, agentService, result, 
   // 每次复查重新导出当前 HTML，但同一轮使用相同模板，避免检测口径变化。
   const inspect = async () => {
     signal.throwIfAborted();
-    const output = await exporter.build(snapshot, { layoutCheck: true });
+    const rechecking = state.status === 'rechecking';
+    onActivity?.({ progress: { step: 'layout-export', label: rechecking ? '正在重新导出自检文档' : '正在组装自检文档' } });
+    const output = await exporter.build(snapshot, { layoutCheck: true, onProgress: event =>
+      onActivity?.({ progress: { step: 'layout-export', label: `${rechecking ? '复查：' : ''}${event.message}` } }) });
     signal.throwIfAborted();
     const file = path.join(directory, '格式自检.docx');
     fs.writeFileSync(file, output.buffer);
+    onActivity?.({ progress: { step: 'layout-inspect', label: rechecking ? '正在复查页栏留白' : '正在检测页栏留白' } });
     const layout = await layoutDocument(file, signal);
     signal.throwIfAborted();
     const page = snapshot.export_format.page;

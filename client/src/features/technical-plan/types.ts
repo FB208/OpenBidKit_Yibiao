@@ -70,6 +70,24 @@ export interface TechnicalPlanGenerationConfig {
   contentGenerationOptions: ContentGenerationOptions;
 }
 
+export interface ContentGenerationProgressItem {
+  status: 'pending' | 'running' | 'generating' | 'rendering' | 'success' | 'error' | 'needs_repair' | 'cancelled';
+  kind?: 'ai' | 'html' | 'mermaid';
+  source_ready?: boolean;
+  source_file?: string;
+  asset_ref?: string;
+}
+
+export interface ContentGenerationWorkflowProgress {
+  phase: ContentGenerationPhase;
+  round: number;
+  step: string;
+  label: string;
+  started_at: string;
+  activity: string;
+  steps: Record<string, { items: Record<string, ContentGenerationProgressItem>; unit?: string; total?: number; done?: boolean }>;
+}
+
 export interface ContentGenerationProgressDetail {
   mode: 'full' | 'single' | 'html' | 'html-single' | 'correction';
   phase: ContentGenerationPhase;
@@ -79,6 +97,16 @@ export interface ContentGenerationProgressDetail {
   total: number;
   step: string;
   step_label: string;
+  unit?: string;
+  failed?: number;
+  running?: number;
+  pending?: number;
+  cancelled?: number;
+  indeterminate?: boolean;
+  started_at?: string;
+  activity?: string;
+  detail_text?: string;
+  done?: boolean;
 }
 
 export interface BackgroundTaskState {
@@ -143,6 +171,7 @@ export interface BackgroundTaskState {
       word_conversion_total?: number;
       word_conversion_completed?: number;
       output_progress?: ContentGenerationProgressDetail;
+      workflow_progress?: ContentGenerationWorkflowProgress;
       minimum_words?: number;
       maximum_words?: number;
       section_words?: number;

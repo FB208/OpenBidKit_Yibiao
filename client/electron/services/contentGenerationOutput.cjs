@@ -67,7 +67,7 @@ async function previewContentSection({ sectionId, agentService, openXmlHelperSer
 }
 
 // 小节 Word 仅转换正文，目录标题由页面显示；只复用已登记成功且仍存在的文件。
-async function convertContentSections({ result, outputDir, openXmlHelperService, signal, completed = [], onProgress = () => {} }) {
+async function convertContentSections({ result, outputDir, openXmlHelperService, signal, completed = [], onProgress = () => {}, onActivity }) {
   const { workspaceDir, sections } = result;
   const template = JSON.parse(fs.readFileSync(path.join(workspaceDir, '所选模板配置.json'), 'utf8'));
   const saved = new Map(completed.filter(item => fs.existsSync(path.join(outputDir, item.file))
@@ -79,6 +79,7 @@ async function convertContentSections({ result, outputDir, openXmlHelperService,
     const target = path.join(outputDir, file);
     try {
       if (saved.get(section.section_id)?.file !== file) {
+        onActivity?.({ progress: { step: 'word-converting', label: `正在转换 ${section.number} ${section.title}` } });
         const body = fs.readFileSync(path.join(workspaceDir, section.file), 'utf8');
         const rendered = await openXmlHelperService.createRestrictedHtmlDocx(body, template.config, {
           assetRoot: workspaceDir, copyAssets: true,
@@ -90,6 +91,7 @@ async function convertContentSections({ result, outputDir, openXmlHelperService,
         onProgress(sections.flatMap(item => saved.has(item.section_id) ? [saved.get(item.section_id)] : []));
       }
     } catch (error) {
+      onActivity?.({ progress: { step: 'word-converting', label: `${section.number} ${section.title} ${signal.aborted ? '转换已暂停' : '转换失败'}` } });
       if (signal.aborted) throw signal.reason;
       throw new Error(`小节 ${section.number} ${section.title} 转 Word 失败：${error.message}`, { cause: error });
     }

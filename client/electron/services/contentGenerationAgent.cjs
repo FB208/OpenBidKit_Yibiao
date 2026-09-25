@@ -235,6 +235,7 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       const ids = params.sections.map(section => section.section_id);
       if (new Set(ids).size !== ids.length || ids.some(id => !targets.has(id))) throw new Error('只能提交本次目标小节，同一批不能重复提交相同小节');
+      onActivity?.({ progress: { step: 'writing', label: '正在生成小节正文', unit: '节', total: targets.size, items: ids.map(id => ({ id, status: 'running' })) } });
       activity.pending += 1;
       try {
         const results = await Promise.all(params.sections.map(async job => {
@@ -257,11 +258,13 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
             fs.writeFileSync(`${target}.tmp`, html, 'utf8');
             fs.renameSync(`${target}.tmp`, target);
             savedIds.add(section.id);
+            onActivity?.({ progress: { step: 'writing', label: '正在生成小节正文', unit: '节', items: [{ id: section.id, status: 'success' }] } });
             const result = { section_id: section.id, file: section.file, words: countHtmlWords(html), status: 'success' };
             onProgress({ ...result, completed: savedIds.size, total: targets.size });
             onUpdate?.({ content: [{ type: 'text', text: `已保存 ${section.file}（${savedIds.size}/${targets.size}）` }], details: result });
             return result;
           } catch (error) {
+            onActivity?.({ progress: { step: 'writing', label: '正在生成小节正文', unit: '节', items: [{ id: section.id, status: combinedSignal.aborted ? 'cancelled' : 'error' }] } });
             return { section_id: section.id, status: 'error', error: error.message };
           }
         }));
@@ -275,7 +278,7 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
   ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml }, {
     Type, workspaceDir, setActiveTools: names => setActiveTools?.(names.filter(name => wordAdjustmentEnabled || name !== 'adjust-sections')),
   }).filter(tool => wordAdjustmentEnabled || tool.name !== 'adjust-sections'),
-  ...createContentGenerationImageTools({ aiService, signal, sections: decisions.targets, htmlImageOptimization: generationOptions.htmlImageOptimization === true,
+  ...createContentGenerationImageTools({ aiService, signal, onActivity, sections: decisions.targets, htmlImageOptimization: generationOptions.htmlImageOptimization === true,
     beforeApply: () => imageProtection?.beforeToolCall({ toolCall: { name: 'apply-section-images' } }),
   }, { Type, workspaceDir })];
 }
@@ -301,6 +304,7 @@ function buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPla
 async function runContentGenerationAgent({ agentService, aiService, generationOptions = {}, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath, signal, buildFiles, onCheckpoint = () => {}, onActivity, onProgress, onConsistencyProgress = () => {}, onTableCleanupProgress = () => {}, onWorkspaceReady = () => {} }) {
   const reuseSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
   const resuming = Boolean(resume && reuseSession);
+  onActivity?.(resuming ? { message: '正在恢复任务与输入资料' } : { progress: { step: 'preparing', label: '正在准备正文输入资料' } });
   const files = resuming ? [] : buildFiles();
   const savedState = resuming ? agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).state : {};
   const wordAdjustmentEnabled = generationOptions.wordCountRepair === true;
@@ -353,6 +357,11 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
         throw new Error('本轮审计结论已经提交，请标记任务完成并等待程序进入下一阶段');
       }
       imageProtection.beforeToolCall(context);
+      const { name } = context.toolCall;
+      const args = context.args || {};
+      if (['read', 'edit', 'write', 'find', 'ls'].includes(name)) {
+        onActivity?.({ operation: name, message: `${({ read: '正在读取', edit: '正在修改', write: '正在保存', find: '正在查找', ls: '正在查看目录' })[name]}：${args.path || args.file_path || args.pattern || name}` });
+      }
     },
     before_file_write: context => imageProtection.beforeWrite(context),
     create_tools: context => {
@@ -369,7 +378,12 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
       else if (consistencyState) onConsistencyProgress(consistencyState);
       return createContentGenerationTools({ aiService, agentService, generationOptions, signal, onProgress, onActivity, imageProtection, consistency, tableCleanup }, context);
     },
-    validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
+    validateOutput: (_result, context) => {
+      onActivity?.({ progress: { step: 'result-check', label: '正在核对正文结果与图片引用' } });
+      const checked = readContentGenerationResult(context.workspace_dir);
+      onActivity?.({ progress: { step: 'result-check', label: '正文结果与图片引用核对完成', done: true } });
+      return checked;
+    },
     // 关闭字数修复时只记录实际字数；开启时沿用扩缩写及复查流程。
     continueTask: (_result, context) => {
       // 后处理分支必须先于字数检查，修复和去表格之后不再调整字数。
@@ -408,7 +422,9 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     onActivity,
   });
   signal.throwIfAborted();
+  onActivity?.({ progress: { step: 'result-check', label: '正在核对最终结果' } });
   const output = readContentGenerationResult(result.workspace_dir);
+  onActivity?.({ progress: { step: 'result-check', label: '结果核对完成', done: true } });
   agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
     status: 'success', phase: 'completed', agent_connection: 'idle', error: null, completed_at: new Date().toISOString(),
   });
@@ -441,6 +457,11 @@ async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoin
     before_tool_call: context => {
       if (context.toolCall.name === 'edit') assertCorrectionAllowed();
       imageProtection.beforeToolCall(context);
+      const { name } = context.toolCall;
+      const args = context.args || {};
+      if (['read', 'edit', 'write', 'find', 'ls'].includes(name)) {
+        onActivity?.({ operation: name, message: `${({ read: '正在读取', edit: '正在修改', write: '正在保存', find: '正在查找', ls: '正在查看目录' })[name]}：${args.path || args.file_path || args.pattern || name}` });
+      }
     },
     before_file_write: context => {
       assertCorrectionAllowed();
@@ -457,7 +478,12 @@ async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoin
         validateResult: () => readContentGenerationResult(context.workspaceDir),
       }, context);
     },
-    validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
+    validateOutput: (_result, context) => {
+      onActivity?.({ progress: { step: 'result-check', label: '正在核对正文结果与图片引用' } });
+      const checked = readContentGenerationResult(context.workspace_dir);
+      onActivity?.({ progress: { step: 'result-check', label: '正文结果与图片引用核对完成', done: true } });
+      return checked;
+    },
     continueTask: () => layout.get().status === 'rechecking' ? { complete: true }
       : { stage: 'layout-checking', prompt: buildLayoutPrompt(layout.get()) },
     onCheckpoint: checkpoint => onCheckpoint?.({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: runId }),

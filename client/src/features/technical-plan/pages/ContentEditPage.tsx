@@ -201,6 +201,7 @@ function ContentEditPage({
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
   const [statsCollapsed, setStatsCollapsed] = useState(false);
+  const [progressNow, setProgressNow] = useState(Date.now);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
@@ -227,6 +228,12 @@ function ContentEditPage({
   const taskFailed = task?.status === 'error';
   const taskInFlight = running || pausing;
   const phaseVisible = taskInFlight || paused || taskFailed;
+  useEffect(() => {
+    if (!taskInFlight) return;
+    setProgressNow(Date.now());
+    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [taskInFlight]);
   const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting;
   const contentStats = task?.stats?.content;
   const previewReadySectionIds = useMemo(() => new Set(contentStats?.preview_ready_section_ids || []), [contentStats?.preview_ready_section_ids]);
@@ -287,7 +294,9 @@ function ContentEditPage({
   const currentProgressDetail = (phaseVisible || htmlOutputProgress) && progressDetail?.phase === contentStats?.phase ? progressDetail : undefined;
   const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : progress;
   const displayProgressLabel = currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
-  const displayProgressCount = auditing ? auditCorrectionCount : htmlOutputProgress && currentProgressDetail
+  const displayProgressCount = currentProgressDetail?.unit
+    ? `${currentProgressDetail.completed}/${currentProgressDetail.total}${currentProgressDetail.unit}`
+    : currentProgressDetail?.indeterminate ? '处理中' : auditing ? auditCorrectionCount : htmlOutputProgress && currentProgressDetail
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
     : planning
     ? `${planningCompleted}/${planningTotal}`
@@ -303,10 +312,24 @@ function ContentEditPage({
       ? 'sky'
       : 'primary';
   const progressActive = taskInFlight && (htmlOutputProgress || planning || restoring || contentCorrecting);
+  const stepSeconds = currentProgressDetail?.started_at
+    ? Math.max(0, Math.floor(((taskInFlight ? progressNow : Date.parse(task?.updated_at || currentProgressDetail.started_at)) - Date.parse(currentProgressDetail.started_at)) / 1000)) : 0;
+  const workflowDescription = currentProgressDetail?.started_at ? [
+    currentProgressDetail.step_label,
+    currentProgressDetail.unit ? `成功 ${currentProgressDetail.completed}/${currentProgressDetail.total} ${currentProgressDetail.unit}` : '',
+    currentProgressDetail.running ? `处理中 ${currentProgressDetail.running}（含队列等待）` : '',
+    currentProgressDetail.pending ? `待处理 ${currentProgressDetail.pending}` : '',
+    currentProgressDetail.failed ? `失败或待修复 ${currentProgressDetail.failed}` : '',
+    currentProgressDetail.cancelled ? `已中断 ${currentProgressDetail.cancelled}` : '',
+    currentProgressDetail.detail_text, currentProgressDetail.activity,
+    `本次步骤用时 ${Math.floor(stepSeconds / 60)}分${stepSeconds % 60}秒`,
+  ].filter(Boolean).join('；') : '';
   const progressDescription = developerStageGate
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
     ? taskErrorMessage
+    : workflowDescription
+    ? `${paused ? '已暂停：' : ''}${workflowDescription}`
     : layoutChecking
     ? `${paused ? '已暂停：' : ''}${currentProgressDetail?.step_label || '正在检测页栏留白'}，补写 ${contentStats?.layout_completed || 0}/${contentStats?.layout_total || 0} 个小节。`
     : htmlOutputProgress && currentProgressDetail && ['generating', 'sections-completed', 'word-converting', 'word-completed'].includes(currentProgressDetail.phase)
