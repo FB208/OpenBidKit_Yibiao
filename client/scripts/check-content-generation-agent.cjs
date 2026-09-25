@@ -1463,6 +1463,7 @@ async function checkLocalRendering(workspaceDir) {
 
 // 格式自检先对齐运行编号再续接主会话；跨次失败重试保留成功项和图片保护。
 async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
+  const { createPiSession } = require('../electron/services/pi/piSessionFactory.cjs');
   const targets = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8')).targets;
   let state = { status: 'supplementing', jobs: targets.map(section => ({ section_id: section.id, file: section.file, gaps: [{ figure_ids: ['图'], suggested_words: 50 }] })), completed_section_ids: [] };
   const sessionFile = '原正文会话.jsonl';
@@ -1475,6 +1476,7 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
   let running = 0;
   let peak = 0;
   let failFirst = true;
+  let interruptCorrection = true;
   const calls = [];
   const agentService = { updatePersistentTask(key, patch) {
     assert.equal(key, CONTENT_GENERATION_AGENT_TASK_KEY);
@@ -1492,7 +1494,7 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
         const file = path.join(workspaceDir, payload.output_file);
         const original = fs.readFileSync(file, 'utf8');
         assert.throws(() => payload.before_file_write({ filePath: file, originalContent: original, content: original + '<figure><img></figure>', toolName: 'edit' }), /受保护图片/);
-        const html = original + '\n<!-- yibiao:block -->\n<p>补充现场复核工作安排。</p>';
+        const html = original + '\n<!-- yibiao:block -->\n<p>补充现场复核工作安排。' + (payload.output_file === targets[0].file ? '' : '</p>');
         payload.before_file_write({ filePath: file, originalContent: original, content: html, toolName: 'edit' });
         fs.writeFileSync(file, html, 'utf8');
         payload.validateOutput({ output_content: html });
@@ -1514,21 +1516,68 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
     assert.equal(payload.initial_stage, 'layout-checking');
     assert.deepEqual(payload.files, []);
     assert.ok(!payload.active_tools.includes('write'));
+    assert.ok(payload.active_tools.includes('edit'));
     assert.match(payload.prompt, /不再调整全文字数/);
     const tools = payload.create_tools({ Type, workspaceDir });
     const supplement = tools.find(tool => tool.name === 'supplement-layout-sections');
     const complete = tools.find(tool => tool.name === 'complete-layout-supplement');
+    const editCall = { toolCall: { name: 'edit' }, args: { path: targets[0].file } };
+    const correctionFile = path.join(workspaceDir, targets[0].file);
+    const beforeWrite = () => payload.before_file_write({ toolName: 'edit', filePath: correctionFile,
+      originalContent: fs.readFileSync(correctionFile, 'utf8'), content: '<p>不能写入</p>' });
     if (failFirst) {
-      const results = (await supplement.execute('batch', { section_ids: targets.map(section => section.id) })).details.results;
+      const batch = supplement.execute('batch', { section_ids: targets.map(section => section.id) });
+      assert.ok(running > 0);
+      assert.throws(() => payload.before_tool_call(editCall), /等待全部格式补写任务成功/);
+      assert.throws(beforeWrite, /等待全部格式补写任务成功/);
+      const results = (await batch).details.results;
+      assert.throws(() => payload.before_tool_call(editCall), /等待全部格式补写任务成功/);
+      assert.throws(beforeWrite, /等待全部格式补写任务成功/);
       assert.equal(results.filter(item => item.status === 'error').length, 1);
       assert.throws(() => complete.execute(), /未完成/);
       Object.assign(persistent, { status: 'error', error: interrupted.message });
       throw interrupted;
     }
-    assert.deepEqual(state.completed_section_ids, [targets[1].id]);
     await assert.rejects(supplement.execute('again', { section_ids: [targets[1].id] }), /未完成的格式补写/);
-    await supplement.execute('retry', { section_ids: [targets[0].id] });
-    complete.execute();
+    if (!state.completed_section_ids.includes(targets[0].id)) {
+      await supplement.execute('retry', { section_ids: [targets[0].id] });
+    }
+    payload.before_tool_call(editCall);
+    const created = await createPiSession({ workspaceDir,
+      environment: { shellPath: process.env.ComSpec, layout: { agentDir: path.join(workspaceDir, 'agent') }, instructions: '检查格式补写收尾编辑', env: {} },
+      config: {}, timeoutMs: 60000, summaryEnabled: false, proxyInfo: { baseUrl: 'http://127.0.0.1:1', token: 'test' },
+      activeTools: payload.active_tools, createTools: () => tools,
+      beforeFileWrite: payload.before_file_write, beforeToolCall: payload.before_tool_call,
+    });
+    try {
+      const edit = created.session.agent.state.tools.find(tool => tool.name === 'edit');
+      assert.ok(edit, '主会话实际注册原生 edit');
+      const original = fs.readFileSync(correctionFile, 'utf8');
+      const outsideFile = '正文/未分配补写.html';
+      fs.writeFileSync(path.join(workspaceDir, outsideFile), '<p>其他小节</p>', 'utf8');
+      for (const file of ['正文编排决策.json', outsideFile]) {
+        const before = fs.readFileSync(path.join(workspaceDir, file), 'utf8');
+        await assert.rejects(edit.execute('outside', { path: file, edits: [{ oldText: before, newText: '越界修改' }] }), /正文编辑只能/);
+        assert.equal(fs.readFileSync(path.join(workspaceDir, file), 'utf8'), before);
+      }
+      await assert.rejects(edit.execute('image', { path: targets[0].file,
+        edits: [{ oldText: original, newText: original + '<figure><img></figure>' }] }), /受保护图片/);
+      assert.equal(fs.readFileSync(correctionFile, 'utf8'), original);
+      const paragraph = '<p>补充现场复核工作安排。';
+      if (interruptCorrection) {
+        assert.ok(original.endsWith(paragraph));
+        await edit.execute('close-paragraph', { path: targets[0].file, edits: [{ oldText: paragraph, newText: paragraph + '</p>' }] });
+        assert.equal(fs.readFileSync(correctionFile, 'utf8'), original + '</p>');
+        interruptCorrection = false;
+        throw interrupted;
+      }
+      assert.ok(original.endsWith(paragraph + '</p>'), '恢复保留已经写入的纠错');
+      complete.execute();
+      assert.throws(() => payload.before_tool_call(editCall), /已提交完成/);
+      await assert.rejects(edit.execute('late-edit', { path: targets[0].file,
+        edits: [{ oldText: paragraph, newText: '<p>迟到修改' }] }), /已提交完成/);
+      assert.equal(fs.readFileSync(correctionFile, 'utf8'), original);
+    } finally { created.session.dispose(); }
     assert.deepEqual(payload.continueTask(), { complete: true });
     payload.validateOutput({}, { workspace_dir: workspaceDir });
     return { workspace_dir: workspaceDir };
@@ -1540,8 +1589,11 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
   const completedFile = path.join(workspaceDir, targets[1].file);
   const completedBefore = fs.readFileSync(completedFile, 'utf8');
   failFirst = false;
+  await assert.rejects(run(), error => error === interrupted);
+  assert.equal(state.status, 'supplementing');
+  assert.equal(state.completed_section_ids.length, targets.length);
   await run();
-  assert.equal(runIds.length, 2);
+  assert.equal(runIds.length, 3);
   assert.equal(persistent.session_file, sessionFile);
   assert.equal(persistent.status, 'success');
   assert.equal(persistent.error, null);
@@ -1550,7 +1602,7 @@ async function checkLayoutSupplement({ Type, workspaceDir, signal }) {
   assert.equal(peak, 2);
   assert.equal(calls.filter(file => file === targets[1].file).length, 1);
   assert.equal(state.status, 'rechecking');
-  console.log('格式补写：运行编号与检查点一致、失败后原会话续接、并发、图片保护和成功项复用通过。');
+  console.log('格式补写：运行编号与检查点一致、失败后原会话续接、并发与失败期间禁止纠错、原生 edit 修复、范围与图片保护、纠错恢复和提交后禁写通过。');
 }
 
 if (process.argv.includes('--original-store')) {

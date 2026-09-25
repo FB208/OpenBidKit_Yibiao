@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { editContentSections } = require('./contentGenerationEditTools.cjs');
 
-const LAYOUT_TOOLS = ['read', 'find', 'ls', 'supplement-layout-sections', 'complete-layout-supplement', 'report-failure'];
+const LAYOUT_TOOLS = ['read', 'edit', 'find', 'ls', 'supplement-layout-sections', 'complete-layout-supplement', 'report-failure'];
 
 // 页码仅供理解问题，编辑位置以小节文件和图片/图组标识为准。
 function buildLayoutPrompt(state) {
@@ -12,14 +12,13 @@ ${JSON.stringify(state.jobs)}
 每项 gaps 给出待插入文字的图片或图组（figure_ids、block_index、target_text），以及 preceding_text、页码、栏号、留白厘米数和建议新增字数。block_index 为检测时该小节顶层元素从零开始的下标，修改后会变化，优先按图片标识定位；页码和栏号不可作为 HTML 定位依据。
 调用 supplement-layout-sections 一次提交所有尚未成功的小节 ID，工具会提供该节完整任务集合。各小节并发编辑，同一小节的全部位置由一个子任务处理，不逐个小节等待。已完成小节：${JSON.stringify(state.completed_section_ids)}。
 补写紧接在目标图片或整个图片表格之前，使用连贯的普通段落，不把文字写进图片、图注或表格单元格，不修改图片、图组结构或布局。建议字数为排版估算值，尽量用一段连贯文字，避免拆成许多短段引入额外段间距。内容必须承接上下文，有实际信息，不用重复套话填空，不新增无依据的事实或承诺。
-失败或中断任务先重读文件；若相应位置已有本次补写，核对后只补不足部分，禁止重复追加整份字数。等待全部并发任务结束，只重新提交未成功的小节，然后调用 complete-layout-supplement 并标记 task_complete=true。只执行这一轮补写，不再调整全文字数、不再审计、不重新配图；程序将重新导出复查。`;
+失败或中断任务先重读文件；若相应位置已有本次补写，核对后只补不足部分，禁止重复追加整份字数。等待全部并发任务结束，只重新提交未成功的小节。全部任务成功后，如发现本轮新增内容存在具体错误，读取对应小节，使用 edit 作必要修正，保留既有正文和图片。无需为收尾重新通读全部小节或进行新一轮审计。中断后保留已写入的修正，继续处理未解决的问题，不重复补写成功小节。处理完已发现的问题后，调用 complete-layout-supplement 并标记 task_complete=true；纠错 edit 不标记任务完成。只执行这一轮补写，不再调整全文字数、不再审计、不重新配图；程序将重新导出复查。`;
 }
 
 // 并发编辑沿用原生 edit 与图片写入前保护，不另造文本替换工具。
-function createContentGenerationLayoutTools({ agentService, signal, layout, validateHtml, validateResult, onActivity }, { Type, workspaceDir }) {
+function createContentGenerationLayoutTools({ agentService, signal, layout, activity, validateHtml, validateResult, onActivity }, { Type, workspaceDir }) {
   const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
   const targets = new Map(decisions.targets.map(section => [section.id, section]));
-  const activity = { pending: 0 };
   const response = details => ({ content: [{ type: 'text', text: JSON.stringify(details) }], details });
   return [{
     name: 'supplement-layout-sections', label: '并发补写排版留白', executionMode: 'sequential',

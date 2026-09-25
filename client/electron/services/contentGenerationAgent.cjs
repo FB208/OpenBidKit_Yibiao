@@ -415,6 +415,16 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
 
 // 正文完成后续接原主会话，主 Agent 分配补写，子 Agent 用已有 edit 能力直接修改各自文件。
 async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoint, onActivity }) {
+  const activity = { pending: 0 };
+  let imageProtection;
+  // 收尾纠错只在全部并发补写成功、尚未提交完成时开放。
+  function assertCorrectionAllowed() {
+    const state = layout.get();
+    if (state.status !== 'supplementing') throw new Error('格式补写已提交完成，不能继续编辑正文');
+    if (activity.pending || state.jobs.some(job => !state.completed_section_ids.includes(job.section_id))) {
+      throw new Error('请等待全部格式补写任务成功后，再修正新增内容');
+    }
+  }
   // 本次执行与持久任务使用同一编号，恢复原 Session 时保留已有补写进度。
   const runId = crypto.randomUUID();
   agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
@@ -426,11 +436,25 @@ async function runContentLayoutAgent({ agentService, signal, layout, onCheckpoin
     initial_stage: 'layout-checking', active_tools: LAYOUT_TOOLS, files: [],
     prompt: buildLayoutPrompt(layout.get()), output_file: RESULT_FILE,
     signal, max_retries: 1, timeout_ms: 30 * 60 * 1000,
-    create_tools: context => createContentGenerationLayoutTools({
-      agentService, signal, layout, onActivity,
-      validateHtml(root, html) { checkSectionHtml(html); validateContentImageReferences(root, html); },
-      validateResult: () => readContentGenerationResult(context.workspaceDir),
-    }, context),
+    before_tool_call: context => {
+      if (context.toolCall.name === 'edit') assertCorrectionAllowed();
+      imageProtection.beforeToolCall(context);
+    },
+    before_file_write: context => {
+      assertCorrectionAllowed();
+      imageProtection.beforeWrite(context);
+    },
+    create_tools: context => {
+      imageProtection = createContentImageProtection({
+        workspaceDir: context.workspaceDir, files: layout.get().jobs.map(job => job.file),
+        active: true, toolNames: LAYOUT_TOOLS,
+      });
+      return createContentGenerationLayoutTools({
+        agentService, signal, layout, activity, onActivity,
+        validateHtml(root, html) { checkSectionHtml(html); validateContentImageReferences(root, html); },
+        validateResult: () => readContentGenerationResult(context.workspaceDir),
+      }, context);
+    },
     validateOutput: (_result, context) => readContentGenerationResult(context.workspace_dir),
     continueTask: () => layout.get().status === 'rechecking' ? { complete: true }
       : { stage: 'layout-checking', prompt: buildLayoutPrompt(layout.get()) },

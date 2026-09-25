@@ -112,6 +112,8 @@ async function main() {
 
   // 恢复只继续未成功任务，复查即使仍有留白也不再开启第二轮补写。
   let supplementRuns = 0;
+  let supplementWrites = 0;
+  let interruptCorrection = false;
   let measures = 0;
   const output = { buffer: Buffer.from('test'), layoutSources: initial.sources };
   const args = { exporter: { prepare: () => ({ export_format: format }), build: async () => output }, taskKey: 'test', agentService,
@@ -119,7 +121,10 @@ async function main() {
     layoutDocument: async () => { measures++; return initial.layout; }, onProgress() {},
     supplement: async controller => {
       supplementRuns++;
+      if (!controller.get().completed_section_ids.includes('section')) supplementWrites++;
       controller.save({ ...controller.get(), completed_section_ids: ['section'] });
+      if (interruptCorrection) throw new Error('收尾纠错中断');
+      controller.save({ ...controller.get(), status: 'rechecking' });
     },
   };
   await runContentLayoutCheck({ ...args, resume: false });
@@ -129,10 +134,20 @@ async function main() {
   await runContentLayoutCheck({ ...args, resume: true });
   assert.equal(measures, 2);
   persistent.layout_check.status = 'supplementing';
+  interruptCorrection = true;
+  await assert.rejects(runContentLayoutCheck({ ...args, resume: true }), /收尾纠错中断/);
+  assert.equal(persistent.layout_check.status, 'supplementing');
+  assert.equal(measures, 2, '主会话未提交完成时不能提前复查');
+  interruptCorrection = false;
   await runContentLayoutCheck({ ...args, resume: true });
-  assert.equal(supplementRuns, 1, '暂停前完成的小节不应重复补写');
+  assert.equal(supplementRuns, 3, '所有小节成功但阶段未提交时仍恢复主会话纠错');
+  assert.equal(supplementWrites, 1, '恢复收尾不重复补写成功小节');
   assert.equal(measures, 3);
-  console.log('通过：一轮补写一轮复查、完成与暂停恢复不重复补写。');
+  persistent.layout_check.status = 'rechecking';
+  await runContentLayoutCheck({ ...args, resume: true });
+  assert.equal(supplementRuns, 3, '提交后恢复直接复查，不重启收尾编辑');
+  assert.equal(measures, 4);
+  console.log('通过：一轮补写、收尾中断继续纠错、成功小节不重写、提交后直接复查。');
 }
 
 app.whenReady().then(main).then(async () => {

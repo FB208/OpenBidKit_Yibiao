@@ -155,9 +155,8 @@ async function runContentLayoutCheck({ exporter, taskKey, agentService, result, 
       save({ ...state, jobs, status: jobs.length ? 'supplementing' : 'completed', remaining_gaps: [] });
     }
     if (state.status === 'supplementing') {
-      if (state.jobs.some(job => !state.completed_section_ids.includes(job.section_id))) {
-        await supplement({ get: () => state, save });
-      }
+      // 子任务成功后主会话仍可能有收尾纠错；恢复时以阶段提交状态为准。
+      await supplement({ get: () => state, save });
       signal.throwIfAborted();
       save({ ...state, status: 'rechecking' });
     }
