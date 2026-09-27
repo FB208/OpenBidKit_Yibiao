@@ -30,12 +30,15 @@ function loadEnv() {
   }
 }
 
-// 读取 Cloudflare API 凭据。
+// 读取并校验 Cloudflare API 凭据的基本格式，避免误用空值、占位符等无效凭据。
 function readCredentials() {
   const accountId = String(process.env.CLOUDFLARE_ACCOUNT_ID || process.env.ACCOUNT_ID || '').trim();
   const analyticsApiToken = String(process.env.ANALYTICS_API_TOKEN || '').trim();
   const d1ApiToken = String(process.env.CLOUDFLARE_API_TOKEN || '').trim();
   if (!accountId || !analyticsApiToken || !d1ApiToken) throw new Error('Missing Cloudflare credentials');
+  if (!/^[0-9a-f]{32}$/i.test(accountId)) throw new Error('Invalid CLOUDFLARE_ACCOUNT_ID format');
+  if (analyticsApiToken.length < 40 || !/^[A-Za-z0-9_-]+$/.test(analyticsApiToken)) throw new Error('Invalid ANALYTICS_API_TOKEN format');
+  if (d1ApiToken.length < 40 || !/^[A-Za-z0-9_-]+$/.test(d1ApiToken)) throw new Error('Invalid CLOUDFLARE_API_TOKEN format');
   return { accountId, analyticsApiToken, d1ApiToken };
 }
 
