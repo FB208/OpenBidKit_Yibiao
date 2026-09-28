@@ -7,12 +7,22 @@ const LIST_BLOCKS_ACTION = 'list-blocks';
 const EXTRACT_CHAPTERS_ACTION = 'extract-chapters';
 const SCAN_TEMPLATE_FIELDS_ACTION = 'scan-template-fields';
 const APPLY_TEMPLATE_FIELDS_ACTION = 'apply-template-fields';
-const AGENT_BLOCKS_FILE = '招标原文结构.json';
+const AGENT_BLOCKS_FILE = '招标原文结构.txt';
 const AGENT_TEMPLATE_SOURCE_FILE = '投标模版源文件.docx';
 const AGENT_FIELD_CANDIDATES_FILE = '投标模版字段候选.json';
 const AGENT_TEMPLATE_FILE = 'bid-template.docx';
 const AGENT_TEMPLATE_FIELDS_FILE = 'bid-template-fields.json';
 const DEFAULT_TIMEOUT_MS = 300000;
+// 与 openXmlHelperService 的 OPENXML_ENVIRONMENT_ERROR_CODE 一致；此处不引用服务模块，避免 Pi 层加载 Electron 依赖。
+const OPENXML_ENVIRONMENT_ERROR_CODE = 'OPENXML_ENVIRONMENT';
+const REPEATED_FAILURE_LIMIT = 3;
+const TEMPLATE_STEP_COUNT = 4;
+const ACTION_LABELS = {
+  [LIST_BLOCKS_ACTION]: '读取招标原文结构',
+  [EXTRACT_CHAPTERS_ACTION]: '抽取投标模版章节',
+  [SCAN_TEMPLATE_FIELDS_ACTION]: '识别待填位置',
+  [APPLY_TEMPLATE_FIELDS_ACTION]: '写入字段',
+};
 const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
   type: 'object',
   required: ['fields', 'ignored_candidate_ids'],
@@ -43,6 +53,27 @@ function createToolResult(payload, compact = false, details = payload) {
   };
 }
 
+/** 把原文块整理成一行一块的紧凑文本，省略空块但保留原块号。 */
+function formatBlockOutline(payload) {
+  const lines = ['每行一个非空原文块，格式为“块号 [标记] 文本”。[标题N] 表示可用 sourceTitle 定位的原文标题（N 为大纲级别），[表格] 为整张表格的文字，[分页]、[分节] 表示该块带分页或分节；空块已省略，块号保持原值。'];
+  for (const source of Array.isArray(payload?.sources) ? payload.sources : []) {
+    const blocks = Array.isArray(source.blocks) ? source.blocks : [];
+    lines.push('', `原件：${source.path}（共 ${blocks.length} 块）`);
+    for (const block of blocks) {
+      if (block.empty) continue;
+      const level = Number(block.outline_level);
+      const tags = [
+        block.heading ? `[标题${level >= 0 && level < 9 ? level + 1 : ''}]` : '',
+        block.kind === 'table' ? '[表格]' : '',
+        block.page_break ? '[分页]' : '',
+        block.section_break ? '[分节]' : '',
+      ].join('');
+      lines.push(`${block.index}${tags ? ` ${tags}` : ''} ${String(block.text || '').replace(/\s+/g, ' ').trim()}`);
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 function normalizeRelativePath(filePath) {
   const relativePath = String(filePath || '').trim().replace(/\\/g, '/');
   if (!relativePath || path.isAbsolute(relativePath)) {
@@ -64,10 +95,30 @@ function createPiOpenXmlTool({
   bidTemplateRelativePath,
   bidTemplateFieldsPath,
   bidTemplateFieldsRelativePath,
+  reportTaskFailure,
+  onStep,
 }) {
   // 分类从模型生成的文件读取，保留原工具参数的结构校验。
   const validateFieldSelections = new Ajv({ allErrors: true, strict: true }).compile(TEMPLATE_FIELD_CLASSIFICATION_SCHEMA);
-  return {
+  let repeatedFailure = { key: '', count: 0 };
+  // 列块、抽章、扫描和开始写入字段各推进一步；进度回调失败不影响工具执行。
+  const emitStep = (step, message) => {
+    try { onStep?.({ step, total: TEMPLATE_STEP_COUNT, message }); } catch {}
+  };
+  // 环境错误或同一动作连续返回相同错误时直接报告失败，避免 Agent 反复重试或自行改动运行环境。
+  const handleFailure = (action, error) => {
+    const message = error?.message || String(error);
+    if (error?.code === OPENXML_ENVIRONMENT_ERROR_CODE) {
+      reportTaskFailure?.(message);
+      return;
+    }
+    const key = `${action}\u0000${message}`;
+    repeatedFailure = { key, count: repeatedFailure.key === key ? repeatedFailure.count + 1 : 1 };
+    if (repeatedFailure.count >= REPEATED_FAILURE_LIMIT) {
+      reportTaskFailure?.(`投标模版提取在“${ACTION_LABELS[action] || action}”这一步连续 ${repeatedFailure.count} 次遇到同一问题：${message}`);
+    }
+  };
+  const tool = {
     name: OPENXML_TOOL_NAME,
     label: 'Open XML 助手',
     description: '列出招标 Word 原文块、抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 list-blocks、extract-chapters、scan-template-fields、apply-template-fields 顺序调用。apply-template-fields 只传 fields_file，工具读取文件内全部候选的完整分类；失败时编辑该文件后重新提交路径，不要在工具参数里重复输出字段清单。',
@@ -80,12 +131,12 @@ function createPiOpenXmlTool({
       chapters: Type.Optional(Type.Array(Type.Object({
         id: Type.Optional(Type.String()),
         title: Type.String({ minLength: 1, description: '投标模版里使用的一级目录标题。' }),
-        sourceTitle: Type.Optional(Type.String({ description: '招标 Word 里的真实标题，仅适用于招标原文结构中 heading=true 的标题。' })),
-        source: Type.Optional(Type.String({ description: '该章所在原件在招标原文结构.json 中的完整 source.path；多份 Word 原件时必填。' })),
-        startBlock: Type.Optional(Type.Number({ minimum: 0, description: '起始标题块号，含；heading=false 时必须与 endBlock 一起提供。' })),
+        sourceTitle: Type.Optional(Type.String({ description: '招标 Word 里的真实标题，仅适用于招标原文结构中标记为 [标题N] 的块。' })),
+        source: Type.Optional(Type.String({ description: '该章所在原件在招标原文结构.txt 中“原件：”后列出的完整路径；多份 Word 原件时必填。' })),
+        startBlock: Type.Optional(Type.Number({ minimum: 0, description: '起始标题块号，含；标题块没有 [标题N] 标记时必须与 endBlock 一起提供。' })),
         endBlock: Type.Optional(Type.Number({ minimum: 1, description: '结束块号，不含；使用 startBlock 时应停在下一同级章节或附件之前。' })),
       }, { additionalProperties: false }), {
-        description: 'extract-chapters 必填。heading=true 可提供 sourceTitle；heading=false 必须提供 startBlock 和 endBlock。',
+        description: 'extract-chapters 必填。带 [标题N] 标记的标题可提供 sourceTitle；没有该标记时必须提供 startBlock 和 endBlock。',
       })),
       fields_file: Type.Optional(Type.String({
         minLength: 1,
@@ -115,14 +166,19 @@ function createPiOpenXmlTool({
           if (!fs.existsSync(blocksPath)) {
             throw new Error('助手没有写出原文结构');
           }
-          const agentPath = path.join(workspaceDir, AGENT_BLOCKS_FILE);
-          fs.copyFileSync(blocksPath, agentPath);
+          const blockCount = result.blockCount || result.block_count || 0;
+          fs.writeFileSync(
+            path.join(workspaceDir, AGENT_BLOCKS_FILE),
+            formatBlockOutline(JSON.parse(fs.readFileSync(blocksPath, 'utf8'))),
+            'utf8',
+          );
+          emitStep(1, `已读取招标原文结构，共 ${blockCount} 个原文块`);
           return createToolResult({
             ok: true,
             action,
             file_path: AGENT_BLOCKS_FILE,
-            block_count: result.blockCount || result.block_count || 0,
-            message: `已写入 ${AGENT_BLOCKS_FILE}，请用 read 阅读后按原文标题或块号抽章。`,
+            block_count: blockCount,
+            message: `已写入 ${AGENT_BLOCKS_FILE}，请用 read 一次读完后按原文标题或块号抽章。`,
           });
         }
 
@@ -155,6 +211,7 @@ function createPiOpenXmlTool({
             fs.copyFileSync(bidTemplateSourcePath, path.join(workspaceDir, AGENT_TEMPLATE_SOURCE_FILE));
           }
 
+          emitStep(2, `已抽取 ${chapters.length} 个章节`);
           return createToolResult({
             ok: true,
             action,
@@ -195,6 +252,7 @@ function createPiOpenXmlTool({
             candidate_count: candidateData.candidates.length,
             message: `已写入 ${AGENT_FIELD_CANDIDATES_FILE}，当前结果已包含紧凑候选，请逐项分类后调用 apply-template-fields。`,
           };
+          emitStep(3, `识别到 ${candidateData.candidates.length} 个待填位置，正在分类`);
           return createToolResult(toolPayload, true, {
             ok: true,
             action,
@@ -218,6 +276,7 @@ function createPiOpenXmlTool({
           }
           const fields = normalizeTemplateFields(selections.fields);
           const ignoredCandidateIds = normalizeIgnoredCandidateIds(selections.ignored_candidate_ids);
+          emitStep(4, `正在写入 ${fields.length} 个字段`);
           const result = await openXmlHelperService.runJob({
             action: APPLY_TEMPLATE_FIELDS_ACTION,
             timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -252,6 +311,20 @@ function createPiOpenXmlTool({
         if (signal?.aborted) {
           throw signal.reason instanceof Error ? signal.reason : error;
         }
+        throw error;
+      }
+    },
+  };
+  return {
+    ...tool,
+    // 成功后清空连续失败计数；失败时判断是否需要直接终止任务。
+    execute: async (toolCallId, params, signal) => {
+      try {
+        const result = await tool.execute(toolCallId, params, signal);
+        repeatedFailure = { key: '', count: 0 };
+        return result;
+      } catch (error) {
+        if (!signal?.aborted) handleFailure(String(params?.action || '').trim(), error);
         throw error;
       }
     },

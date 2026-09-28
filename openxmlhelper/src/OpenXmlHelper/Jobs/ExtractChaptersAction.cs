@@ -91,7 +91,7 @@ static class ExtractChaptersAction
                 }
 
                 var shellPath = sourcePaths[0];
-                File.Copy(shellPath, outputPath, overwrite: true);
+                WordWorkspace.CopyToWritable(shellPath, outputPath);
 
                 using var dest = WordprocessingDocument.Open(outputPath, true);
                 var destPart = dest.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
@@ -167,6 +167,10 @@ static class ExtractChaptersAction
                     source.Dispose();
                 }
             }
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            return WordWorkspace.FileAccessFailure(workspace, [request.Output, .. request.Sources]);
         }
         catch (Exception exception)
         {

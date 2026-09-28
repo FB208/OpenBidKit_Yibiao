@@ -33,7 +33,7 @@ static class ApplyTemplateFieldsAction
             Directory.CreateDirectory(Path.GetDirectoryName(fieldsOutputPath)!);
             tempDocumentPath = $"{outputPath}.{Guid.NewGuid():N}.tmp.docx";
             tempFieldsPath = $"{fieldsOutputPath}.{Guid.NewGuid():N}.tmp";
-            File.Copy(inputPath, tempDocumentPath, overwrite: true);
+            WordWorkspace.CopyToWritable(inputPath, tempDocumentPath);
 
             TemplateFieldDefinitionFile definitions;
             using (var document = WordprocessingDocument.Open(tempDocumentPath, true))
@@ -49,32 +49,46 @@ static class ApplyTemplateFieldsAction
                 var applications = new List<(TemplateFieldCandidate Candidate, TemplateFieldDefinition Field, int WordId)>();
                 foreach (var item in normalized.OrderBy(item => item.Candidate.Order))
                 {
+                    var kind = TemplateFieldKinds.ToFieldKind(item.Candidate.Kind);
                     var field = new TemplateFieldDefinition
                     {
                         Id = $"f{definitions.Fields.Count + 1:D4}",
                         Name = item.Selection.Name,
                         FillBy = item.Selection.FillBy,
                         Instruction = item.Selection.Instruction,
+                        Kind = kind,
+                        Options = kind == TemplateFieldKinds.ChoiceField ? item.Candidate.Options : null,
+                        TableId = item.Candidate.TableId,
+                        Row = item.Candidate.TableId is null ? null : item.Candidate.RowNumber,
                     };
                     definitions.Fields.Add(field);
                     applications.Add((item.Candidate, field, nextWordId++));
                 }
 
+                var writtenElements = new List<OpenXmlElement>();
                 foreach (var application in applications
                     .OrderByDescending(item => item.Candidate.Start)
                     .ThenByDescending(item => item.Candidate.Order))
                 {
-                    TemplateFieldSdtWriter.Apply(application.Candidate, application.Field, application.WordId);
+                    writtenElements.AddRange(TemplateFieldSdtWriter.Apply(application.Candidate, application.Field, application.WordId));
                 }
 
                 mainPart.Document.Save();
-                var validationErrors = new OpenXmlValidator(FileFormatVersions.Microsoft365).Validate(document).Take(10).ToList();
+                // 原件自带的不规范写法由 Word/WPS 兼容，只校验本动作写入且仍留在文档中的元素。
+                var validator = new OpenXmlValidator(FileFormatVersions.Microsoft365);
+                var validationErrors = writtenElements
+                    .Where(item => item.Ancestors<Wp.Document>().Any())
+                    .SelectMany(item => validator.Validate(item))
+                    .Take(10)
+                    .ToList();
                 if (validationErrors.Count > 0)
                 {
                     var details = string.Join("；", validationErrors.Select(item => item.Description));
                     throw new InvalidOperationException($"投标模版 Open XML 校验失败：{details}");
                 }
             }
+
+            VerifyFieldControls(tempDocumentPath, definitions);
 
             File.WriteAllText(
                 tempFieldsPath,
@@ -86,6 +100,10 @@ static class ApplyTemplateFieldsAction
             tempFieldsPath = null;
             return JobResult.Success(Name, WordWorkspace.ToRelativePath(workspace, outputPath), definitions.Fields.Count);
         }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            return WordWorkspace.FileAccessFailure(workspace, request.Output);
+        }
         catch (Exception exception)
         {
             return JobResult.Fail(exception.Message);
@@ -94,6 +112,41 @@ static class ApplyTemplateFieldsAction
         {
             TryDelete(tempDocumentPath);
             TryDelete(tempFieldsPath);
+        }
+    }
+
+    /// <summary>重新打开保存后的模版，确认每个字段恰好对应一个内容控件且控件 id 唯一。</summary>
+    static void VerifyFieldControls(string documentPath, TemplateFieldDefinitionFile definitions)
+    {
+        using var document = WordprocessingDocument.Open(documentPath, false);
+        // 文本框兼容显示（mc:Fallback）只同步文字，不含内容控件。
+        var controls = (document.MainDocumentPart?.Document?.Body?.Descendants<Wp.SdtProperties>() ?? [])
+            .Where(item => !item.Ancestors<AlternateContentFallback>().Any())
+            .Select(item => (
+                Tag: item.GetFirstChild<Wp.Tag>()?.Val?.Value ?? "",
+                WordId: item.GetFirstChild<Wp.SdtId>()?.Val?.Value))
+            .ToList();
+        var wordIdCounts = controls
+            .Where(item => item.WordId is not null)
+            .GroupBy(item => item.WordId!.Value)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var problems = new List<string>();
+        foreach (var field in definitions.Fields)
+        {
+            var matched = controls.Where(item => item.Tag == $"{TemplateFieldSdtWriter.TagPrefix}{field.Id}").ToList();
+            if (matched.Count != 1)
+            {
+                problems.Add($"{field.Name}（{field.Id}）对应 {matched.Count} 个内容控件");
+            }
+            else if (matched[0].WordId is not int wordId || wordIdCounts[wordId] != 1)
+            {
+                problems.Add($"{field.Name}（{field.Id}）的内容控件 id 缺失或重复");
+            }
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new InvalidOperationException($"投标模版产物检查失败：{string.Join("；", problems.Take(10))}");
         }
     }
 
@@ -157,6 +210,23 @@ static class ApplyTemplateFieldsAction
         if (inconsistent is not null)
         {
             throw new InvalidOperationException($"同名字段的 fill_by 和 instruction 必须一致：{inconsistent.Key}");
+        }
+
+        var automaticAttachments = selections
+            .Where(item => TemplateFieldKinds.ToFieldKind(candidateMap[item.CandidateId].Kind) == TemplateFieldKinds.AttachmentField && item.FillBy != "manual")
+            .Select(item => item.CandidateId)
+            .ToList();
+        if (automaticAttachments.Count > 0)
+        {
+            throw new InvalidOperationException($"附件材料位置必须使用 manual：{string.Join('、', automaticAttachments)}");
+        }
+
+        var mixedKinds = selections
+            .GroupBy(item => item.Name, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Select(item => TemplateFieldKinds.ToFieldKind(candidateMap[item.CandidateId].Kind)).Distinct(StringComparer.Ordinal).Count() > 1);
+        if (mixedKinds is not null)
+        {
+            throw new InvalidOperationException($"同名字段的类型必须一致（文本、勾选项、附件不能同名）：{mixedKinds.Key}，涉及 {string.Join('、', mixedKinds.Select(item => item.CandidateId))}");
         }
 
         return selections.Select(item => (candidateMap[item.CandidateId], item)).ToList();

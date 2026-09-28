@@ -833,6 +833,8 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     ? [...(Array.isArray(storedPlan.outlineGenerationTask?.logs) ? storedPlan.outlineGenerationTask.logs : []), '已恢复一级目录确认状态']
     : ['开始生成一级目录'];
   let currentProgress = restoringOutlineSelection ? Number(storedPlan.outlineGenerationTask?.progress || 30) : 10;
+  let templateStep = null;
+  let directoryBranchReturned = false;
   const initialCheckpoint = checkpointTask({ status: 'running', progress: currentProgress, logs });
   let task = initialCheckpoint.task;
   const templateTaskId = `${task.task_id}-template`;
@@ -904,6 +906,23 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     const title = formatProgressTitle(event.message);
     if (!title || event.visible === false) return;
     publish(`投标模版：${title}`, Math.max(currentProgress, 35));
+  }
+
+  // 目录分支先结束时，进度按模版提取步骤在 88～97 之间推进，避免停在固定值。
+  function templateStepProgress() {
+    return Math.min(97, 88 + 2 * (templateStep?.step || 0));
+  }
+
+  function describeTemplateStep() {
+    return templateStep ? `（第 ${templateStep.step}/${templateStep.total} 步：${templateStep.message}）` : '';
+  }
+
+  function publishTemplateStep(event = {}) {
+    templateStep = event;
+    publish(
+      `投标模版${describeTemplateStep()}`,
+      directoryBranchReturned ? templateStepProgress() : Math.max(currentProgress, 35),
+    );
   }
 
   function syncTemplateAgentCheckpoint(checkpoint) {
@@ -1134,6 +1153,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
         signal: parallelSignal,
         onActivity: publishTemplateAgentActivity,
         onCheckpoint: syncTemplateAgentCheckpoint,
+        onStep: publishTemplateStep,
       })
     : null;
 
@@ -1299,11 +1319,12 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     },
   }) : Promise.resolve({ output_content: JSON.stringify({ outline: lockedRoots }) });
 
-  let directoryReturned = false;
   let templateReturned = !extractTemplate;
   const observedDirectoryPromise = observeParallelBranch('目录生成', directoryPromise).finally(() => {
-    directoryReturned = true;
-    if (requiresTechnicalDirectoryGeneration && extractTemplate && !templateReturned) publish('目录生成任务已返回，正在等待投标模版提取任务', 95);
+    directoryBranchReturned = true;
+    if (requiresTechnicalDirectoryGeneration && extractTemplate && !templateReturned) {
+      publish(`目录生成完成，投标模版提取进行中${describeTemplateStep()}`, templateStepProgress());
+    }
   });
 
   let agentResult;
@@ -1311,7 +1332,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   if (extractTemplate) {
     const observedTemplatePromise = observeParallelBranch('投标模版提取', templatePromise).finally(() => {
       templateReturned = true;
-      if (!directoryReturned) publish('投标模版提取任务已返回，正在等待目录生成任务', Math.max(currentProgress, 60));
+      if (!directoryBranchReturned) publish('投标模版提取任务已返回，正在等待目录生成任务', Math.max(currentProgress, 60));
     });
     const [directorySettled, templateSettled] = await Promise.allSettled([
       observedDirectoryPromise,

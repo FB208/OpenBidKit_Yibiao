@@ -250,6 +250,7 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
   const validContent = JSON.stringify(selections);
   let helperCalls = 0;
   let successfulApplications = 0;
+  const steps = [];
   const workspaceStore = {
     listTenderSourceDocxRelativePaths: () => ['原件.docx'],
     resolveTenderSourceDocxPath: () => ['原件.docx'],
@@ -265,6 +266,7 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
     workspaceStore,
     taskId: '模板文件提交检查',
     outline: [],
+    onStep: (event) => steps.push(event),
     openXmlHelperService: {
       // 只替代未改动的 C# 助手，验证文件内容原样送入其完整分类接口。
       async runJob({ action, request }) {
@@ -275,7 +277,7 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
         assert.deepEqual(request.ignored_candidate_ids, selections.ignored_candidate_ids);
         fs.writeFileSync(templatePath, '已应用的测试模版', 'utf8');
         fs.writeFileSync(fieldsPath, JSON.stringify({
-          version: 1, fields: [{ id: 'f0001', name: '企业名称', fill_by: 'ai' }],
+          version: 2, fields: [{ id: 'f0001', name: '企业名称', fill_by: 'ai', kind: 'text' }],
         }), 'utf8');
         successfulApplications += 1;
         return { blockCount: 1 };
@@ -285,11 +287,15 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
       async runTask(payload) {
         assert.deepEqual(payload.prepare_output_files, [fieldsFile]);
         assert.equal(payload.max_retries, 1);
+        assert.ok(payload.active_tools.includes('openxml'));
+        assert.equal(payload.active_tools.includes('bash'), false, '模版提取不开放命令行');
         const { session } = await createTestSession(t, payload.summary_enabled, {
           workspaceDir,
           openXmlTool: payload.open_xml_tool,
+          activeTools: payload.active_tools,
           isFinalToolCall: payload.is_final_tool_call,
         });
+        assert.deepEqual([...session.getActiveToolNames()].sort(), [...payload.active_tools].sort());
         const properties = session.getToolDefinition('openxml').parameters.properties;
         assert.ok(properties.fields_file);
         assert.equal(properties.fields, undefined);
@@ -328,6 +334,69 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
   assert.equal(result.field_count, 1);
   assert.equal(helperCalls, 2, '结构无效的文件不应提交给助手');
   assert.equal(successfulApplications, 1);
+  assert.deepEqual(steps.map((item) => [item.step, item.total]), [[4, 4], [4, 4]], '每次提交写入字段都推进到第 4 步');
+});
+
+test('openxml 列块输出紧凑原文结构，环境错误和连续相同错误直接报告任务失败', async (t) => {
+  const { Type } = await import('typebox');
+  const { createPiOpenXmlTool } = require('./piOpenXmlTool.cjs');
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), '易标-Pi-模版工具-'));
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  const jobDir = path.join(workspaceDir, '任务目录');
+  fs.mkdirSync(jobDir);
+  fs.writeFileSync(path.join(jobDir, 'blocks.json'), JSON.stringify({
+    sources: [{
+      path: 'technical-plan/tender-originals/原件.docx',
+      blocks: [
+        { index: 0, kind: 'paragraph', heading: true, outline_level: 1, empty: false, page_break: true, section_break: false, text: '第二章 投标文件格式' },
+        { index: 1, kind: 'paragraph', heading: false, outline_level: 9, empty: true, page_break: false, section_break: false, text: '' },
+        { index: 2, kind: 'table', heading: false, outline_level: 9, empty: false, page_break: false, section_break: false, text: '企业名称 统一社会信用代码' },
+      ],
+    }],
+  }), 'utf8');
+  const failures = [];
+  const steps = [];
+  let nextError = null;
+  const tool = createPiOpenXmlTool({
+    workspaceDir,
+    Type,
+    reportTaskFailure: (reason) => failures.push(reason),
+    onStep: (event) => steps.push(event),
+    listBusinessSources: () => ['technical-plan/tender-originals/原件.docx'],
+    resolveAgentSources: () => ['technical-plan/tender-originals/原件.docx'],
+    openXmlHelperService: {
+      async runJob() {
+        if (nextError) throw nextError;
+        return { jobDir, blockCount: 3 };
+      },
+    },
+  });
+
+  await tool.execute('列块', { action: 'list-blocks' });
+  const outlineText = fs.readFileSync(path.join(workspaceDir, '招标原文结构.txt'), 'utf8');
+  assert.match(outlineText, /原件：technical-plan\/tender-originals\/原件\.docx（共 3 块）/);
+  assert.match(outlineText, /\n0 \[标题2\]\[分页\] 第二章 投标文件格式\n/);
+  assert.match(outlineText, /\n2 \[表格\] 企业名称 统一社会信用代码\n/);
+  assert.doesNotMatch(outlineText, /\n1 /, '空块省略');
+  assert.deepEqual(steps.map((item) => item.step), [1]);
+
+  nextError = Object.assign(new Error('无法读写文件“technical-plan/bid-template.docx”'), { code: 'OPENXML_ENVIRONMENT' });
+  await assert.rejects(tool.execute('环境错误', { action: 'list-blocks' }), /无法读写文件/);
+  assert.deepEqual(failures, ['无法读写文件“technical-plan/bid-template.docx”']);
+
+  nextError = new Error('没有找到原文标题：一、投标书');
+  const chapters = [{ title: '投标书', sourceTitle: '一、投标书' }];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await assert.rejects(tool.execute(`抽章${attempt}`, { action: 'extract-chapters', chapters }), /没有找到原文标题/);
+    assert.equal(failures.length, attempt === 3 ? 2 : 1, '同一动作连续 3 次相同错误才终止');
+  }
+  assert.match(failures[1], /“抽取投标模版章节”这一步连续 3 次遇到同一问题：没有找到原文标题/);
+
+  nextError = null;
+  await tool.execute('成功后清零', { action: 'list-blocks' });
+  nextError = new Error('没有找到原文标题：一、投标书');
+  await assert.rejects(tool.execute('重新计数', { action: 'extract-chapters', chapters }));
+  assert.equal(failures.length, 2, '成功调用后重新计数');
 });
 
 test('模版阶段汇总缺失产物并只为校验失败提供修复提示，空候选分类仍合法', async () => {
@@ -367,7 +436,7 @@ test('模版阶段汇总缺失产物并只为校验失败提供修复提示，�
         });
         assert.equal(payload.buildRetryPrompt(new Error('网络失败'), meta), null);
         hasArtifacts = true;
-        candidate.output_content = '{"version":1,"fields":[]}';
+        candidate.output_content = '{"version":2,"fields":[]}';
         for (const [content, expected] of [
           ['', /投标模版字段分类\.json 未生成或内容为空/],
           ['{', /投标模版字段分类\.json 不是合法 JSON/],
@@ -381,7 +450,7 @@ test('模版阶段汇总缺失产物并只为校验失败提供修复提示，�
         assert.deepEqual(await payload.validateOutput(candidate, meta), { field_count: 0 });
         for (const [content, expected] of [
           ['{', /bid-template-fields\.json 不是合法 JSON/],
-          ['{"version":2,"fields":[]}', /bid-template-fields\.json 结构无效/],
+          ['{"version":1,"fields":[]}', /bid-template-fields\.json 结构无效/],
         ]) {
           await assert.rejects(payload.validateOutput({ output_content: content }, meta), expected);
         }

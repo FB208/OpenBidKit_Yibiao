@@ -38,16 +38,17 @@ async function persistTenderSourceDocx(sourcePath, destPath) {
   await fs.mkdir(path.dirname(output), { recursive: true });
   if (ext === '.docx') {
     await fs.copyFile(input, output);
-    return true;
-  }
-  if (ext === '.doc' || ext === '.wps') {
+  } else if (ext === '.doc' || ext === '.wps') {
     const { withLegacyWordDocxFile } = await import('./doc2markdown/convert.mjs');
     await withLegacyWordDocxFile(input, async (docxPath) => {
       await fs.copyFile(docxPath, output);
     });
-    return true;
+  } else {
+    return false;
   }
-  return false;
+  // Windows 复制会保留源文件只读属性，工作区副本统一改为可写。
+  await fs.chmod(output, 0o666);
+  return true;
 }
 
 function getSupportedExtensions(provider) {

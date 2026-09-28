@@ -31,6 +31,10 @@ static class ScanTemplateFieldsAction
                 new UTF8Encoding(false));
             return JobResult.Success(Name, OutputFileName, payload.Candidates.Count);
         }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            return WordWorkspace.FileAccessFailure(workspace, request.Input);
+        }
         catch (Exception exception)
         {
             return JobResult.Fail(exception.Message);

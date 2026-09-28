@@ -20,6 +20,7 @@ const TEMPLATE_PREVIEW_FILE = 'preview.docx';
 const TEMPLATE_PREVIEW_TIMEOUT_MS = 120000;
 const TEMPLATE_PREVIEW_ASSET_ROOT = 'preview-assets';
 const TEMPLATE_PREVIEW_CACHE_SIZE = 5;
+const OPENXML_ENVIRONMENT_ERROR_CODE = 'OPENXML_ENVIRONMENT';
 
 /** 生成任务编号：时间戳加短随机串。 */
 function createJobId() {
@@ -322,7 +323,10 @@ function createHelperRunner({ app, writeLog, ensureExecutable, name }) {
       }
 
       if (!result?.ok) {
-        throw new Error(String(result?.error || 'Open XML 助手执行失败'));
+        const error = new Error(String(result?.error || 'Open XML 助手执行失败'));
+        // 文件被占用、无权限等环境问题无法靠调整参数解决，由调用方决定是否直接终止。
+        if (result?.errorKind === 'environment') error.code = OPENXML_ENVIRONMENT_ERROR_CODE;
+        throw error;
       }
 
       return { ...result, jobDir };
@@ -628,5 +632,6 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 }
 
 module.exports = {
+  OPENXML_ENVIRONMENT_ERROR_CODE,
   createOpenXmlHelperService,
 };

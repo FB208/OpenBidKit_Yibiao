@@ -10,18 +10,20 @@ static class TemplateFieldSdtWriter
     public const string PlaceholderFill = "FCE8E6";
     public const string PlaceholderTextColor = "000000";
 
-    public static void Apply(TemplateFieldCandidate candidate, TemplateFieldDefinition field, int wordId)
+    /// <summary>写入字段并返回本次新写入的元素，供调用方只校验工具自身产出的 Open XML。</summary>
+    public static IReadOnlyList<OpenXmlElement> Apply(TemplateFieldCandidate candidate, TemplateFieldDefinition field, int wordId)
     {
+        var written = new List<OpenXmlElement>();
         if (candidate.Target is Wp.SdtRun existing)
         {
-            UpdateExistingControl(existing, field, wordId);
-            return;
+            UpdateExistingControl(existing, field, wordId, written);
+            return written;
         }
 
         if (candidate.Target is Wp.SdtBlock existingBlock)
         {
-            UpdateExistingBlockControl(existingBlock, field, wordId);
-            return;
+            UpdateExistingBlockControl(existingBlock, field, wordId, written);
+            return written;
         }
 
         if (candidate.Target is not Wp.Paragraph paragraph)
@@ -29,34 +31,43 @@ static class TemplateFieldSdtWriter
             throw new InvalidOperationException($"候选位置已失效：{candidate.CandidateId}");
         }
 
-        ReplaceParagraphRange(paragraph, candidate.Start, candidate.Length, field, wordId);
+        switch (candidate.Kind)
+        {
+            case TemplateFieldKinds.CheckboxGroup when candidate.TargetGroup is { Count: > 1 } group:
+                WrapParagraphs(group, field, wordId, written);
+                break;
+            case TemplateFieldKinds.CheckboxGroup:
+                WrapParagraphRange(paragraph, candidate.Start, candidate.Length, field, wordId, written);
+                break;
+            case TemplateFieldKinds.AttachmentNote:
+                InsertAttachmentSlot(paragraph, field, wordId, written, candidate.FallbackTarget);
+                break;
+            default:
+                if (candidate.FallbackTarget is { } fallback)
+                {
+                    ReplaceFallbackText(fallback, candidate.Start, candidate.Length, field);
+                }
+                ReplaceParagraphRange(paragraph, candidate.Start, candidate.Length, field, wordId, written);
+                break;
+        }
+        return written;
     }
 
-    static void UpdateExistingControl(Wp.SdtRun control, TemplateFieldDefinition field, int wordId)
+    static void UpdateExistingControl(Wp.SdtRun control, TemplateFieldDefinition field, int wordId, List<OpenXmlElement> written)
     {
         var properties = control.SdtProperties ?? control.PrependChild(new Wp.SdtProperties());
-        properties.RemoveAllChildren<Wp.SdtAlias>();
-        properties.RemoveAllChildren<Wp.SdtId>();
-        properties.RemoveAllChildren<Wp.Tag>();
-        properties.AddChild(new Wp.SdtAlias { Val = field.Name }, throwOnError: true);
-        properties.AddChild(new Wp.SdtId { Val = wordId }, throwOnError: true);
-        properties.AddChild(new Wp.Tag { Val = $"{TagPrefix}{field.Id}" }, throwOnError: true);
+        WriteIdentity(properties, field, wordId, written);
 
         var content = control.SdtContentRun ?? control.AppendChild(new Wp.SdtContentRun());
         var sourceRun = content.Elements<Wp.Run>().FirstOrDefault();
         content.RemoveAllChildren();
-        content.AppendChild(CreatePlaceholderRun(field, sourceRun));
+        written.Add(content.AppendChild(CreatePlaceholderRun(field, sourceRun)));
     }
 
-    static void UpdateExistingBlockControl(Wp.SdtBlock control, TemplateFieldDefinition field, int wordId)
+    static void UpdateExistingBlockControl(Wp.SdtBlock control, TemplateFieldDefinition field, int wordId, List<OpenXmlElement> written)
     {
         var properties = control.SdtProperties ?? control.PrependChild(new Wp.SdtProperties());
-        properties.RemoveAllChildren<Wp.SdtAlias>();
-        properties.RemoveAllChildren<Wp.SdtId>();
-        properties.RemoveAllChildren<Wp.Tag>();
-        properties.AddChild(new Wp.SdtAlias { Val = field.Name }, throwOnError: true);
-        properties.AddChild(new Wp.SdtId { Val = wordId }, throwOnError: true);
-        properties.AddChild(new Wp.Tag { Val = $"{TagPrefix}{field.Id}" }, throwOnError: true);
+        WriteIdentity(properties, field, wordId, written);
 
         var content = control.SdtContentBlock ?? control.AppendChild(new Wp.SdtContentBlock());
         var sourceParagraph = content.Elements<Wp.Paragraph>().FirstOrDefault();
@@ -68,7 +79,28 @@ static class TemplateFieldSdtWriter
         }
         paragraph.AppendChild(CreatePlaceholderRun(field, sourceRun));
         content.RemoveAllChildren();
-        content.AppendChild(paragraph);
+        written.Add(content.AppendChild(paragraph));
+    }
+
+    // 已有内容控件只替换字段标识，其余属性保持原样。
+    // sdtPr 在 SDK 中是选择结构，AddChild 会清空其他子元素，因此按位置插到 rPr 之后。
+    static void WriteIdentity(Wp.SdtProperties properties, TemplateFieldDefinition field, int wordId, List<OpenXmlElement> written)
+    {
+        properties.RemoveAllChildren<Wp.SdtAlias>();
+        properties.RemoveAllChildren<Wp.SdtId>();
+        properties.RemoveAllChildren<Wp.Tag>();
+        OpenXmlElement[] identity =
+        [
+            new Wp.SdtAlias { Val = field.Name },
+            new Wp.Tag { Val = $"{TagPrefix}{field.Id}" },
+            new Wp.SdtId { Val = wordId },
+        ];
+        OpenXmlElement? anchor = properties.GetFirstChild<Wp.RunProperties>();
+        foreach (var element in identity)
+        {
+            anchor = anchor is null ? properties.PrependChild(element) : properties.InsertAfter(element, anchor);
+            written.Add(element);
+        }
     }
 
     static void ReplaceParagraphRange(
@@ -76,27 +108,47 @@ static class TemplateFieldSdtWriter
         int start,
         int length,
         TemplateFieldDefinition field,
-        int wordId)
+        int wordId,
+        List<OpenXmlElement> written)
     {
         var runs = paragraph.Elements<Wp.Run>().ToList();
         var runTexts = runs.Select(ReadRunText).ToList();
-        var totalLength = runTexts.Sum(item => item.Length);
-        if (start < 0 || length < 0 || start + length > totalLength)
-        {
-            throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
-        }
-
+        EnsureRange(runTexts, start, length, field);
         var control = CreateControl(field, wordId, FindStyleRun(runs, runTexts, start));
+        written.Add(control);
+        ReplaceRange(paragraph, runs, runTexts, start, length, control, field, written);
+    }
+
+    /// <summary>文本框兼容显示只同步占位文字，不写内容控件；文字不一致时保持原样。</summary>
+    static void ReplaceFallbackText(Wp.Paragraph paragraph, int start, int length, TemplateFieldDefinition field)
+    {
+        var runs = paragraph.Elements<Wp.Run>().ToList();
+        var runTexts = runs.Select(ReadRunText).ToList();
+        if (start < 0 || length < 0 || start + length > runTexts.Sum(item => item.Length)) return;
+        var placeholder = CreatePlaceholderRun(field, FindStyleRun(runs, runTexts, start));
+        ReplaceRange(paragraph, runs, runTexts, start, length, placeholder, field, null);
+    }
+
+    static void ReplaceRange(
+        Wp.Paragraph paragraph,
+        IReadOnlyList<Wp.Run> runs,
+        IReadOnlyList<string> runTexts,
+        int start,
+        int length,
+        OpenXmlElement replacement,
+        TemplateFieldDefinition field,
+        List<OpenXmlElement>? written)
+    {
         if (runs.Count == 0)
         {
             if (start != 0 || length != 0) throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
-            paragraph.AppendChild(control);
+            paragraph.AppendChild(replacement);
             return;
         }
 
         if (length == 0)
         {
-            InsertAt(paragraph, runs, runTexts, start, control);
+            InsertAt(paragraph, runs, runTexts, start, replacement, written);
             return;
         }
 
@@ -115,13 +167,114 @@ static class TemplateFieldSdtWriter
         var firstRun = runs[firstIndex];
         var lastRun = runs[lastIndex];
 
-        if (prefix.Length > 0) firstRun.InsertBeforeSelf(CreateTextRun(prefix, firstRun));
-        firstRun.InsertBeforeSelf(control);
-        if (suffix.Length > 0) firstRun.InsertBeforeSelf(CreateTextRun(suffix, lastRun));
+        if (prefix.Length > 0) AddWritten(written, firstRun.InsertBeforeSelf(CreateTextRun(prefix, firstRun)));
+        firstRun.InsertBeforeSelf(replacement);
+        if (suffix.Length > 0) AddWritten(written, firstRun.InsertBeforeSelf(CreateTextRun(suffix, lastRun)));
         for (var index = firstIndex; index <= lastIndex; index += 1)
         {
             runs[index].Remove();
         }
+    }
+
+    /// <summary>同段勾选项保留原文和格式，只把覆盖范围包进内容控件。</summary>
+    static void WrapParagraphRange(
+        Wp.Paragraph paragraph,
+        int start,
+        int length,
+        TemplateFieldDefinition field,
+        int wordId,
+        List<OpenXmlElement> written)
+    {
+        var runs = paragraph.Elements<Wp.Run>().ToList();
+        var runTexts = runs.Select(ReadRunText).ToList();
+        EnsureRange(runTexts, start, length, field);
+        var end = start + length;
+        var firstIndex = FindRunIndex(runTexts, start, preferNextAtBoundary: true);
+        var lastIndex = FindRunIndex(runTexts, end, preferNextAtBoundary: false);
+        if (length == 0 || firstIndex < 0 || lastIndex < firstIndex)
+        {
+            throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
+        }
+
+        var covered = new List<Wp.Run>();
+        for (var index = firstIndex; index <= lastIndex; index += 1)
+        {
+            var runStart = runTexts.Take(index).Sum(item => item.Length);
+            var from = Math.Max(0, start - runStart);
+            var to = Math.Min(runTexts[index].Length, end - runStart);
+            if (to > from) covered.Add(CreateTextRun(runTexts[index][from..to], runs[index]));
+        }
+
+        var identity = CreateIdentity(field, wordId);
+        written.AddRange(identity);
+        var control = new Wp.SdtRun(new Wp.SdtProperties(identity), new Wp.SdtContentRun(covered));
+        var firstStart = runTexts.Take(firstIndex).Sum(item => item.Length);
+        var lastStart = runTexts.Take(lastIndex).Sum(item => item.Length);
+        var prefix = runTexts[firstIndex][..(start - firstStart)];
+        var suffix = runTexts[lastIndex][(end - lastStart)..];
+        var firstRun = runs[firstIndex];
+        if (prefix.Length > 0) written.Add(firstRun.InsertBeforeSelf(CreateTextRun(prefix, firstRun)));
+        firstRun.InsertBeforeSelf(control);
+        if (suffix.Length > 0) written.Add(firstRun.InsertBeforeSelf(CreateTextRun(suffix, runs[lastIndex])));
+        for (var index = firstIndex; index <= lastIndex; index += 1)
+        {
+            runs[index].Remove();
+        }
+    }
+
+    /// <summary>跨段勾选项整体包进块级内容控件，选项段落原样保留。</summary>
+    static void WrapParagraphs(
+        IReadOnlyList<Wp.Paragraph> paragraphs,
+        TemplateFieldDefinition field,
+        int wordId,
+        List<OpenXmlElement> written)
+    {
+        var first = paragraphs[0];
+        if (paragraphs.Any(item => !ReferenceEquals(item.Parent, first.Parent)))
+        {
+            throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
+        }
+
+        var identity = CreateIdentity(field, wordId);
+        written.AddRange(identity);
+        var content = new Wp.SdtContentBlock();
+        first.InsertBeforeSelf(new Wp.SdtBlock(new Wp.SdtProperties(identity), content));
+        foreach (var paragraph in paragraphs)
+        {
+            paragraph.Remove();
+            content.AppendChild(paragraph);
+        }
+    }
+
+    /// <summary>附件说明保持原文，在其后插入一段附件占位；文本框兼容显示同步插入纯文字占位。</summary>
+    static void InsertAttachmentSlot(
+        Wp.Paragraph paragraph,
+        TemplateFieldDefinition field,
+        int wordId,
+        List<OpenXmlElement> written,
+        Wp.Paragraph? fallback)
+    {
+        var control = CreateControl(field, wordId, paragraph.Elements<Wp.Run>().LastOrDefault());
+        written.Add(control);
+        paragraph.InsertAfterSelf(CreateSlotParagraph(paragraph, control));
+        fallback?.InsertAfterSelf(CreateSlotParagraph(
+            fallback,
+            CreatePlaceholderRun(field, fallback.Elements<Wp.Run>().LastOrDefault())));
+    }
+
+    /// <summary>沿用说明段落格式，去掉分节、编号和段前分页，避免插入段改变版面结构。</summary>
+    static Wp.Paragraph CreateSlotParagraph(Wp.Paragraph source, OpenXmlElement content)
+    {
+        var slot = new Wp.Paragraph();
+        if (source.ParagraphProperties?.CloneNode(true) is Wp.ParagraphProperties properties)
+        {
+            properties.RemoveAllChildren<Wp.SectionProperties>();
+            properties.RemoveAllChildren<Wp.NumberingProperties>();
+            properties.RemoveAllChildren<Wp.PageBreakBefore>();
+            slot.AppendChild(properties);
+        }
+        slot.AppendChild(content);
+        return slot;
     }
 
     static void InsertAt(
@@ -129,19 +282,20 @@ static class TemplateFieldSdtWriter
         IReadOnlyList<Wp.Run> runs,
         IReadOnlyList<string> runTexts,
         int start,
-        Wp.SdtRun control)
+        OpenXmlElement replacement,
+        List<OpenXmlElement>? written)
     {
         var totalLength = runTexts.Sum(item => item.Length);
         if (start == totalLength)
         {
-            runs[^1].InsertAfterSelf(control);
+            runs[^1].InsertAfterSelf(replacement);
             return;
         }
 
         var runIndex = FindRunIndex(runTexts, start, preferNextAtBoundary: true);
         if (runIndex < 0)
         {
-            paragraph.AppendChild(control);
+            paragraph.AppendChild(replacement);
             return;
         }
 
@@ -151,16 +305,29 @@ static class TemplateFieldSdtWriter
         var text = runTexts[runIndex];
         if (offset == 0)
         {
-            run.InsertBeforeSelf(control);
+            run.InsertBeforeSelf(replacement);
             return;
         }
 
         var prefix = text[..offset];
         var suffix = text[offset..];
-        if (prefix.Length > 0) run.InsertBeforeSelf(CreateTextRun(prefix, run));
-        run.InsertBeforeSelf(control);
-        if (suffix.Length > 0) run.InsertBeforeSelf(CreateTextRun(suffix, run));
+        if (prefix.Length > 0) AddWritten(written, run.InsertBeforeSelf(CreateTextRun(prefix, run)));
+        run.InsertBeforeSelf(replacement);
+        if (suffix.Length > 0) AddWritten(written, run.InsertBeforeSelf(CreateTextRun(suffix, run)));
         run.Remove();
+    }
+
+    static void EnsureRange(IReadOnlyList<string> runTexts, int start, int length, TemplateFieldDefinition field)
+    {
+        if (start < 0 || length < 0 || start + length > runTexts.Sum(item => item.Length))
+        {
+            throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
+        }
+    }
+
+    static void AddWritten(List<OpenXmlElement>? written, OpenXmlElement element)
+    {
+        written?.Add(element);
     }
 
     static int FindRunIndex(IReadOnlyList<string> runTexts, int offset, bool preferNextAtBoundary)
@@ -185,14 +352,17 @@ static class TemplateFieldSdtWriter
         return index >= 0 ? runs[index] : runs[^1];
     }
 
+    static OpenXmlElement[] CreateIdentity(TemplateFieldDefinition field, int wordId) =>
+    [
+        new Wp.SdtAlias { Val = field.Name },
+        new Wp.SdtId { Val = wordId },
+        new Wp.Tag { Val = $"{TagPrefix}{field.Id}" },
+    ];
+
     static Wp.SdtRun CreateControl(TemplateFieldDefinition field, int wordId, Wp.Run? sourceRun)
     {
-        var properties = new Wp.SdtProperties(
-            new Wp.SdtAlias { Val = field.Name },
-            new Wp.SdtId { Val = wordId },
-            new Wp.Tag { Val = $"{TagPrefix}{field.Id}" });
         var content = new Wp.SdtContentRun(CreatePlaceholderRun(field, sourceRun));
-        return new Wp.SdtRun(properties, content);
+        return new Wp.SdtRun(new Wp.SdtProperties(CreateIdentity(field, wordId)), content);
     }
 
     static Wp.Run CreatePlaceholderRun(TemplateFieldDefinition field, Wp.Run? sourceRun)

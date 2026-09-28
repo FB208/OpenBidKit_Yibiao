@@ -14,9 +14,14 @@ sealed class JobRequest
 /// <summary>任务结果。</summary>
 sealed class JobResult
 {
+    /// <summary>文件被占用、无权限等运行环境问题，调用方无法通过修改参数解决。</summary>
+    public const string EnvironmentErrorKind = "environment";
+
     public bool Ok { get; set; }
     public string? Action { get; set; }
     public string? Error { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ErrorKind { get; set; }
     public string? Output { get; set; }
     public int? BlockCount { get; set; }
 
@@ -32,7 +37,7 @@ sealed class JobResult
         BlockCount = blockCount,
     };
 
-    public static JobResult Fail(string error) => new() { Ok = false, Error = error };
+    public static JobResult Fail(string error, string? errorKind = null) => new() { Ok = false, Error = error, ErrorKind = errorKind };
 }
 
 /// <summary>解析任务目录并读写 request / result。</summary>
