@@ -469,6 +469,33 @@ async function main() {
       assert.ok(text.includes(keptText), '其他小节应照常导出');
     };
     const layoutBuild = () => exporter.build(exporter.prepare(), { stats: {}, layoutCheck: true });
+    // 复现转换器的 figure 错误；用户导出仅替换坏图，完整正文和正常图片仍保留。
+    const malformedFigures = [
+      '<figure data-yb-size="wide"><figcaption>空图片框</figcaption></figure>',
+      '<figure data-yb-size="wide"><div><img data-yb-asset-ref="原图/现场 图片.png"></div><figcaption>嵌套图片</figcaption></figure>',
+      '<figure data-yb-size="wide"><img data-yb-asset-ref="原图/现场 图片.png"><img data-yb-asset-ref="原图/现场 图片.png"><figcaption>重复图片</figcaption></figure>',
+    ];
+    for (const html of malformedFigures) {
+      await assert.rejects(helper.createRestrictedHtmlDocx(html, config, { assetRoot: workspaceDir, copyAssets: true }), /figure 必须包含一个 img/);
+    }
+    const malformedBody = `${originalBody}${figure}<table><tbody><tr><td>保留图片旁文字</td><td>${malformedFigures.join('')}</td></tr></tbody></table>`;
+    fs.writeFileSync(original, malformedBody, 'utf8');
+    const partial = await build();
+    const partialWord = readWord(partial.buffer);
+    const partialText = partialWord.$('w\\:body').text();
+    assert.equal(partial.warnings.length, 3);
+    assert.ok(partial.warnings.every(warning => warning.includes('交付节点') && warning.includes('未导出异常图片')));
+    assert.match(partial.message, /3 处图片结构异常/);
+    assert.doesNotMatch(partial.message, /AI 小节未完成/);
+    for (const text of ['现场施工正文', '交付验收正文', '保留图片旁文字']) assert.ok(partialText.includes(text), text);
+    for (const text of ['空图片框', '嵌套图片', '重复图片', '图片结构异常', '未导出图片']) assert.ok(!partialText.includes(text), text);
+    assert.equal(partialWord.$('w\\:p').filter((_, element) => partialWord.$(element).text() === '图片引用失败').length, 3, '坏图仅显示指定文字，不带括号或图注');
+    assert.equal(partialWord.$('w\\:drawing').length, 3, '正常图片全部保留');
+    assert.equal(fs.readFileSync(original, 'utf8'), malformedBody, '导出不得修改源 HTML');
+    assert.deepEqual(fs.readFileSync(path.join(workspaceDir, '原图/现场 图片.png')), png);
+    await assert.rejects(layoutBuild(), /交付节点.*figure 必须包含一个直接子级 img/s);
+    fs.writeFileSync(original, originalBody, 'utf8');
+    console.log('异常 figure：真实报错复现，坏图仅显示“图片引用失败”，正文、表格、正常图片和源文件不变，自检仍严格报错。');
     fs.renameSync(original, `${original}.missing`);
     await expectSkipped({ title: '交付节点', reason: '正文未生成', skippedText: '交付验收正文', keptText: '现场施工正文' });
     await assert.rejects(layoutBuild(), /交付节点.*正文文件不存在/s);

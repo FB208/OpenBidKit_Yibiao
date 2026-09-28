@@ -881,16 +881,14 @@ if (!process.versions.electron) {
     console.log('启动恢复：新任务初始落库即清除旧单节状态，全文清空、局部保留及单节继续/重试检查通过。');
   }
 
-  // 执行页面真实禁用条件和提示表达式，暂停必须与运行/暂停中一样禁止整本导出。
+  // 执行页面真实按钮表达式，任务中断或暂停等状态均不限制导出已有内容。
   function checkPausedExportButton() {
     const ts = require('typescript');
     const source = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/TechnicalPlanHome.tsx'), 'utf8');
     const ast = ts.createSourceFile('home.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-    let blocked;
     let disabled;
     let tooltip;
     function visit(node) {
-      if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'contentBlocksExport') blocked = node.initializer.getText(ast);
       if (ts.isObjectLiteralExpression(node) && node.properties.some(property => property.name?.getText(ast) === 'id' && property.initializer?.text === 'export-word')) {
         disabled = node.properties.find(property => property.name?.getText(ast) === 'disabled').initializer.getText(ast);
         tooltip = node.properties.find(property => property.name?.getText(ast) === 'tooltip').initializer.getText(ast);
@@ -898,15 +896,15 @@ if (!process.versions.electron) {
       ts.forEachChild(node, visit);
     }
     visit(ast);
-    assert.ok(blocked && disabled && tooltip);
-    const evaluate = new Function('contentTaskStatus', 'isExporting', 'state', `const contentBlocksExport = ${blocked}; return { disabled: ${disabled}, tooltip: ${tooltip} };`);
+    assert.ok(disabled && tooltip);
+    const evaluate = new Function('contentTaskStatus', 'isExporting', 'state', `return { disabled: ${disabled}, tooltip: ${tooltip} };`);
     for (const status of ['running', 'pausing', 'paused', 'success', 'error', undefined]) {
       const result = evaluate(status, false, { outlineData: {} });
-      assert.equal(result.disabled, ['running', 'pausing', 'paused'].includes(status));
-      if (status === 'paused') assert.equal(result.tooltip, '正文任务已暂停，请继续完成后导出');
+      assert.equal(result.disabled, false);
+      assert.equal(result.tooltip, '导出整本 Word，未完成的 AI 小节只保留标题');
     }
-    assert.equal(evaluate('success', true, { outlineData: {} }).disabled, true);
-    assert.equal(evaluate('success', false, { outlineData: null }).disabled, true);
+    assert.equal(evaluate('success', true, { outlineData: {} }).disabled, false);
+    assert.equal(evaluate('success', false, { outlineData: null }).disabled, false);
   }
 
   // 直接执行页面保存入口，确认有正文时先询问，取消不写入，确认后才保存。

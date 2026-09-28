@@ -10,7 +10,7 @@ function escapeHtml(text) {
 }
 
 /** 读取 AI 小节正文；正文缺失或图片未就绪时返回未完成原因，其他读取错误继续抛出。 */
-function readAiSection(workspaceDir, file) {
+function readAiSection(workspaceDir, file, layoutCheck) {
   if (!workspaceDir) return { reason: '正文未生成', detail: `正文 Agent 工作区不存在，无法读取 ${file}` };
   let body;
   try {
@@ -21,6 +21,17 @@ function readAiSection(workspaceDir, file) {
   }
   if (!body.trim()) return { reason: '正文未生成', detail: `正文文件为空：${file}` };
   const $ = cheerio.load(body, null, false);
+  const imageWarnings = [];
+  for (const [index, element] of $('figure').toArray().entries()) {
+    const figure = $(element);
+    if (figure.children('img').length === 1) continue;
+    const detail = `第 ${index + 1} 个 figure 必须包含一个直接子级 img`;
+    if (layoutCheck) throw new Error(detail);
+    const caption = figure.children('figcaption').text().trim();
+    imageWarnings.push(`${detail}${caption ? `（${caption}）` : ''}`);
+    // 只替换导出副本中的异常图片块，保留同节正文、表格和正常图片。
+    figure.replaceWith($('<p>').text('图片引用失败'));
+  }
   for (const img of $('img').toArray()) {
     const reference = $(img).attr('data-yb-asset-ref');
     if (!reference) return { reason: '有图片未生成完成', detail: '图片缺少 data-yb-asset-ref' };
@@ -31,7 +42,7 @@ function readAiSection(workspaceDir, file) {
       throw error;
     }
   }
-  return { body, $ };
+  return { body: imageWarnings.length ? $.html() : body, $, imageWarnings };
 }
 
 /** 整本导出只读取当前目录、模板和 Agent 产物，不修改正文工作区。 */
@@ -60,6 +71,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       const ranges = [];
       const layoutSources = [];
       const warnings = [];
+      const imageWarnings = [];
       // 仅自检副本携带定位标记，转换器会将其替换为不可见书签。
       const mark = (html, source) => {
         const name = `yb_layout_${layoutSources.length}`;
@@ -83,7 +95,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
           if (!item.children?.length) {
             if (item.content_mode === 'ai-generate') {
               const file = `正文/${encodeURIComponent(item.id)}.html`;
-              const section = readAiSection(snapshot.workspaceDir, file);
+              const section = readAiSection(snapshot.workspaceDir, file, layoutCheck);
               if (section.reason) {
                 if (layoutCheck) throw new Error(section.detail);
                 warnings.push(`小节 ${label} 未导出正文：${section.reason}`);
@@ -99,6 +111,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
                 })).join('\n');
               } else {
                 body = section.body;
+                imageWarnings.push(...section.imageWarnings.map(warning => `小节 ${label} 未导出异常图片：${warning}`));
               }
             } else if (String(item.content || '').trim()) {
               body = await renderMarkdownForRestrictedHtml(item.content, assets, { baseDir: snapshot.workspaceDir, developerLogger });
@@ -116,14 +129,17 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         onProgress?.({ phase: 'running', progress: 10 + Math.round((index + 1) / entries.length * 40), message: `正在读取正文 ${index + 1}/${entries.length}：${label}`, warnings: [], ...stats });
       }
       const html = ranges.map(range => `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.sectionTemplate}">${range.html}</section>`).join('\n');
-      developerLogger?.write('export.technical_plan.html.assembled', { section_count: entries.length, skipped_section_count: warnings.length, html_chars: html.length, image_count: cheerio.load(html)('img').length });
+      developerLogger?.write('export.technical_plan.html.assembled', { section_count: entries.length, skipped_section_count: warnings.length, skipped_image_count: imageWarnings.length, html_chars: html.length, image_count: cheerio.load(html)('img').length });
       onProgress?.({ phase: 'running', progress: 55, message: '正在按当前模板转换整本 Word。', warnings: [], ...stats });
       const result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
         assetRoot: snapshot.workspaceDir, copyAssets: true, assets, wholeDocument: true,
       });
       return {
-        buffer: Buffer.from(result.bytes), warnings, stats,
-        ...(warnings.length ? { message: `Word 已导出，其中 ${warnings.length} 个 AI 小节未完成，仅保留标题，请完成后重新导出。` } : {}),
+        buffer: Buffer.from(result.bytes), warnings: [...warnings, ...imageWarnings], stats,
+        ...(warnings.length || imageWarnings.length ? { message: `Word 已导出，${[
+          warnings.length ? `${warnings.length} 个 AI 小节未完成，仅保留标题` : '',
+          imageWarnings.length ? `${imageWarnings.length} 处图片结构异常，已保留提示及其余正文` : '',
+        ].filter(Boolean).join('；')}。` } : {}),
         ...(layoutCheck ? { layoutSources } : {}),
       };
     },
