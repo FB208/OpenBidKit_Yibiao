@@ -189,12 +189,26 @@ if (!process.versions.electron) {
       let before = store.loadTechnicalPlan();
       let outline = structuredClone(before.outlineData.outline);
       outline[0].children[0].title = '修改后的标题';
+      const markdownDescription = '**实施范围**\n\n- 中文描述第一项\n- 第二项';
+      outline[0].children[0].description = markdownDescription;
+      outline[0].description = '## 章节说明\n\n本章描述';
       let result = save(outline, 'edit');
+      assert.equal(result.outlineData.outline[0].children[0].description, markdownDescription);
+      assert.equal(result.outlineData.outline[0].description, outline[0].description);
+      assert.deepEqual(result.outlineData.outline[1], before.outlineData.outline[1], '编辑不得修改其他目录项');
       assert.equal(result.contentGenerationSections['00000000-0000-4000-8000-000000000004'].title, '修改后的标题');
       assert.equal(result.contentGenerationSections['00000000-0000-4000-8000-000000000004'].content, '正文甲');
       assert.deepEqual(result.contentGenerationPlans, before.contentGenerationPlans);
       assert.deepEqual(result.contentGenerationRuntime, before.contentGenerationRuntime);
-      assert.ok(fs.existsSync(restorationRoot), '仅改名不清理还原会话');
+      assert.deepEqual(result.contentGenerationTask, before.contentGenerationTask);
+      assert.ok(fs.existsSync(restorationRoot), '编辑标题和描述不清理还原会话');
+      database.close(); open();
+      assert.equal(store.loadTechnicalPlan().outlineData.outline[0].children[0].description, markdownDescription, 'Markdown 描述重新打开数据库后仍保留');
+      outline[0].children[0].description = '';
+      result = save(outline, 'edit');
+      assert.equal(result.outlineData.outline[0].children[0].description, '', '允许清空目录描述');
+      assert.deepEqual(result.contentGenerationPlans, before.contentGenerationPlans);
+      assert.deepEqual(result.contentGenerationRuntime, before.contentGenerationRuntime);
 
       outline.push(leaf('00000000-0000-4000-8000-000000000003'));
       result = save(outline, 'add-root');

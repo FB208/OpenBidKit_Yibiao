@@ -2112,10 +2112,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       assertOutlineMutationAllowed();
       if (preservesContentTask) {
         if (reason === 'edit') {
-          // 改名只写标题，不更新正文、说明、处理模式或编排。
-          const updateTitle = db.prepare('UPDATE technical_plan_outline_nodes SET title = ?, updated_at = ? WHERE node_id = ? AND title <> ?');
+          // 编辑只更新标题和描述，保留正文、处理模式及编排。
+          const updateDetails = db.prepare('UPDATE technical_plan_outline_nodes SET title = ?, description = ?, updated_at = ? WHERE node_id = ? AND (title <> ? OR description <> ?)');
           const timestamp = now();
-          for (const row of flattenOutlineItems(outlineData?.outline || [])) updateTitle.run(row.title, timestamp, row.node_id, row.title);
+          for (const row of flattenOutlineItems(outlineData?.outline || [])) updateDetails.run(row.title, row.description, timestamp, row.node_id, row.title, row.description);
         } else {
           saveSortedOutline(outlineData);
         }
