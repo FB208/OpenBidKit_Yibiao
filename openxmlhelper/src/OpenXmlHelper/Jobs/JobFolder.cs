@@ -29,6 +29,10 @@ sealed class JobResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? ParagraphRoles { get; set; }
 
+    /// <summary>未能导出、已在原位改为文字提示的配图及原因。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ImageWarning>? ImageWarnings { get; set; }
+
     public static JobResult Success(string action, string? output = null, int? blockCount = null) => new()
     {
         Ok = true,

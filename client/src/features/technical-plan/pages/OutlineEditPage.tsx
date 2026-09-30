@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
+import { AppDialog, MarkdownEditor, ProgressBar, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
@@ -226,6 +226,7 @@ function OutlineEditPage({
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const [noScoreConfirmationOpen, setNoScoreConfirmationOpen] = useState(false);
@@ -437,6 +438,7 @@ function OutlineEditPage({
     });
   };
 
+  // 初始化当前目录项的标题和 Markdown 描述草稿。
   const startEditing = (item: OutlineItem) => {
     if (sorting || outlineMutationLocked) {
       return;
@@ -444,8 +446,10 @@ function OutlineEditPage({
     setSelectedItemId(item.id);
     setEditingItemId(item.id);
     setEditTitle(item.title);
+    setEditDescription(item.description);
   };
 
+  // 保存标题和描述，失败时保留当前编辑草稿。
   const saveEditing = async () => {
     if (!outlineData || !editingItemId || sorting || outlineMutationLocked) {
       return;
@@ -455,9 +459,10 @@ function OutlineEditPage({
       await saveOutlineChange(updateOutlineItem(outlineData.outline, editingItemId, (item) => ({
         ...item,
         title: editTitle.trim() || item.title,
+        description: editDescription.trim(),
       })), 'edit');
       setEditingItemId(null);
-      showToast('目录标题已更新', 'success');
+      showToast('目录项已更新', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存目录项失败', 'error');
     }
@@ -480,6 +485,7 @@ function OutlineEditPage({
       setSelectedItemId(newItem.id);
       setEditingItemId(newItem.id);
       setEditTitle(newItem.title);
+      setEditDescription(newItem.description);
       showToast('一级目录已添加', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '添加一级目录失败', 'error');
@@ -510,6 +516,7 @@ function OutlineEditPage({
       setSelectedItemId(newItem.id);
       setEditingItemId(newItem.id);
       setEditTitle(newItem.title);
+      setEditDescription(newItem.description);
       showToast(parent?.children?.length ? '子目录已添加' : '子目录已添加，原叶子节点正文已清空', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '添加子目录失败', 'error');
@@ -846,7 +853,6 @@ function OutlineEditPage({
           <div className="analysis-result-head">
             <div>
               <strong>目录项详情</strong>
-              <span>{selectedItem ? selectedItem.id : '未选择'}</span>
             </div>
           </div>
           {selectedItem ? (
@@ -866,6 +872,17 @@ function OutlineEditPage({
                     <span>标题</span>
                     <input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} disabled={outlineMutationLocked || sorting} />
                   </label>
+                  <div className="outline-description-edit">
+                    <span>描述</span>
+                    <MarkdownEditor
+                      value={editDescription}
+                      onChange={setEditDescription}
+                      disabled={outlineMutationLocked || sorting}
+                      placeholder="输入目录描述，支持 Markdown 格式..."
+                      fullscreenTitle="编辑目录描述"
+                      fullscreenDescription="修改当前目录项的描述，退出全屏后点击保存提交。"
+                    />
+                  </div>
                   <div className="outline-detail-actions">
                     <button type="button" className="primary-action" onClick={() => { void saveEditing(); }} disabled={outlineMutationLocked || sorting}>保存</button>
                     <button type="button" className="secondary-action" onClick={() => setEditingItemId(null)}>取消</button>

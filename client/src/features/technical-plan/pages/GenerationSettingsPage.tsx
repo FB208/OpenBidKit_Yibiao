@@ -953,22 +953,22 @@ function GenerationSettingsPage({
               <div className="content-generation-config-list">
                 <div className="content-generation-config-group">
                   <label className="content-generation-config-row">
-                    <span><strong>图片数量</strong></span>
+                    <span><strong>配图比例</strong><small>参与配图的小节数占 AI 生成小节总数的目标百分比</small></span>
                     <select
                       value={draftIllustrationOptions.imageQuantity}
                       disabled={contentConfigLocked || contentOptionsBusy}
                       onChange={(event) => void saveContentOptions({
                         ...draftIllustrationOptions,
                         tableRequirement: draftTableRequirement,
-                        imageQuantity: event.target.value as ContentImageQuantity,
-                        useAiImages: event.target.value !== 'none' && imageModelAvailable,
-                        useMermaidImages: event.target.value !== 'none',
-                        useHtmlImages: event.target.value !== 'none',
+                        imageQuantity: Number(event.target.value) as ContentImageQuantity,
+                        useAiImages: Number(event.target.value) > 0 && imageModelAvailable,
+                        useMermaidImages: Number(event.target.value) > 0,
+                        useHtmlImages: Number(event.target.value) > 0,
                       })}
                     >
-                      <option value="none">无图</option>
-                      <option value="light">少图</option>
-                      <option value="heavy">多图</option>
+                      {Array.from({ length: 11 }, (_, index) => index * 10).map((ratio) => (
+                        <option value={ratio} key={ratio}>{ratio}%</option>
+                      ))}
                     </select>
                   </label>
                 </div>
@@ -983,8 +983,8 @@ function GenerationSettingsPage({
                     <div className="content-generation-config-control">
                       <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
                       <AppSwitch
-                        checked={draftIllustrationOptions.useAiImages && imageModelAvailable}
-                        disabled={contentConfigLocked || contentOptionsBusy || !imageModelAvailable}
+                        checked={draftIllustrationOptions.useAiImages}
+                        disabled={contentConfigLocked || contentOptionsBusy || (!imageModelAvailable && !draftIllustrationOptions.useAiImages)}
                         onCheckedChange={(checked) => void saveContentOptions({
                           ...draftIllustrationOptions,
                           tableRequirement: draftTableRequirement,

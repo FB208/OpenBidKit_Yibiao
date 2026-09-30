@@ -24,6 +24,8 @@ function createHarness(t, responses) {
   fs.mkdirSync(workspaceDir);
   const prompts = [];
   const sessions = [];
+  // 续跑补压缩发生在首个提示词之前，由场景预先提供压缩实现。
+  const hooks = {};
   const layout = { runtimeRoot: root, tasksRoot: path.join(root, 'tasks'), workspaceDir };
   const read = file => fs.readFileSync(path.join(workspaceDir, file), 'utf8');
   const write = (file, content) => fs.writeFileSync(path.join(workspaceDir, file), content, 'utf8');
@@ -44,6 +46,7 @@ function createHarness(t, responses) {
           subscribe: () => () => {},
           dispose() {},
           async abort() {},
+          compact: (...args) => hooks.compact ? hooks.compact(...args) : Promise.reject(new Error('未提供压缩实现')),
           async prompt(prompt) {
             const response = responses[prompts.length];
             prompts.push(prompt);
@@ -53,7 +56,7 @@ function createHarness(t, responses) {
           },
         };
         sessions.push(session);
-        return { session, snapshot: {}, assertJsonValidationPassed() {} };
+        return { session, snapshot: {} };
       },
     },
   });
@@ -64,7 +67,7 @@ function createHarness(t, responses) {
     fs.rmSync(root, { recursive: true, force: true });
   });
   return {
-    read, write, exists, prompts, sessions, getStatus: runtime.getStatus,
+    root, hooks, read, write, exists, prompts, sessions, getStatus: runtime.getStatus,
     run: payload => runtime.runTask({
       workspace_dir: workspaceDir,
       output_file: 'outline.json',
@@ -195,7 +198,7 @@ test('父任务取消传递给程序交接 signal，不再请求下一阶段模�
   assert.equal(harness.sessions.length, 1);
 });
 
-test('非主输出缺失在原 Session 修复一次，重试不预建、不清空现场，交接只接收通过的结果', async t => {
+test('非主输出缺失在原 Session 退回修复，重试不预建、不清空现场，交接只接收通过的结果', async t => {
   const file = '评分规划.json';
   const harness = createHarness(t, [
     ({ read, workspaceDir }) => {
@@ -227,7 +230,7 @@ test('非主输出缺失在原 Session 修复一次，重试不预建、不清�
       assert.equal(error.agentValidationFailed, true);
       assert.equal(meta.workflow_stage, 'score-planning');
       assert.equal(meta.attempt, 1);
-      assert.equal(meta.max_retries, 1);
+      assert.equal(meta.max_retries, 3, '提交校验按退回上限计数，不受执行失败的 max_retries 限制');
       assert.equal(meta.retry_attempts.length, 0);
       assert.equal(meta.session_id, 'session-1');
       return `只补齐 ${file}`;
@@ -247,23 +250,77 @@ test('非主输出缺失在原 Session 修复一次，重试不预建、不清�
   assert.equal(handoffs, 1);
 });
 
-test('一次修复后仍不合格立即失败，不进入阶段交接', async t => {
-  const harness = createHarness(t, [() => {}, () => {}]);
+test('提交校验连续两次问题数没有减少时提前停止，不进入阶段交接', async t => {
+  const harness = createHarness(t, [() => {}, () => {}, () => {}]);
   let repairs = 0;
   let handoffs = 0;
   await assert.rejects(harness.run({
-    max_retries: 1,
+    max_retries: 0,
     validateOutput() { throw new Error('审核报告为空'); },
-    buildRetryPrompt() { repairs += 1; return '补齐审核报告'; },
+    buildRetryPrompt(_error, meta) { repairs += 1; assert.equal(meta.attempt, repairs); return '补齐审核报告'; },
     continueTask() { handoffs += 1; },
   }), error => {
-    assert.equal(error.message, '审核报告为空');
-    assert.equal(error.agentRetryAttempts.length, 1);
+    assert.match(error.message, /^审核报告为空\n提交校验已退回修复 2 次，且连续两次问题数没有减少，停止自动修复。$/);
+    assert.equal(error.agentRetryAttempts.length, 2);
     return true;
   });
-  assert.equal(harness.prompts.length, 2);
-  assert.equal(repairs, 1);
+  assert.equal(harness.prompts.length, 3);
+  assert.equal(repairs, 2);
   assert.equal(handoffs, 0);
+});
+
+test('问题持续减少时最多退回 3 次，执行失败另按 max_retries 计数', async t => {
+  const harness = createHarness(t, [() => {}, () => {}, () => {}, () => {}]);
+  const counts = [5, 4, 3, 2];
+  let checks = 0;
+  const repairs = [];
+  await assert.rejects(harness.run({
+    max_retries: 0,
+    validateOutput() {
+      const error = new Error(`还有 ${counts[checks]} 处问题`);
+      error.issues = Array.from({ length: counts[checks] }, (_item, index) => `问题 ${index + 1}`);
+      checks += 1;
+      throw error;
+    },
+    buildRetryPrompt(error, meta) { repairs.push([meta.attempt, meta.max_retries, error.issues.length]); return '继续修复'; },
+  }), error => {
+    assert.match(error.message, /^还有 2 处问题\n提交校验已退回修复 3 次，停止自动修复。$/);
+    return true;
+  });
+  assert.deepEqual(repairs, [[1, 3, 5], [2, 3, 4], [3, 3, 3]]);
+  assert.equal(harness.prompts.length, 4);
+});
+
+test('提交校验前还原被改动的输入文件，Agent 结果文件不登记保护', async t => {
+  const harness = createHarness(t, [
+    ({ write }) => {
+      write('资料/项目概述.md', '被 Agent 改写');
+      write('结果.json', '{"改":true}');
+      write('outline.json', '{"目录":true}');
+    },
+    ({ prompt, read }) => {
+      assert.match(prompt, /^程序已还原被改动的文件：资料\/项目概述.md。/);
+      assert.equal(read('资料/项目概述.md'), '原始概述');
+      assert.equal(read('结果.json'), '{"改":true}');
+    },
+  ]);
+  const checked = [];
+  const result = await harness.run({
+    files: [
+      { path: '资料/项目概述.md', content: '原始概述' },
+      { path: '结果.json', content: '{}' },
+      { path: 'outline.json', content: '{}' },
+    ],
+    json_validation_schemas: { '结果.json': { type: 'object' } },
+    async validateOutput(candidate, meta) {
+      checked.push(await meta.readFile('资料/项目概述.md'));
+      if (checked.length === 1) throw new Error('需要再确认一次');
+      return JSON.parse(candidate.output_content);
+    },
+    buildRetryPrompt: error => error.message,
+  });
+  assert.deepEqual(checked, ['原始概述', '原始概述'], '还原发生在业务校验之前');
+  assert.deepEqual(result.validation_result, { 目录: true });
 });
 
 test('每个阶段独立拥有一次修复机会，保持同一 Session 和正确的阶段结果', async t => {
@@ -468,4 +525,57 @@ test('交接前置步骤失败或任务取消时不发送提示词，压缩期�
   assert.equal(stepStopped, true);
   assert.deepEqual(cancelled.prompts, ['初始阶段']);
   assert.deepEqual(unhandled, []);
+});
+
+test('持久任务记录已发出的阶段；交接压缩未完成时，续跑在该阶段要求发出前补做，已发出后不再补做', async t => {
+  const store = require('./piPersistentTaskStore.cjs');
+  const taskKey = 'runtime-prompted-stage';
+  const persistentPrompts = [];
+  const harness = createHarness(t, [
+    () => {},
+    ({ prompt }) => { persistentPrompts.push(prompt); },
+    ({ prompt }) => { persistentPrompts.push(prompt); },
+  ]);
+  const app = { getPath: () => harness.root };
+  const load = () => store.loadPersistentAgentTask(app, taskKey).state;
+  // 第一次运行：生成要求发出后交接审计，压缩失败并在前置步骤期间暂停，审计要求尚未发出。
+  const controller = new AbortController();
+  const pause = new Error('用户暂停');
+  const compactions = [];
+  harness.hooks.compact = async instructions => {
+    compactions.push(instructions);
+    setImmediate(() => controller.abort(pause));
+    throw new Error('客户端连接已关闭');
+  };
+  await assert.rejects(harness.run({
+    task_id: 'run-1', signal: controller.signal, initial_stage: 'generating', prompt: '生成要求',
+    persistent_task: { task_key: taskKey, mode: 'create' },
+    continueTask: (_candidate, meta) => ({
+      stage: 'auditing', prompt: '审计要求', compact_before_prompt: true, compaction_optional: true, compaction_instructions: '保留审计结论',
+      await_before_prompt: new Promise((_resolve, reject) => meta.signal.addEventListener('abort', () => reject(new Error('核对已取消')), { once: true })),
+    }),
+  }), error => error === pause);
+  assert.deepEqual(harness.prompts, ['生成要求']);
+  assert.equal(load().prompted_stage, 'generating', '发出提示词前记录阶段');
+  assert.deepEqual(load().compaction_pending, {
+    stage: 'auditing', compaction_stage: 'auditing_compaction', compaction_instructions: '保留审计结论', compaction_optional: true,
+  }, '压缩失败时保留待补压缩');
+  // 第二次运行：审计要求尚未发出，先补做压缩再发送；发出后清除待补记录。
+  store.updatePersistentAgentTask(app, taskKey, { run_id: 'run-2', session_file: 'session.jsonl' });
+  const order = [];
+  harness.hooks.compact = async instructions => { order.push(`compact:${instructions}`); };
+  await harness.run({
+    task_id: 'run-2', initial_stage: 'auditing', prompt: '审计要求', persistent_task: { task_key: taskKey, mode: 'resume' },
+    onCheckpoint: state => { if (state.prompted_stage === 'auditing' && !order.includes('prompted')) order.push('prompted'); },
+  });
+  assert.deepEqual(order, ['compact:保留审计结论', 'prompted']);
+  assert.deepEqual(persistentPrompts, ['审计要求']);
+  assert.equal(load().prompted_stage, 'auditing');
+  assert.equal(load().compaction_pending, null);
+  // 第三次运行：该阶段要求已发出，即使残留待补记录也不中途压缩，发送时清除记录。
+  store.updatePersistentAgentTask(app, taskKey, { run_id: 'run-3', compaction_pending: { stage: 'auditing', compaction_optional: true } });
+  harness.hooks.compact = async () => { throw new Error('已发出的阶段不应补压缩'); };
+  await harness.run({ task_id: 'run-3', initial_stage: 'auditing', prompt: '继续之前的任务', persistent_task: { task_key: taskKey, mode: 'resume' } });
+  assert.deepEqual(persistentPrompts, ['审计要求', '继续之前的任务']);
+  assert.equal(load().compaction_pending, null);
 });

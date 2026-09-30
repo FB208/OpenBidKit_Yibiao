@@ -12,18 +12,20 @@ const { cloneDefaultExportFormat, normalizeExportFormat } = require('../electron
 const { SYSTEM_EXPORT_TEMPLATES } = require('../electron/services/systemExportTemplates.cjs');
 
 /** 在独立 Electron 窗口走真实 preload、IPC、保存及进度订阅，保存对话框定向到临时目录。 */
-async function checkIpc(exporter, directory) {
+async function checkIpc(exporter, directory, structure) {
   const { BrowserWindow, dialog } = require('electron');
   const { createExportService } = require('../electron/services/exportService.cjs');
   const { registerExportIpc } = require('../electron/ipc/exportIpc.cjs');
   const output = path.join(directory, '整本 IPC 导出.docx');
   let canceled = false;
   let recorded = 0;
+  // 每次计数都产生一条提醒，记录实际显示的提醒编号；空提醒与真实服务一样不显示。
+  const shown = [];
   const showSaveDialog = dialog.showSaveDialog;
   dialog.showSaveDialog = async () => ({ canceled, filePath: output });
   registerExportIpc({
     exportService: createExportService({ configStore: { load: () => ({}) }, getTechnicalPlanExport: () => exporter }),
-    donationService: { recordWordExport() { recorded += 1; }, showPrompt() {} },
+    donationService: { recordWordExport() { recorded += 1; return { click: recorded }; }, showPrompt(prompt) { if (prompt) shown.push(prompt.click); } },
   });
   const window = new BrowserWindow({ show: false, webPreferences: { preload: path.resolve(__dirname, '../electron/preload.cjs'), contextIsolation: true, nodeIntegration: false } });
   try {
@@ -45,7 +47,33 @@ async function checkIpc(exporter, directory) {
     assert.equal((await window.webContents.executeJavaScript("window.yibiao.export.exportWord({source:'technical-plan'})")).canceled, true);
     assert.deepEqual(fs.readFileSync(output), original);
     assert.equal(recorded, 2);
-    console.log('真实 Electron preload/IPC：导出、进度、取消、取消时保留文件及导出记录通过。');
+    assert.deepEqual(shown, [1, 2], '保存对话框取消时照常显示提醒');
+    // 正文结构问题：首次调用只返回问题清单，确认后沿用同一请求继续导出，导出次数只记一次。
+    structure.apply();
+    try {
+      const confirm = await window.webContents.executeJavaScript("window.yibiao.export.exportWord({ source: 'technical-plan', requestId: 'structure-check' })");
+      assert.equal(confirm.needsConfirmation, true);
+      assert.equal(confirm.success, false);
+      assert.deepEqual(confirm.issues.map(issue => issue.section), [structure.label]);
+      assert.equal(recorded, 3);
+      assert.deepEqual(shown, [1, 2], '等待确认时不显示提醒');
+      canceled = false;
+      const continued = await window.webContents.executeJavaScript("window.yibiao.export.exportWord({ source: 'technical-plan', requestId: 'structure-check', confirmStructureIssues: true })");
+      assert.equal(continued.path, output);
+      assert.match(continued.message, /1 个小节正文结构不完整，已自动修复/);
+      assert.equal(recorded, 3, '确认后继续导出属于同一次点击，不重复计数');
+      assert.deepEqual(shown, [1, 2, 3], '继续导出结束后显示本次提醒');
+      // 取消确认即结束本次请求：显示本次提醒并清理待处理记录，重复取消不再显示。
+      const pending = await window.webContents.executeJavaScript("window.yibiao.export.exportWord({ source: 'technical-plan', requestId: 'structure-cancel' })");
+      assert.equal(pending.needsConfirmation, true);
+      assert.deepEqual(shown, [1, 2, 3]);
+      await window.webContents.executeJavaScript("window.yibiao.export.cancelWordConfirmation('structure-cancel')");
+      assert.deepEqual(shown, [1, 2, 3, 4], '取消确认时显示本次提醒');
+      await window.webContents.executeJavaScript("window.yibiao.export.cancelWordConfirmation('structure-cancel')");
+      assert.deepEqual(shown, [1, 2, 3, 4], '待处理记录已清理');
+      assert.equal(recorded, 4);
+    } finally { structure.restore(); }
+    console.log('真实 Electron preload/IPC：导出、进度、取消、取消时保留文件、结构问题确认后继续或取消、导出记录及提醒通过。');
   } finally {
     window.destroy();
     dialog.showSaveDialog = showSaveDialog;
@@ -173,6 +201,128 @@ async function checkOrderedListRestart(helper, directory) {
   console.log('有序列表：整本/小节、页框开关、独立重启、组内递增及显式起始值通过。');
 }
 
+/** 构造只含尺寸信息的 TIFF、EMF 和 WMF 文件头，覆盖 Word 原生图片格式的识别与尺寸读取。 */
+function metafileSamples() {
+  const tiff = Buffer.alloc(38);
+  tiff.write('II*\0', 0, 'latin1');
+  tiff.writeUInt32LE(8, 4);
+  tiff.writeUInt16LE(2, 8);
+  // 宽度用 SHORT、高度用 LONG，覆盖两种取值方式。
+  tiff.writeUInt16LE(256, 10); tiff.writeUInt16LE(3, 12); tiff.writeUInt32LE(1, 14); tiff.writeUInt16LE(3, 18);
+  tiff.writeUInt16LE(257, 22); tiff.writeUInt16LE(4, 24); tiff.writeUInt32LE(1, 26); tiff.writeUInt32LE(2, 30);
+  const emf = Buffer.alloc(88);
+  emf.writeUInt32LE(1, 0);
+  emf.writeUInt32LE(88, 4);
+  [0, 0, 99, 49].forEach((value, index) => emf.writeInt32LE(value, 8 + index * 4));
+  [0, 0, 4000, 2000].forEach((value, index) => emf.writeInt32LE(value, 24 + index * 4));
+  emf.write(' EMF', 40, 'latin1');
+  const standardWmfHeader = () => {
+    const header = Buffer.alloc(18);
+    header.writeUInt16LE(1, 0); header.writeUInt16LE(9, 2); header.writeUInt16LE(0x0300, 4);
+    return header;
+  };
+  const eof = Buffer.from([3, 0, 0, 0, 0, 0]);
+  const placeable = Buffer.alloc(22);
+  placeable.writeUInt32LE(0x9AC6CDD7, 0);
+  [0, 0, 300, 100].forEach((value, index) => placeable.writeInt16LE(value, 6 + index * 2));
+  placeable.writeUInt16LE(1440, 14);
+  const windowExt = Buffer.alloc(10);
+  windowExt.writeUInt32LE(5, 0); windowExt.writeUInt16LE(0x020C, 4); windowExt.writeInt16LE(100, 6); windowExt.writeInt16LE(250, 8);
+  return [
+    ['tiff', 'tif', tiff, 'image/tiff', 3, 2],
+    ['emf', 'emf', emf, 'image/x-emf', 4000, 2000],
+    ['wmf', 'wmf', Buffer.concat([placeable, standardWmfHeader(), eof]), 'image/x-wmf', 300, 100],
+    ['wmf-standard', 'wmf', Buffer.concat([standardWmfHeader(), windowExt, eof]), 'image/x-wmf', 250, 100],
+  ];
+}
+
+/** 用真实图片检查后缀错配、Word 内类型及比例，确认源字节不变，以及单张图片无法导出时原位提示且不中断转换。 */
+async function checkImageFormats(helper, directory, png) {
+  const { imageSize } = require('image-size');
+  const assetRoot = path.join(directory, '图片格式检查');
+  fs.mkdirSync(assetRoot, { recursive: true });
+  const samples = [
+    ['png', 'png', png],
+    ['jpeg', 'jpg', Buffer.from('/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAqADAAQAAAABAAAAAQAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAAQACAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAAwDAQACEQMRAD8A/IvxD/yH9S/6+Zv/AEM1j1seIf8AkP6l/wBfM3/oZrHr+qD+1D//2Q==', 'base64')],
+    ['gif', 'gif', Buffer.from('R0lGODdhAgABAJEAAAAAAAAA//8AAP///yH5BAQAAAAALAAAAAACAAEAAAICVAoAOw==', 'base64')],
+    ['bmp', 'bmp', Buffer.from('Qk0+AAAAAAAAADYAAAAoAAAAAgAAAP////8BABgAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAD//wAAAAA=', 'base64')],
+    ['webp', 'webp', fs.readFileSync(path.join(__dirname, '../assets/content-template-preview/standard-quality-control.webp'))],
+  ];
+  const images = [
+    ...samples.map(([type, extension, bytes]) => ({ type, extension, bytes, contentType: `image/${type}`, ...imageSize(bytes) })),
+    ...metafileSamples().map(([type, extension, bytes, contentType, width, height]) => ({ type, extension, bytes, contentType, width, height })),
+  ].flatMap(image => [image.extension, image.extension === 'png' ? 'jpg' : 'png']
+    .map((suffix, index) => ({ ...image, reference: `${image.type}-${index} 中文图.${suffix}` })));
+  const figure = reference => '<figure data-yb-size="wide" data-yb-fit="contain"><img data-yb-asset-ref="' + reference + '"></figure>';
+  for (const image of images) fs.writeFileSync(path.join(assetRoot, image.reference), image.bytes);
+  const html = images.map(image => figure(image.reference)).join('');
+  const config = cloneDefaultExportFormat();
+  // 读取图片在 Word 包内的部件、声明类型和画框比例。
+  const embedded = ({ zip, $, rels }, drawing) => {
+    const id = $(drawing).find('a\\:blip').attr('r:embed');
+    const target = rels('Relationship').filter((_, element) => rels(element).attr('Id') === id).attr('Target');
+    assert.ok(target, id);
+    const entry = target.startsWith('/') ? target.slice(1) : path.posix.join('word', target);
+    const types = cheerio.load(zip.readAsText('[Content_Types].xml'), { xmlMode: true });
+    const contentType = types('Override').filter((_, element) => types(element).attr('PartName') === '/' + entry).attr('ContentType')
+      || types('Default').filter((_, element) => types(element).attr('Extension') === path.posix.extname(entry).slice(1)).attr('ContentType');
+    const extent = $(drawing).find('wp\\:extent');
+    return { bytes: zip.readFile(entry), contentType, ratio: Number(extent.attr('cx')) / Number(extent.attr('cy')) };
+  };
+  for (const wholeDocument of [false, true]) {
+    const render = body => helper.createRestrictedHtmlDocx(wholeDocument
+      ? '<section data-yb-export-template="true" data-yb-export-page-template="true">' + body + '</section>' : body,
+    config, { assetRoot, copyAssets: true, wholeDocument });
+    const output = await render(html);
+    assert.deepEqual(output.imageWarnings, []);
+    const document = readWord(Buffer.from(output.bytes));
+    const drawings = document.$('w\\:drawing').toArray();
+    assert.equal(drawings.length, images.length);
+    images.forEach((image, index) => {
+      const result = embedded(document, drawings[index]);
+      assert.equal(result.contentType, image.contentType, image.reference);
+      assert.deepEqual(result.bytes, image.bytes, 'Word 应保留原始图片字节');
+      assert.ok(Math.abs(result.ratio - image.width / image.height) < 0.00001, '图片应按真实宽高比例排版：' + image.reference);
+      assert.deepEqual(fs.readFileSync(path.join(assetRoot, image.reference)), image.bytes, '源图片不可改写');
+    });
+
+    // 能按文件头识别但读不到尺寸：原字节按 wide 画框（3:2）放置，不报错。
+    const invalidSize = Buffer.from(png);
+    invalidSize.writeInt32BE(0, 16);
+    for (const [name, bytes] of [['截断图片.png', png.subarray(0, 12)], ['零宽图片.png', invalidSize]]) {
+      fs.writeFileSync(path.join(assetRoot, name), bytes);
+      const fallback = await render(figure(name));
+      assert.deepEqual(fallback.imageWarnings, [], name);
+      const fallbackWord = readWord(Buffer.from(fallback.bytes));
+      const result = embedded(fallbackWord, fallbackWord.$('w\\:drawing')[0]);
+      assert.equal(result.contentType, 'image/png', name);
+      assert.ok(Math.abs(result.ratio - 1.5) < 0.001, '尺寸未知时按画框放置：' + name);
+    }
+
+    // 文件头无法识别、扩展名声明了无法核对的图片类型：按声明类型原样嵌入，交给 Word 显示。
+    const jxr = Buffer.concat([Buffer.from([0x49, 0x49, 0xBC, 0x01]), Buffer.alloc(28, 7)]);
+    fs.writeFileSync(path.join(assetRoot, '原样嵌入.wdp'), jxr);
+    const passthrough = await render(figure('原样嵌入.wdp'));
+    assert.deepEqual(passthrough.imageWarnings, []);
+    const passthroughWord = readWord(Buffer.from(passthrough.bytes));
+    const declared = embedded(passthroughWord, passthroughWord.$('w\\:drawing')[0]);
+    assert.equal(declared.contentType, 'image/vnd.ms-photo');
+    assert.deepEqual(declared.bytes, jxr, '未知格式应保留原始字节');
+    assert.ok(Math.abs(declared.ratio - 1.5) < 0.001, '未知格式按画框放置');
+
+    // 无法识别且扩展名与内容不符：原位改为文字提示并保留图注，其余图文照常导出。
+    fs.writeFileSync(path.join(assetRoot, '非图片.png'), Buffer.from('这是一段文字，不是图片', 'utf8'));
+    const mixed = await render(`<p>图前正文</p><figure data-yb-size="wide"><img alt="坏图说明" data-yb-asset-ref="非图片.png"><figcaption>坏图图注</figcaption></figure>${figure(images[0].reference)}<p>图后正文</p>`);
+    assert.deepEqual(mixed.imageWarnings, [{ assetRef: '非图片.png', reason: '无法识别图片格式' }]);
+    const mixedWord = readWord(Buffer.from(mixed.bytes));
+    const text = mixedWord.$('w\\:body').text();
+    for (const expected of ['图前正文', '[图片无法导出：坏图说明]', '坏图图注', '图后正文']) assert.ok(text.includes(expected), expected);
+    assert.ok(!text.includes('YIBIAO'), '图注标记应被移除');
+    assert.equal(mixedWord.$('w\\:drawing').length, 1, '其他图片照常导出');
+  }
+  console.log('图片格式：整本/小节的八种真实格式、后缀错配、Word 类型、尺寸比例、原字节保留、尺寸兜底、未知格式原样嵌入及坏图原位提示通过。');
+}
+
 /** 检查混合范围、排序编号、图片表格、错误定位，以及源文件不受导出影响。 */
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '整本Word导出检查-'));
@@ -235,6 +385,7 @@ async function main() {
   const progress = [];
   const build = () => exporter.build(exporter.prepare(), { onProgress: event => progress.push(event.progress), stats: {} });
   try {
+    await checkImageFormats(helper, directory, png);
     await checkOrderedListRestart(helper, directory);
     fs.mkdirSync(path.join(workspaceDir, '正文'), { recursive: true });
     fs.mkdirSync(path.join(workspaceDir, '原图'), { recursive: true });
@@ -426,6 +577,23 @@ async function main() {
     await expectSkipped({ title: '施工 & 安全', reason: '有图片未生成完成', skippedText: '现场施工正文', keptText: '交付验收正文' });
     await assert.rejects(layoutBuild(), /施工 & 安全.*现场 图片/s);
     fs.renameSync(path.join(workspaceDir, '原图/暂存.png'), path.join(workspaceDir, '原图/现场 图片.png'));
+    // 单张图片无法导出：原位改为文字提示并按小节提示，其余图文照常导出；格式自检同样不中断。
+    fs.writeFileSync(path.join(workspaceDir, '原图/坏图.png'), Buffer.from('不是图片', 'utf8'));
+    fs.writeFileSync(original, `${originalBody}<figure data-yb-size="wide"><img data-yb-asset-ref="原图/坏图.png"><figcaption>坏图图注</figcaption></figure>`, 'utf8');
+    const manual = children.find(child => child.id === 'manual');
+    const manualContent = manual.content;
+    manual.content = `${manualContent}\n\n![坏人工图](不存在的人工图.png)`;
+    const imageOutput = await build();
+    assert.ok(imageOutput.warnings.some(warning => /交付节点 有 1 张图片无法导出.*无法识别图片格式/.test(warning)), imageOutput.warnings.join('\n'));
+    assert.ok(imageOutput.warnings.some(warning => /人工资料 有 1 张图片无法导出/.test(warning)), imageOutput.warnings.join('\n'));
+    assert.match(imageOutput.message, /2 张图片无法导出，已在原位置用文字标出/);
+    const imageWord = readWord(imageOutput.buffer);
+    const imageText = imageWord.$('w\\:body').text();
+    for (const expected of ['交付验收正文', '[图片无法导出]', '坏图图注', '[图片无法导出：坏人工图]', '现场施工正文']) assert.ok(imageText.includes(expected), expected);
+    assert.equal(imageWord.$('w\\:drawing').length, 2, '其他图片照常导出');
+    assert.ok((await layoutBuild()).buffer.length > 0, '格式自检遇到坏图不中断');
+    manual.content = manualContent;
+    fs.writeFileSync(original, originalBody, 'utf8');
     const withoutWorkspace = createTechnicalPlanExport({
       technicalPlanStore: { loadTechnicalPlan: () => state },
       templateStore: { getTemplate: () => ({ config }) },
@@ -436,11 +604,38 @@ async function main() {
     assert.equal(empty.warnings.length, 2);
     assert.match(empty.message, /2 个 AI 小节未完成/);
     assert.ok(readWord(empty.buffer).$('w\\:body').text().includes('人工正文'), '工作区不存在时非 AI 小节照常导出');
-    console.log('未完成小节：缺失、空正文、缺引用、缺图片及无工作区均跳过正文并提示，格式自检保持严格报错。');
+    console.log('未完成小节：缺失、空正文、缺引用、缺图片及无工作区均跳过正文并提示，格式自检保持严格报错；坏图原位提示且不中断导出。');
+    // 前一节 figure 未闭合、后面还有图：导出前列出问题；继续导出时按节修复，后续小节和图片不再被吞并；格式自检保持严格。
+    const unclosed = `${originalBody}${figure.replace('</figure>', '')}`;
+    fs.writeFileSync(original, unclosed, 'utf8');
+    const structureIssues = exporter.inspect(exporter.prepare());
+    assert.deepEqual(structureIssues.map(issue => issue.section), ['1.1 交付节点']);
+    assert.ok(structureIssues[0].problems.some(problem => problem.includes('缺少结束标签 </figure>')));
+    const repairedOutput = await build();
+    assert.ok(repairedOutput.warnings.some(warning => /交付节点.*正文结构不完整.*已自动修复/.test(warning)));
+    assert.match(repairedOutput.message, /1 个小节正文结构不完整，已自动修复/);
+    const repairedWord = readWord(repairedOutput.buffer);
+    for (const text of ['交付验收正文', '人工正文', '现场施工正文']) assert.ok(repairedWord.$('w\\:body').text().includes(text), text);
+    assert.equal(repairedWord.$('w\\:drawing').length, 3, '修复后三张图均导出');
+    await assert.rejects(layoutBuild(), /交付节点.*正文结构不完整/s);
+    fs.writeFileSync(original, originalBody, 'utf8');
+    assert.deepEqual(exporter.inspect(exporter.prepare()), []);
+    // 提示词结束标签写成工具调用标记：图片、图注及本节后续正文并入模板；继续导出时补齐标签，图片和正文均保留。
+    fs.writeFileSync(original, `<figure data-yb-size="wide" data-yb-fit="contain"><template data-yb-role="prompt">现场提示词</｜｜DSML｜｜ parameter>\n<img data-yb-asset-ref="原图/现场 图片.png"><figcaption>标记图注</figcaption></figure>\n${originalBody}`, 'utf8');
+    const markedIssues = exporter.inspect(exporter.prepare());
+    assert.match(markedIssues[0].problems[0], /第 1 行出现异常结束标记/);
+    const markedOutput = await build();
+    assert.ok(markedOutput.warnings.some(warning => /交付节点.*补齐 1 处提示词结束标签/.test(warning)));
+    const markedWord = readWord(markedOutput.buffer);
+    for (const text of ['标记图注', '交付验收正文', '人工正文', '现场施工正文']) assert.ok(markedWord.$('w\\:body').text().includes(text), text);
+    assert.equal(markedWord.$('w\\:drawing').length, 3, '补齐后图片不随 figure 删除');
+    fs.writeFileSync(original, originalBody, 'utf8');
+    console.log('正文结构：未闭合 figure 及提示词异常标记导出前提示、继续导出按节修复且不丢图文、格式自检严格报错。');
     assert.equal(fs.readdirSync(path.join(app.getPath(), 'workspace')).some(name => name.startsWith('restricted-html-assets-')), false);
     assert.ok(progress.includes(55));
     assert.ok(progress.every(value => value < 100));
-    if (process.versions.electron) await checkIpc(exporter, directory);
+    if (process.versions.electron) await checkIpc(exporter, directory, { label: '1.1 交付节点',
+      apply: () => fs.writeFileSync(original, unclosed, 'utf8'), restore: () => fs.writeFileSync(original, originalBody, 'utf8') });
     // 一份较长正文覆盖整本转换，不额外构造多套测试框架。
     fs.writeFileSync(original, '<p>这是长篇技术方案正文，用于检查整本转换时是否完整保留段落。</p>'.repeat(3000), 'utf8');
     const started = performance.now();

@@ -18,6 +18,10 @@ sealed class RenderRestrictedHtmlDocxRequest
     [JsonPropertyName("asset_root")]
     public string AssetRoot { get; set; } = "";
 
+    /// <summary>Main 按配图扩展名声明的图片类型，键为 data-yb-asset-ref；仅在文件头无法识别时用于原样嵌入。</summary>
+    [JsonPropertyName("asset_types")]
+    public Dictionary<string, string>? AssetTypes { get; set; }
+
     [JsonPropertyName("export_format")]
     public JsonElement ExportFormat { get; set; }
 
@@ -74,9 +78,11 @@ static class RenderRestrictedHtmlDocxAction
                 request.Html,
                 request.ExportFormat,
                 chrome,
-                request.WholeDocument);
+                request.WholeDocument,
+                request.AssetTypes);
             var result = JobResult.Success(Name, outputName, rendered.BlockCount);
             result.ParagraphRoles = rendered.ParagraphRoles;
+            result.ImageWarnings = rendered.ImageWarnings;
             return result;
         }
         catch (Exception exception)

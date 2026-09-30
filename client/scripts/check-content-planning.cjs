@@ -103,15 +103,20 @@ checkContentPlanning();
 // 检查比例以全文为分母、向下取整、同分顺序及 0 分不足不补足。
 function checkImageSelection() {
   for (const [scores, quantity, expected] of [
-    [[0, 8, 10, 8, 3, 0, 9], 'none', []],
-    [[0, 8, 10, 8, 3, 0, 9], 'light', [2, 6]],
-    [[0, 8, 10, 8, 3, 0, 9], 'heavy', [2, 6, 1, 3]],
-    [[8, 8, 8, 8, 8], 'heavy', [0, 1, 2]],
-    [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 'heavy', [0]],
-    [[0, 0, 0, 0, 0], 'heavy', []],
-    [[10], 'light', []],
-    [[10], 'heavy', []],
-    [[], 'none', []],
+    [[0, 8, 10, 8, 3, 0, 9], 0, []],
+    [[0, 8, 10, 8, 3, 0, 9], 30, [2, 6]],
+    [[0, 8, 10, 8, 3, 0, 9], 60, [2, 6, 1, 3]],
+    [[8, 8, 8, 8, 8], 60, [0, 1, 2]],
+    [[1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 60, [0]],
+    [[0, 0, 0, 0, 0], 60, []],
+    [[10], 30, []],
+    [[10], 60, []],
+    [[], 0, []],
+    [Array(90).fill(8), 70, Array.from({ length: 63 }, (_, index) => index)],
+    [[10], 100, [0]],
+    [[0, 8, 10, 8, 3, 0, 9], 100, [2, 6, 1, 3, 4]],
+    [[10, 9, 8, 7, 6, 5, 4, 3, 2, 1], 10, [0]],
+    [[10, 9, 8, 7, 6, 5, 4, 3, 2, 1], 50, [0, 1, 2, 3, 4]],
   ]) {
     const leaves = scores.map((score, index) => ({ item: { id: String(index) } }));
     const plans = Object.fromEntries(scores.map((score, index) => [String(index), { plan: { image_suitability_score: score } }]));
@@ -137,7 +142,7 @@ function checkImageSelectionPersistence() {
   let saved;
   const scope = {
     ...runtime, leaves, storedContentPlans: storedPlans, contentPlans: new Map([['9', changedPlan]]),
-    wordControl: {}, tableRequirement: 'none', imageQuantity: 'light', logs: [], sections: {},
+    wordControl: {}, tableRequirement: 'none', imageQuantity: 30, logs: [], sections: {},
     syncRuntime: () => ({}), statsSnapshot: () => ({}), progressFor: () => 0,
     checkpointTask: (_task, patch) => { saved = JSON.parse(JSON.stringify(patch.contentGenerationPlans)); },
   };
@@ -159,7 +164,7 @@ function checkImageSelectionPersistence() {
   const agentOutline = runtime.buildContentPlanningOutline(leaves.map(({ item }) => item), saved);
   assert.equal(agentOutline.some(item => item.content_plan && Object.hasOwn(item.content_plan, 'image_needed')), false, '标记不交给 Agent 决定');
   assert.equal(validateSchema({ plans: agentOutline.filter(item => item.content_plan).map(({ id, content_plan }) => ({ id, content_plan })) }), true);
-  scope.imageQuantity = 'none';
+  scope.imageQuantity = 0;
   scope.persist([leaves[9]], generatedPlans);
   assert.equal(saved['9'].plan.image_needed, false, '无图只改变本次目标标记');
   assert.deepEqual(saved['1'], originalOther);
@@ -184,7 +189,7 @@ async function checkPlanningPauseOrder() {
     const scope = {
       ...runtime, leaves, tasksToRun: single ? [leaves[3]] : leaves,
       contentPlans: new Map(), storedContentPlans: {}, contentStats: {}, logs: [], sections: {},
-      wordControl: {}, tableRequirement: 'heavy', imageQuantity: 'light', runLimits: { maxTablesForRun: null },
+      wordControl: {}, tableRequirement: 'heavy', imageQuantity: 30, runLimits: { maxTablesForRun: null },
       resume: false, storedPlan: {},
       refreshRunLimits() {}, getReusableStoredContentPlan: () => null,
       getOriginalMaterialRuntimeState: () => ({ originalMaterial: {} }),

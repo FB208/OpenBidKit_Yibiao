@@ -5,6 +5,8 @@ const { load } = require('cheerio');
 const { applyRangeEdits } = require('../utils/textEdit.cjs');
 const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 const { AI_IMAGE_STYLES } = require('./aiImageStyles.cjs');
+const { TASK_DIR, LIST_DIR, TASK_FILE_WRITING, taskFilePath, readTaskFile, writeListFile, compactResults } = require('./contentGenerationTaskFiles.cjs');
+const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
 
 const AI_IMAGE_STYLE_OPTIONS = Object.entries(AI_IMAGE_STYLES).map(([key, { label, usage }]) => `${key}=${label}（${usage}）`).join('；');
 
@@ -100,10 +102,12 @@ function buildImageSourcePrompt(kind, frameSize) {
 }
 
 // 图片与独立源码均保存在当前工作区；源码生成使用文本队列，转图继续复用本地渲染。
-function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, sections = [], getSections = () => sections, beforeApply = () => {} }, { Type, workspaceDir }) {
-  // 进度只发给业务程序，不增加模型上下文或工具调用。
+// 任务从 taskDir 下的任务文件读取，完整图片清单写入 listDir；单节修改使用独立子目录。
+// 服务端连续失败时 failTask 结束所属任务，本批已完成图片仍随工具结果保留。
+function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, sections = [], getSections = () => sections, beforeApply = () => {}, failTask = () => {}, taskDir = TASK_DIR, listDir = LIST_DIR }, { Type, workspaceDir }) {
+  // 进度只发给业务程序，不增加模型上下文或工具调用；已有图片跳过的项按完成展示。
   const report = (step, label, items, extra = {}) => onActivity?.({ progress: { step, label, unit: '张', items, ...extra } });
-  const imageProgress = result => ({ id: result.image_id, status: result.status || 'rendering', kind: result.kind,
+  const imageProgress = result => ({ id: result.image_id, status: result.status === 'skipped' ? 'success' : result.status || 'rendering', kind: result.kind,
     source_ready: Boolean(result.source_file), source_file: result.source_file, asset_ref: result.asset_ref });
   // 图片和源码每次生成独立文件，失败或重新生成不会覆盖已有产物。
   function saveImage(buffer, extension) {
@@ -163,7 +167,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     return items.map(item => results.get(item.image_id));
   }
 
-  // 生成前读取最新正文确认图片位置，记录原引用供成功后回填；找不到的图片不请求模型。
+  // 生成前读取最新正文确认图片位置，记录原引用供成功后回填及跳过已完成图片；找不到的图片不请求模型。
   function readImageReferences(images) {
     const targets = getTargets();
     const references = new Map();
@@ -171,13 +175,19 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     for (const id of new Set(images.map(image => decodeURIComponent(image.image_id.split('/')[0])))) {
       try {
         if (!targets.has(id)) throw new Error('图片不属于本次目标小节，请使用清单中的 image_id');
-        for (const image of readSectionImages(workspaceDir, targets.get(id)).images) references.set(image.image_id, image.asset_ref);
+        for (const image of readSectionImages(workspaceDir, targets.get(id)).images) references.set(image.image_id, image);
       } catch (error) { errors.set(id, error.message); }
     }
     return image => {
       if (image.image_id.split('/').length === 2 && references.has(image.image_id)) return references.get(image.image_id);
       throw new Error(errors.get(decodeURIComponent(image.image_id.split('/')[0])) || `正文中不存在该图片，请使用清单中的 image_id：${image.image_id}`);
     };
+  }
+
+  // 已有有效图片视为完成，重复提交同一任务文件不重新生成；regenerate 明确要求替换，原方案图片始终复用。
+  function completedImage(current, image) {
+    if (current.reused_original && !current.asset_exists) throw new Error('原方案图片不重新生成，请修复原图引用');
+    return current.asset_exists && (current.reused_original || !image.regenerate);
   }
 
   // 首次生成和源码修复共用转图逻辑；源码一就绪即进入已有本地队列。
@@ -204,46 +214,63 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
     combinedSignal.throwIfAborted();
     beforeApply();
-    if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一批图片的 image_id 不能重复');
-    const previousReference = readImageReferences(images);
-    report('images', '正在生成图片与本地转图', images.map(image => ({ id: image.image_id, kind: image.kind, status: image.source_file ? 'rendering' : 'generating', source_ready: Boolean(image.source_file) })));
+    if (new Set(images.map(image => image.image_id)).size !== images.length) throw new Error('同一任务文件中图片的 image_id 不能重复');
+    const currentImage = readImageReferences(images);
+    const skipped = image => { try { return completedImage(currentImage(image), image); } catch { return false; } };
+    report('images', '正在生成图片与本地转图', images.map(image => skipped(image)
+      ? { id: image.image_id, kind: image.kind, status: 'success', asset_ref: currentImage(image).asset_ref }
+      : { id: image.image_id, kind: image.kind, status: image.source_file ? 'rendering' : 'generating', source_ready: Boolean(image.source_file) }));
     let completed = 0;
+    const guard = createAiBatchGuard({ signal: combinedSignal });
     const results = await Promise.all(images.map(async image => {
       const result = { image_id: image.image_id, kind: image.kind,
         ...(image.source_file ? { source_file: image.source_file } : {}),
         ...(image.kind === 'html' ? { frame_size: image.frame_size } : {}),
         stage: image.source_file ? 'render' : 'generate' };
       try {
-        combinedSignal.throwIfAborted();
-        const previous = previousReference(image);
-        await processImage(image, result, combinedSignal);
-        if (result.status === 'success') {
-          result.stage = 'complete';
-          // 回填为同步读写，成功图片不因随后暂停而丢失；失败保留图片地址供批量回填工具重试。
-          const [applied] = applyImageReferences([{ image_id: image.image_id, asset_ref: result.asset_ref, previous_asset_ref: previous }]);
-          Object.assign(result, applied.status === 'success' ? { applied: true } : { applied: false, previous_asset_ref: previous, apply_error: applied.error });
+        guard.signal.throwIfAborted();
+        const current = currentImage(image);
+        if (completedImage(current, image)) {
+          Object.assign(result, { status: 'skipped', stage: 'complete', asset_ref: current.asset_ref });
+        } else {
+          await processImage(image, result, guard.signal);
+          guard.success();
+          if (result.status === 'success') {
+            result.stage = 'complete';
+            // 回填为同步读写，成功图片不因随后暂停而丢失；失败保留图片地址供批量回填工具重试。
+            const [applied] = applyImageReferences([{ image_id: image.image_id, asset_ref: result.asset_ref, previous_asset_ref: current.asset_ref }]);
+            Object.assign(result, applied.status === 'success' ? { applied: true } : { applied: false, previous_asset_ref: current.asset_ref, apply_error: applied.error });
+          }
         }
       } catch (error) {
-        Object.assign(result, { status: combinedSignal.aborted ? 'cancelled' : 'error', error: error.message });
+        const cancelled = isBatchCancelled(error, guard.signal);
+        if (!cancelled) guard.failure(error);
+        Object.assign(result, { status: cancelled ? 'cancelled' : 'error', error: error.message });
       }
       report('images', '正在生成图片与本地转图', [imageProgress(result)]);
       onUpdate?.(toolResult({ completed: ++completed, total: images.length, result }));
       return result;
     }));
+    // 与暂停一样先保留本批结果，再由所属任务以服务端错误结束。
+    if (guard.error) failTask(guard.error);
     const applied = results.filter(result => result.applied !== undefined);
     if (applied.length) report('image-apply', '正在回填图片地址', applied.map(result => ({ id: result.image_id, status: result.applied ? 'success' : 'error' })));
-    const unresolved = results.filter(result => result.status !== 'success' || !result.applied);
-    const cancelled = combinedSignal.aborted ? { cancelled: true } : {};
-    const output = toolResult({ results, ...cancelled }, { total: results.length, applied: results.length - unresolved.length, unresolved, ...cancelled });
+    const unresolved = results.filter(result => result.status !== 'skipped' && (result.status !== 'success' || !result.applied));
+    const cancelled = guard.signal.aborted ? { cancelled: true } : {};
+    const output = toolResult({ results, ...cancelled }, { total: results.length, applied: applied.filter(result => result.applied).length,
+      skipped: results.filter(result => result.status === 'skipped').length, unresolved, ...cancelled });
     if (unresolved.length) output.isError = true;
     return output;
   }
 
   // 主流程在编排与还原后提供最终目标；单节修改仍直接传入固定目标。
   const getTargets = () => new Map(getSections().map(section => [section.id, section]));
+  const listFile = `${listDir}/正文图片清单.json`;
+  const taskFile = key => taskFilePath(key, taskDir);
+  const skipNote = '对应图片已有有效引用时自动跳过，重复提交同一任务文件不会重新生成；需要替换已有图片时该项加 "regenerate": true，原方案图片不重新生成。';
   return [{
     name: 'list-section-images', label: '读取正文图片清单', executionMode: 'sequential',
-    description: '读取本轮目标小节的最新 HTML，按小节返回每张图片的 image_id、生成方式、比例、适配方式、提示词、图注、当前引用及文件存在状态；没有图片的小节不列出。summary 汇总本轮新增图片数、生成方式分布、各布局组数，以及缺少图注、data-yb-fit 或有效引用的 image_id，布局核对和分布统计直接使用 summary。image_id 原样传给图片工具及回填工具，不自行拼接。reused_original 为原方案图片，只复用、不重新生成。默认读取全部目标，可按 section_ids 只刷新待修复小节。',
+    description: `读取本轮目标小节的最新 HTML，整理每张图片的 image_id、生成方式、比例、适配方式、提示词、图注、当前引用及文件存在状态；没有图片的小节不列出。不传 section_ids 时读取全部目标，完整清单写入 ${listFile}，返回 summary：本轮新增图片数、生成方式分布、各布局组数，以及缺少图注、data-yb-fit 或有效引用的图片数量；具体 image_id 见清单文件中的 summary，布局核对和分布统计直接使用 summary。传 section_ids 时只读取这些小节，直接返回其图片明细，不改写清单文件。image_id 原样传给图片工具及回填工具，不自行拼接。reused_original 为原方案图片，只复用、不重新生成。`,
     parameters: Type.Object({ section_ids: Type.Optional(Type.Array(Type.String(), { uniqueItems: true })) }, { additionalProperties: false }),
     async execute(_callId, { section_ids }, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
@@ -277,54 +304,45 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       };
       const items = images.filter(image => !image.reused_original).map(image => ({ id: image.image_id, kind: ({ aiImage: 'ai', htmlImage: 'html', mermaid: 'mermaid' })[image.generation], ...(image.asset_exists ? { status: 'success', asset_ref: image.asset_ref } : {}) }));
       if (results.every(result => result.status === 'success')) report('images', `图片清单已整理，复用原图 ${images.filter(image => image.reused_original).length} 张`, items, { inventory: results.filter(result => result.status === 'success').map(result => result.section_id) });
-      return toolResult({ summary, results: results.filter(result => result.status !== 'success' || result.images.length) });
+      const listed = results.filter(result => result.status !== 'success' || result.images.length);
+      if (section_ids) return toolResult({ summary, results: listed });
+      // 全量清单随小节数增长，写入文件供按需读取；模型只接收数量统计和读取失败的小节。
+      const { missing_caption, missing_fit, missing_asset, ...counts } = summary;
+      const errors = results.filter(result => result.status !== 'success');
+      const file = writeListFile(workspaceDir, 'images', { summary, results: listed }, listDir);
+      return toolResult({ summary, results: listed, file }, { file, summary: { ...counts, missing_caption_count: missing_caption.length,
+        missing_fit_count: missing_fit.length, missing_asset_count: missing_asset.length }, ...(errors.length ? { errors } : {}) });
     },
   }, {
     name: 'apply-section-images', label: '批量回填正文图片', executionMode: 'sequential',
-    description: '图片工具已自动回填成功图片，本工具只用于重试 applied=false 的项或修复原图引用。image_id 使用清单标识，asset_ref 使用图片工具返回值，previous_asset_ref 使用图片工具返回的 previous_asset_ref 或清单中的原引用（未填写时为空字符串）。按小节合并保存，只修改 img 的 data-yb-asset-ref。引用已变化则先刷新清单；同一地址重复提交不会重复修改。未成功的项不要提交，原图直接复用。检查每项结果，只在本次所需回填全部成功后标记任务完成。',
-    parameters: Type.Object({ images: Type.Array(Type.Object({
-      image_id: Type.String({ minLength: 1 }), asset_ref: Type.String({ minLength: 1 }), previous_asset_ref: Type.String(),
-    }, { additionalProperties: false }), { minItems: 1 }) }, { additionalProperties: false }),
-    async execute(_callId, { images }, toolSignal) {
+    description: `图片工具已自动回填成功图片，本工具只用于重试 applied=false 的项或修复原图引用。读取 ${taskFile('applyImages')} 中的全部回填项并提交，格式为 {"images":[{"image_id":"清单标识","asset_ref":"图片工具返回的 asset_ref","previous_asset_ref":"图片工具返回的 previous_asset_ref 或清单中的原引用，未填写时为空字符串"}]}。${TASK_FILE_WRITING}按小节合并保存，只修改 img 的 data-yb-asset-ref。引用已变化则先刷新清单；同一地址重复提交不会重复修改。未成功的项不要写入，原图直接复用。返回 total、success 和 unresolved（回填失败的项及原因），只在本次所需回填全部成功后标记任务完成。`,
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_callId, _params, toolSignal) {
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
       beforeApply();
+      const { images } = readTaskFile(workspaceDir, 'applyImages', taskDir);
       report('image-apply', '正在回填图片地址', images.map(image => ({ id: image.image_id, status: 'running' })));
-      if (new Set(images.map(item => item.image_id)).size !== images.length) throw new Error('同一批回填的 image_id 不能重复');
+      if (new Set(images.map(item => item.image_id)).size !== images.length) throw new Error('同一任务文件中回填的 image_id 不能重复');
       const ordered = applyImageReferences(images, combinedSignal);
       report('image-apply', '正在回填图片地址', ordered.map(item => ({ id: item.image_id, status: item.status })));
-      return toolResult({ results: ordered });
+      return toolResult({ results: ordered }, compactResults(ordered));
     },
   }, {
     name: 'generate-section-images', label: '批量生成正文图片', executionMode: 'sequential',
-    description: `通过 images 一次提交本轮全部待生成 AI、HTML、Mermaid 图片，image_id 原样使用正文图片清单标识，不按类型或小批次拆分。AI 使用生图队列，HTML/Mermaid 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列；超限自动排队。每张成功后程序立即回填正文图片引用，无须再调用回填工具。返回 total、applied（已成功并回填的数量）和 unresolved；unresolved 只列未成功或回填失败的项，含 status、stage、asset_ref、source_file、error，回填失败另有 apply_error 与 previous_asset_ref，可刷新清单后用回填工具重试。${htmlImageOptimization ? 'HTML 返回 needs_repair 时，按 layout_issues 修改源码后转图，直到成功。' : ''}有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。暂停结果保留已完成产物，恢复仅补未完成项。`,
-    parameters: Type.Object({ images: Type.Array(Type.Union(['ai', 'html', 'mermaid'].map(kind => Type.Object({
-      image_id: Type.String({ minLength: 1, description: '正文图片清单中的 image_id，批内唯一。' }),
-      kind: Type.Literal(kind),
-      prompt: Type.String({ minLength: 1, description: kind === 'ai'
-        ? '按主体、可见元素、视角景别与构图、环境光线依次正向描述画面，写出区分本图的具体视觉元素；保留与正文画框一致的宽高比例及构图方向。画面形式由 style 决定，不写冲突的风格描述；品牌、水印和无关文字的限制由程序统一追加，无须重复罗列。'
-        : '图片表达目的、准确内容和数据；保留与正文画框一致的宽高比例及构图方向，不只给文件路径或要求模型检索。' }),
-      ...(kind === 'ai' ? {
-        size: Type.String({ minLength: 1, pattern: '\\S', description: '逐图依据正文 data-yb-size 选择对应比例的具体尺寸：square=1:1、wide=3:2、tall=3:4、panorama=16:9；当前金龙 gpt-image-2-1k 的 tall 使用 768x1024。不得传画框名称或省略尺寸。' }),
-        title: Type.Optional(Type.String({ description: '简短图名，便于区分每张图片。' })),
-        style: Type.Union(Object.keys(AI_IMAGE_STYLES).map(value => Type.Literal(value)), { description: `必填，按该图 template 中注明的画面形式选择：${AI_IMAGE_STYLE_OPTIONS}。` }),
-      } : kind === 'html' ? {
-        frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。' }),
-      } : {}),
-    }, { additionalProperties: false }))), { minItems: 1 }) }, { additionalProperties: false }),
-    async execute(_callId, { images }, toolSignal, onUpdate) {
+    description: `读取 ${taskFile('images')} 中的全部图片任务并提交生成，格式为 {"images":[{"image_id":"清单标识","kind":"ai/html/mermaid","prompt":"…"}]}。image_id 原样使用正文图片清单标识，文件内唯一；kind 为 ai、html 或 mermaid。AI 项 prompt 按主体、可见元素、视角景别与构图、环境光线依次正向描述画面，写出区分本图的具体视觉元素，保留与正文画框一致的宽高比例及构图方向；画面形式由 style 决定，不写冲突的风格描述，品牌、水印和无关文字的限制由程序统一追加，无须重复罗列。AI 项必填 size：逐图依据正文 data-yb-size 选择对应比例的具体尺寸，square=1:1、wide=3:2、tall=3:4、panorama=16:9，当前金龙 gpt-image-2-1k 的 tall 使用 768x1024，不得传画框名称或省略尺寸；必填 style，按该图 template 中注明的画面形式选择：${AI_IMAGE_STYLE_OPTIONS}；可选 title 为简短图名。HTML/Mermaid 项 prompt 写明图片表达目的、准确内容和数据，保留与正文画框一致的宽高比例及构图方向，不只给文件路径或要求模型检索；HTML 项必填 frame_size，与正文 figure 的 data-yb-size 一致。${skipNote}${TASK_FILE_WRITING}AI 使用生图队列，HTML/Mermaid 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列；超限自动排队。每张成功后程序立即回填正文图片引用，无须再调用回填工具。返回 total、applied（本次成功并回填的数量）、skipped（已有图片跳过的数量）和 unresolved；unresolved 只列未成功或回填失败的项，含 status、stage、asset_ref、source_file、error，回填失败另有 apply_error 与 previous_asset_ref，可刷新清单后用回填工具重试。${htmlImageOptimization ? 'HTML 返回 needs_repair 时，按 layout_issues 修改源码后转图，直到成功。' : ''}有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。暂停结果保留已完成产物，恢复仅补未完成项。`,
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_callId, _params, toolSignal, onUpdate) {
+      const { images } = readTaskFile(workspaceDir, 'images', taskDir);
       return runImageBatch(images, toolSignal, onUpdate, async (image, result, combinedSignal) => {
         const { image_id, kind, prompt, frame_size } = image;
         if (kind === 'ai') {
-          const { image_id: _id, kind: _kind, ...params } = image;
-          if (!params.size?.trim()) throw new Error('请补充本张 AI 图片的 size，尺寸比例应与正文画框一致');
-          if (!Object.hasOwn(AI_IMAGE_STYLES, params.style)) throw new Error(`请为本张 AI 图片选择有效的 style：${Object.keys(AI_IMAGE_STYLES).join('、')}`);
+          const { image_id: _id, kind: _kind, regenerate: _regenerate, ...params } = image;
           const generated = await aiService.generateImage({ ...params, signal: combinedSignal });
           combinedSignal.throwIfAborted();
           // 生图服务的本地路径和预览地址只供程序复制，不写入模型上下文。
           Object.assign(result, { status: 'success', asset_ref: saveImage(fs.readFileSync(generated.file_path), path.extname(generated.file_path)) });
         } else {
-          if (!['html', 'mermaid'].includes(kind)) throw new Error('图片 kind 必须为 ai、html 或 mermaid');
           const response = await aiService.chat({
             signal: combinedSignal, logTitle: `Agent 配图源码-${kind}-${image_id}`,
             messages: [{ role: 'system', content: buildImageSourcePrompt(kind, frame_size) }, { role: 'user', content: prompt }],
@@ -339,17 +357,12 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     },
   }, ...['html', 'mermaid'].map(kind => ({
     name: `render-${kind}-image`, label: kind === 'html' ? '批量 HTML 转图片' : '批量 Mermaid 转图片',
-    description: `将本轮全部待渲染的 ${kind === 'html' ? 'HTML' : 'Mermaid'} 文件通过 images 一次提交，单张也使用一项数组，不逐张或分小批等待。读取工作区已有的 ${kind === 'html' ? '独立配图 HTML，按正文 data-yb-size 对应的 frame_size 固定画布截图，画布内四周保留 40px 边距' : 'Mermaid 源文件'}，由现有本地渲染队列控制并发并转为 PNG。每张成功后程序立即回填正文图片引用。返回 total、applied 和 unresolved，unresolved 只列未成功或回填失败的项及其 status、源码路径、error 或 apply_error。${kind === 'html' && htmlImageOptimization ? '返回 needs_repair 时，按 layout_issues 修改源码后重新渲染，直到成功。' : ''}只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
+    description: `读取 ${taskFile(kind === 'html' ? 'renderHtml' : 'renderMermaid')} 中的全部转图任务并提交，格式为 {"images":[{"image_id":"沿用源码生成时的 image_id","source_file":"当前工作区内的源码相对路径，如 图片/实施流程.${kind === 'html' ? 'html' : 'mmd'}"${kind === 'html' ? ',"frame_size":"与正文 figure 的 data-yb-size 一致"' : ''}}]}，源码使用 UTF-8，不带 Markdown 围栏。${kind === 'html' ? 'frame_size 设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698，尺寸包含四周40px内边距；按此尺寸编写 HTML，程序以 body 为固定画布截图并以2倍像素输出。' : ''}${skipNote}${TASK_FILE_WRITING}由现有本地渲染队列控制并发并转为 PNG。每张成功后程序立即回填正文图片引用。返回 total、applied、skipped 和 unresolved，unresolved 只列未成功或回填失败的项及其 status、源码路径、error 或 apply_error。${kind === 'html' && htmlImageOptimization ? '返回 needs_repair 时，按 layout_issues 修改源码后重新渲染，直到成功。' : ''}只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
     executionMode: 'sequential',
-    parameters: Type.Object({
-      images: Type.Array(Type.Object({
-        image_id: Type.String({ minLength: 1, description: '本批唯一的图片标识，沿用源码生成时的 image_id，用于对应正文图片。' }),
-        source_file: Type.String({ minLength: 1, description: '当前工作区内的源码相对路径，如 图片/实施流程.html 或 图片/实施流程.mmd；使用 UTF-8，不带 Markdown 围栏。' }),
-        ...(kind === 'html' ? { frame_size: Type.Union(['square', 'wide', 'tall', 'panorama'].map(value => Type.Literal(value)), { description: '与正文 figure 的 data-yb-size 一致。设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698；尺寸包含四周40px内边距。按此尺寸编写HTML，程序以2倍像素输出。' }) } : {}),
-      }, { additionalProperties: false }), { minItems: 1 }),
-    }, { additionalProperties: false }),
+    parameters: Type.Object({}, { additionalProperties: false }),
     // 修复时只重新渲染已有源码，复用与首次生成相同的结果和取消处理。
-    async execute(_callId, { images }, toolSignal, onUpdate) {
+    async execute(_callId, _params, toolSignal, onUpdate) {
+      const { images } = readTaskFile(workspaceDir, kind === 'html' ? 'renderHtml' : 'renderMermaid', taskDir);
       return runImageBatch(images.map(image => ({ ...image, kind })), toolSignal, onUpdate,
         async (_image, result, combinedSignal) => renderImage(result, combinedSignal));
     },

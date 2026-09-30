@@ -4,7 +4,37 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createPiSession } = require('./piSessionFactory.cjs');
+const { NATIVE_AGENT_TOOLS } = require('../agent/agentToolEnvironment.cjs');
 const { runTemplateExtractionTask } = require('../templateExtractionTask.cjs');
+
+// 七个原生工具始终注册并启用，自定义工具不因补齐原生工具而获得权限。
+test('原生工具跨阶段保持可用且不放开自定义工具', async t => {
+  for (const fixedToolList of [false, true]) {
+    let setStageTools;
+    const { session, workspaceDir } = await createTestSession(t, false, {
+      fixedToolList, activeTools: ['read', 'report-failure'],
+      createTools: ({ setActiveTools }) => { setStageTools = setActiveTools; return []; },
+    });
+    for (const stage of [null, ['report-failure']]) {
+      if (stage) setStageTools(stage);
+      for (const name of NATIVE_AGENT_TOOLS) {
+        assert.ok(session.getActiveToolNames().includes(name), `${name} 应保持可用`);
+        if (fixedToolList) await session.agent.beforeToolCall({ toolCall: { name }, args: {} });
+      }
+      for (const name of ['json-validation', 'ask-user']) {
+        if (fixedToolList) await assert.rejects(session.agent.beforeToolCall({ toolCall: { name }, args: {} }), /当前阶段不能调用/);
+        else assert.ok(!session.getActiveToolNames().includes(name));
+      }
+      assert.ok(session.getActiveToolNames().includes('report-failure'));
+    }
+    fs.writeFileSync(path.join(workspaceDir, '中文检索.txt'), '第一行\n唯一检索内容\n第三行', 'utf8');
+    const grep = session.agent.state.tools.find(tool => tool.name === 'grep');
+    assert.ok(grep.parameters.properties.task_complete, '原生 grep 同样支持完成标记');
+    const result = await grep.execute('native-grep', { pattern: '唯一检索内容', path: '中文检索.txt', literal: true });
+    assert.ok(!result.isError);
+    assert.match(JSON.stringify(result.content), /唯一检索内容/);
+  }
+});
 
 // 使用真实 Pi Session 和本地工具，仅以固定响应替代收费模型请求。
 async function createTestSession(t, summaryEnabled, options = {}) {
@@ -13,7 +43,7 @@ async function createTestSession(t, summaryEnabled, options = {}) {
     assert.equal(path.dirname(workspaceDir), path.resolve(os.tmpdir()));
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   });
-  const { session, assertJsonValidationPassed } = await createPiSession({
+  const { session } = await createPiSession({
     workspaceDir,
     environment: {
       layout: { agentDir: path.join(workspaceDir, 'agent') },
@@ -30,7 +60,7 @@ async function createTestSession(t, summaryEnabled, options = {}) {
     ...options,
   });
   t.after(() => session.dispose());
-  return { session, workspaceDir, assertJsonValidationPassed };
+  return { session, workspaceDir };
 }
 
 // 为一次模型响应构造真实工具调用结构。
@@ -116,122 +146,43 @@ test('结束批次中的校验失败或工具异常必须继续修复，整批�
   assert.equal(fs.readFileSync(path.join(workspaceDir, '尚未生成.md'), 'utf8'), '补齐文件');
 });
 
-test('自动校验默认关闭，未启用时保持原生写入行为', async (t) => {
-  for (const autoValidateJson of [undefined, false]) {
-    const { session, assertJsonValidationPassed } = await createTestSession(t, false, { autoValidateJson });
-    const calls = provideResponses(session, [[toolCall('write', {
-      path: '结果.json', content: '{未完成的 JSON', task_complete: true,
-    })]]);
-    await session.prompt('写入文件。');
-    assert.equal(calls(), 1);
-    assert.equal(session.messages.at(-1).isError, false);
-    assert.equal(session.messages.at(-1).details?.validation, undefined);
-    assert.doesNotThrow(assertJsonValidationPassed);
-  }
-});
-
-test('自动校验通过即可结束并继续下一阶段，普通文件不受影响，总结开关独立生效', async (t) => {
+test('写入不在工具层校验：write/edit 保持原生行为，完成标记后直接结束，结果交由提交校验', async (t) => {
   for (const summaryEnabled of [false, true]) {
-    const { session, workspaceDir, assertJsonValidationPassed } = await createTestSession(t, summaryEnabled, {
-      autoValidateJson: true,
-      jsonValidationSchemas: { '结果.json': { type: 'object' }, '后续阶段.json': { type: 'array' } },
+    const { session, workspaceDir } = await createTestSession(t, summaryEnabled, {
+      beforeToolCall: async () => {},
     });
     const complete = summaryEnabled ? {} : { task_complete: true };
-    const responses = [[toolCall('write', { path: '结果.json', content: '{}', ...complete })]];
+    const responses = [
+      [toolCall('write', { path: '结果.json', content: '{未完成的 JSON' })],
+      [toolCall('edit', { path: '结果.json', edits: [{ oldText: '{未完成的 JSON', newText: '{"ok":false}' }], ...complete })],
+    ];
     if (summaryEnabled) responses.push([{ type: 'text', text: '已完成总结' }]);
     const calls = provideResponses(session, responses);
-    await session.prompt('完成第一阶段。');
-    assert.equal(calls(), summaryEnabled ? 2 : 1);
-    const result = session.messages.find((message) => message.role === 'toolResult');
-    assert.equal(result.details.validation.valid, true);
-    assert.equal(fs.existsSync(path.join(workspaceDir, '后续阶段.json')), false);
-    assert.doesNotThrow(assertJsonValidationPassed);
-
-    const nextResponses = [[
-      toolCall('write', { path: '普通说明.md', content: '中文说明' }),
-      toolCall('write', { path: '无规则.json', content: '不是 JSON' }),
-      toolCall('write', { path: '后续阶段.json', content: '[]', ...complete }),
-    ]];
-    if (summaryEnabled) nextResponses.push([{ type: 'text', text: '已完成第二阶段总结' }]);
-    const nextCalls = provideResponses(session, nextResponses);
-    await session.prompt('完成第二阶段。');
-    assert.equal(nextCalls(), summaryEnabled ? 2 : 1);
-    assert.doesNotThrow(assertJsonValidationPassed);
-    const results = session.messages.filter((message) => message.role === 'toolResult').slice(-3);
-    assert.ok(results.every((message) => !message.isError));
-    assert.equal(results[0].details?.validation, undefined);
-    assert.equal(results[1].details?.validation, undefined);
-    assert.equal(results[2].details.validation.valid, true);
+    await session.prompt('写入结果。');
+    assert.equal(calls(), summaryEnabled ? 3 : 2);
+    const results = session.messages.filter((message) => message.role === 'toolResult');
+    assert.ok(results.every((message) => !message.isError), '不合格内容也原样写入，由结束后的提交校验把关');
+    assert.ok(results.every((message) => message.details?.validation === undefined));
+    assert.ok(results[1].details.diff, '原生 edit 保留编辑差异');
+    assert.equal(fs.readFileSync(path.join(workspaceDir, '结果.json'), 'utf8'), '{"ok":false}');
+    assert.equal(session.agent.state.systemPrompt.includes('JSON 自动校验'), false);
   }
 });
 
-test('自动校验失败保留文件供 edit 修复，多文件未修复错误阻止结束，编辑差异保持完整', async (t) => {
-  const filePath = process.platform === 'win32' ? '.\\中文目录\\RESULT.JSON' : '中文目录/Result.json';
-  const schema = { type: 'object', properties: { ok: { const: true } }, required: ['ok'] };
-  const { session, workspaceDir, assertJsonValidationPassed } = await createTestSession(t, false, {
-    autoValidateJson: true,
-    jsonValidationSchemas: { '中文目录/Result.json': schema, '另一个.json': schema },
-  });
-  const calls = provideResponses(session, [
-    [toolCall('write', { path: filePath, content: '{"ok":', task_complete: true })],
-    [toolCall('edit', { path: filePath, edits: [{ oldText: '{"ok":', newText: '{"ok":false}' }], task_complete: true })],
-    [toolCall('write', { path: '另一个.json', content: '{"ok":true}', task_complete: true })],
-    [toolCall('edit', { path: filePath, edits: [{ oldText: 'false', newText: 'true' }], task_complete: true })],
-  ]);
-  await session.prompt('修复两份 JSON。');
-  assert.equal(calls(), 4);
-  const results = session.messages.filter((message) => message.role === 'toolResult');
-  assert.deepEqual(results.map((message) => message.isError), [true, true, true, false]);
-  assert.deepEqual(results.map((message) => message.details.validation.stage), ['parse', 'validation', 'success', 'success']);
-  assert.match(results[0].content.map((part) => part.text).join('\n'), /文件已写入，但 JSON 校验未通过/);
-  assert.match(results[2].content.map((part) => part.text).join('\n'), /尚未通过校验/);
-  for (const result of [results[1], results[3]]) {
-    assert.ok(result.details.diff);
-    assert.ok(result.details.patch);
-    assert.equal(result.details.firstChangedLine, 1);
-  }
-  assert.equal(fs.readFileSync(path.join(workspaceDir, filePath), 'utf8'), '{"ok":true}');
-  assert.doesNotThrow(assertJsonValidationPassed);
-});
-
-test('直接文字结束仍拒绝未修复结果，独立校验已有文件可以清除错误且不重写文件', async (t) => {
-  for (const summaryEnabled of [false, true]) {
-    const { session, workspaceDir, assertJsonValidationPassed } = await createTestSession(t, summaryEnabled, { autoValidateJson: true });
-    const complete = summaryEnabled ? {} : { task_complete: true };
-    const calls = provideResponses(session, [
-      [toolCall('write', { path: '结果.json', content: '{"ok":false}', ...complete })],
-      [{ type: 'text', text: '直接结束' }],
-    ]);
-    await session.prompt('生成结果。');
-    assert.equal(calls(), 2);
-    assert.equal(session.messages.find((message) => message.role === 'toolResult').isError, true);
-    assert.throws(assertJsonValidationPassed, { agentValidationFailed: true });
-    const resultPath = path.join(workspaceDir, '结果.json');
-    fs.writeFileSync(resultPath, '{"ok":true}', 'utf8');
-    assert.throws(assertJsonValidationPassed, { agentValidationFailed: true }, 'Main 写入不应隐式触发自动校验');
-    const before = fs.statSync(resultPath).mtimeMs;
-    const retryResponses = [[toolCall('json-validation', { file_path: '结果.json', ...complete })]];
-    if (summaryEnabled) retryResponses.push([{ type: 'text', text: '已检查现有文件' }]);
-    const retryCalls = provideResponses(session, retryResponses);
-    await session.prompt('仅检查已有结果。');
-    assert.equal(retryCalls(), summaryEnabled ? 2 : 1);
-    assert.doesNotThrow(assertJsonValidationPassed);
-    assert.equal(fs.statSync(resultPath).mtimeMs, before);
-  }
-});
-
-test('同文件并行写入复用原生串行队列，每次返回对应内容的校验结果', async (t) => {
-  const { session, workspaceDir, assertJsonValidationPassed } = await createTestSession(t, false, { autoValidateJson: true });
-  const write = session.getToolDefinition('write');
-  const results = await Promise.all([
-    write.execute('invalid', { path: '结果.json', content: '{"ok":false}' }),
-    write.execute('valid', { path: '结果.json', content: '{"ok":true}' }),
-  ]);
-  assert.equal(results[0].isError, true);
-  assert.equal(results[0].details.validation.valid, false);
-  assert.equal(results[1].details.validation.valid, true);
-  assert.equal(fs.readFileSync(path.join(workspaceDir, '结果.json'), 'utf8'), '{"ok":true}');
-  assert.doesNotThrow(assertJsonValidationPassed);
+test('独立校验工具按预置 Schema 自查已有文件，不改写文件', async (t) => {
+  const { session, workspaceDir } = await createTestSession(t, false);
+  const resultPath = path.join(workspaceDir, '结果.json');
+  fs.writeFileSync(resultPath, '{"ok":false}', 'utf8');
+  const before = fs.statSync(resultPath).mtimeMs;
+  const validation = session.getToolDefinition('json-validation');
+  const invalid = await validation.execute('invalid', { file_path: '结果.json' });
+  assert.equal(invalid.isError, true);
+  assert.equal(invalid.details.stage, 'validation');
+  fs.writeFileSync(resultPath, '{"ok":true}', 'utf8');
+  const valid = await validation.execute('valid', { file_path: '结果.json' });
+  assert.equal(valid.details.valid, true);
+  assert.equal(fs.readFileSync(resultPath, 'utf8'), '{"ok":true}');
+  assert.ok(fs.statSync(resultPath).mtimeMs >= before);
 });
 
 test('模版提取按文件提交分类，失败后修正同一文件，成功自动结束且只应用一次', async (t) => {
@@ -287,8 +238,7 @@ test('模版提取按文件提交分类，失败后修正同一文件，成功�
       async runTask(payload) {
         assert.deepEqual(payload.prepare_output_files, [fieldsFile]);
         assert.equal(payload.max_retries, 1);
-        assert.ok(payload.active_tools.includes('openxml'));
-        assert.equal(payload.active_tools.includes('bash'), false, '模版提取不开放命令行');
+        assert.deepEqual(payload.active_tools, [...NATIVE_AGENT_TOOLS, 'openxml', 'report-failure'], '模版提取保留原生工具，业务工具只开放 openxml 和报告失败');
         const { session } = await createTestSession(t, payload.summary_enabled, {
           workspaceDir,
           openXmlTool: payload.open_xml_tool,

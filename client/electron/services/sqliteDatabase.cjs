@@ -1142,9 +1142,9 @@ function addTechnicalPlanExportTemplateScope(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'export_template_scope', "TEXT NOT NULL DEFAULT 'ai-only'");
 }
 
-/** 保存图片数量档位，暂不参与图片生成。 */
+/** 保存配图比例，默认 30%。 */
 function addTechnicalPlanImageQuantity(db) {
-  addColumnIfMissing(db, 'technical_plan_generation_config', 'image_quantity', "TEXT NOT NULL DEFAULT 'light'");
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'image_quantity', "INTEGER NOT NULL DEFAULT 30");
 }
 
 /** 保存正文可选修复开关；默认不执行二次优化或字数修复。 */
@@ -1515,7 +1515,7 @@ const schemaHealthColumnGroups = [
     version: 33,
     table: 'technical_plan_generation_config',
     columns: {
-      image_quantity: "TEXT NOT NULL DEFAULT 'light'",
+      image_quantity: "INTEGER NOT NULL DEFAULT 30",
     },
   },
   {

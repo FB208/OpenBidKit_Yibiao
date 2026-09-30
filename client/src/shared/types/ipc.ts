@@ -54,12 +54,21 @@ export interface WordExportProgressEvent {
   warnings?: string[];
 }
 
+/** 整本导出前发现的正文结构问题，按小节汇总。 */
+export interface WordExportStructureIssue {
+  section: string;
+  problems: string[];
+}
+
 export interface WordExportResult {
   success: boolean;
   canceled?: boolean;
   path?: string;
   message?: string;
   warnings?: string[];
+  /** 为 true 时尚未导出，需用户确认结构问题后带 confirmStructureIssues 再次调用。 */
+  needsConfirmation?: boolean;
+  issues?: WordExportStructureIssue[];
 }
 
 export interface CheckResultExportResult {
@@ -336,8 +345,6 @@ export interface AgentRunPayload {
   max_retries?: number;
   /** 是否生成结束总结，默认开启；false 时最后一批工具成功后直接结束本阶段。 */
   summary_enabled?: boolean;
-  /** 写入或修改预置 Schema 对应的 JSON 文件后自动校验，默认关闭。 */
-  auto_validate_json?: boolean;
 }
 
 export interface AgentRetryAttempt {
@@ -827,6 +834,8 @@ export interface YibiaoBridge {
   };
   export: {
     exportWord: (payload: unknown) => Promise<WordExportResult>;
+    /** 用户取消正文结构确认时结束该次导出请求。 */
+    cancelWordConfirmation: (requestId: string) => Promise<void>;
     openFile: (filePath: string) => Promise<{ success: boolean }>;
     onWordExportProgress: (callback: (event: WordExportProgressEvent) => void) => () => void;
   };

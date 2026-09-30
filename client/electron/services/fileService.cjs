@@ -3,6 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { dialog } = require('electron');
 const AdmZip = require('adm-zip');
+const mimeTypes = require('mime-types');
 const { formatDocumentParseError, isLibreOfficeMissingError, normalizeDocumentParseError } = require('./documentParseErrors.cjs');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getImportedImagesDir } = require('../utils/paths.cjs');
@@ -354,6 +355,7 @@ async function deleteImportedImageAssets(assets) {
   await fs.rm(assets.baseDir, { recursive: true, force: true });
 }
 
+// 导入图片的扩展名保留来源声明的图片类型，Word 导出时文件头无法识别的图片据此原样嵌入。
 function imageExtensionFromMime(mime) {
   const normalized = String(mime || '').toLowerCase();
   if (normalized.includes('jpeg') || normalized.includes('jpg')) return '.jpg';
@@ -361,12 +363,17 @@ function imageExtensionFromMime(mime) {
   if (normalized.includes('gif')) return '.gif';
   if (normalized.includes('bmp')) return '.bmp';
   if (normalized.includes('webp')) return '.webp';
-  return '';
+  // Word 以 image/x-emf、image/x-wmf 声明图元文件，标准类型库未登记这两个类型的扩展名。
+  if (normalized === 'image/x-emf') return '.emf';
+  if (normalized === 'image/x-wmf') return '.wmf';
+  const extension = normalized.startsWith('image/') && mimeTypes.extension(normalized);
+  return extension ? `.${extension}` : '';
 }
 
 function imageExtensionFromPath(value) {
   const ext = path.extname(String(value || '').split(/[?#]/)[0]).toLowerCase();
-  return ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'].includes(ext) ? (ext === '.jpeg' ? '.jpg' : ext) : '';
+  if (ext === '.jpeg') return '.jpg';
+  return String(mimeTypes.lookup(ext) || '').startsWith('image/') ? ext : '';
 }
 
 async function saveImportedImage(assets, buffer, sourceName, mime) {

@@ -1,7 +1,6 @@
 const {
   createPiJsonValidationTool,
   createPiJsonValidator,
-  withFileWriteHooks,
 } = require('./piJsonValidationTool.cjs');
 const {
   createPiUserQuestionTool,
@@ -23,8 +22,9 @@ const {
   installTaskCompletionHook,
 } = require('./piSummaryControl.cjs');
 
+const { NATIVE_AGENT_TOOLS } = require('../agent/agentToolEnvironment.cjs');
 let piModulesPromise = null;
-const FIXED_TOOL_LIST_INSTRUCTIONS = '工具列表覆盖本任务的全部阶段。每个阶段只使用当前阶段指令说明的工具，调用其他工具会被拒绝。';
+const FIXED_TOOL_LIST_INSTRUCTIONS = '工具列表覆盖本任务的全部阶段。read、write、edit、bash、grep、find、ls 全程可用，优先按当前任务指导选择工具；业务工具仍按当前阶段使用。';
 
 // 延迟加载 ESM Pi SDK，供 CommonJS Electron Main 复用。
 function loadPiModules() {
@@ -49,7 +49,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, beforeFileWrite, summaryEnabled = true, isFinalToolCall, autoValidateJson = false, fixedToolList = false }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -82,7 +82,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
   await modelRuntime.setRuntimeApiKey('yibiao', proxyInfo.token);
   const model = modelRuntime.getModel('yibiao', 'default');
   if (!model) throw new Error('Pi Agent 模型注册失败');
-  const jsonValidator = createPiJsonValidator({ workspaceDir, validationSchemas: jsonValidationSchemas, trackFailures: autoValidateJson });
+  const jsonValidator = createPiJsonValidator({ workspaceDir, validationSchemas: jsonValidationSchemas });
 
   const settingsManager = codingAgent.SettingsManager.inMemory({
     defaultProvider: 'yibiao',
@@ -114,11 +114,6 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     appendSystemPromptOverride: () => [
       ...(summaryEnabled === false ? [PI_NO_SUMMARY_INSTRUCTIONS] : []),
       ...(fixedToolList ? [FIXED_TOOL_LIST_INSTRUCTIONS] : []),
-      ...(autoValidateJson ? [`本次调用已开启 JSON 自动校验：${Object.keys(jsonValidationSchemas || {}).join('、')}。这些是预置规则对应的文件，不要求提前生成后续阶段文件。
-- 指定文件统一通过 write 或 edit 生成和修改，工具会自动执行 JSON.parse 和 Ajv 校验。已通过自动校验的内容不要重复调用 json-validation。
-- 校验失败时文件仍已修改，继续根据错误修复；相关多处修改合并到一次 edit 调用，随后自动校验完整文件。
-- 只检查已有且未修改的文件，或检查没有预置规则的文件时，仍使用 json-validation。不要为了触发自动校验而重写文件。
-- 关闭结束总结且工具提供 task_complete 时，可将完成标记放在最后一次自动校验的 write 或 edit 上；还有未修复错误时不能结束。`] : []),
     ],
   });
   await resourceLoader.reload();
@@ -159,32 +154,29 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
   // 业务工具按调用注入，公共 Pi 层不依赖业务服务。
   let session;
   let requestedTools;
+  // 原生工具不随业务阶段收缩，自定义工具保持任务声明的权限。
+  const withNativeTools = names => [...new Set([...NATIVE_AGENT_TOOLS, ...names])];
   // 恢复任务可在创建时设定权限；运行中切换使用 Pi 的工具列表接口。
   // 固定工具清单时只更新阶段门禁，system prompt 与 tools 保持不变以复用请求前缀缓存。
   const setActiveTools = toolNames => {
-    requestedTools = toolNames;
-    if (!fixedToolList) session?.setActiveToolsByName(toolNames);
+    requestedTools = withNativeTools(toolNames);
+    if (!fixedToolList) session?.setActiveToolsByName(requestedTools);
   };
-  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir, setActiveTools }) || []).map(tool => codingAgent.defineTool(tool));
+  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir, setActiveTools, baseline }) || []).map(tool => codingAgent.defineTool(tool));
   let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : []), ...taskTools];
-  if (autoValidateJson || beforeFileWrite) {
-    const hooks = { validator: autoValidateJson ? jsonValidator : undefined, beforeWrite: beforeFileWrite };
-    customTools.push(
-      withFileWriteHooks(codingAgent.createWriteToolDefinition, workspaceDir, hooks),
-      withFileWriteHooks(codingAgent.createEditToolDefinition, workspaceDir, hooks),
-    );
-  }
   if (summaryEnabled === false && !isFinalToolCall) {
     customTools = [
       codingAgent.createReadToolDefinition(workspaceDir, { autoResizeImages: false }),
-      ...(!autoValidateJson && !beforeFileWrite ? [codingAgent.createEditToolDefinition(workspaceDir), codingAgent.createWriteToolDefinition(workspaceDir)] : []),
+      codingAgent.createEditToolDefinition(workspaceDir),
+      codingAgent.createWriteToolDefinition(workspaceDir),
       codingAgent.createFindToolDefinition(workspaceDir),
       codingAgent.createLsToolDefinition(workspaceDir),
+      codingAgent.createGrepToolDefinition(workspaceDir),
       ...customTools,
     ].map(withTaskCompletionParameter);
   }
-  const defaultTools = ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : []), ...taskTools.map(tool => tool.name)];
-  const initialTools = requestedTools || activeTools || defaultTools;
+  const defaultTools = [...NATIVE_AGENT_TOOLS, 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : []), ...taskTools.map(tool => tool.name)];
+  const initialTools = withNativeTools(requestedTools || activeTools || defaultTools);
   // SDK 的 tools 同时限定注册范围；先注册本任务全部工具，再按阶段启用。
   ({ session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
@@ -216,18 +208,9 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
       return previousBeforeToolCall?.(context, signal);
     };
   }
-  if (autoValidateJson) {
-    // Pi 默认仅把抛出的异常标为失败；转发校验失败标记，同时保留工具内容和编辑差异。
-    const previousAfterToolCall = session.agent.afterToolCall;
-    session.agent.afterToolCall = async (context, signal) => {
-      const result = await previousAfterToolCall?.(context, signal);
-      return context.result.isError === true ? { ...result, isError: true } : result;
-    };
-  }
-  if (summaryEnabled === false) installTaskCompletionHook(session.agent, isFinalToolCall, autoValidateJson ? jsonValidator.getPendingError : undefined);
+  if (summaryEnabled === false) installTaskCompletionHook(session.agent, isFinalToolCall);
   return {
     session,
-    assertJsonValidationPassed: jsonValidator.assertValid,
     sessionFile: session.sessionFile || sessionManager.getSessionFile() || '',
     snapshot: {
       sdk_version: codingAgent.VERSION || '',

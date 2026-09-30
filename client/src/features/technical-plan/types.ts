@@ -43,7 +43,7 @@ export interface SaveOutlineSelectionRequest {
   selectedIds: string[];
 }
 
-export type ContentImageQuantity = 'none' | 'light' | 'heavy';
+export type ContentImageQuantity = 0 | 10 | 20 | 30 | 40 | 50 | 60 | 70 | 80 | 90 | 100;
 
 export interface ContentGenerationOptions {
   imageQuantity: ContentImageQuantity;
@@ -104,6 +104,8 @@ export interface ContentGenerationProgressDetail {
   pending?: number;
   cancelled?: number;
   indeterminate?: boolean;
+  // Agent 分批派发的编辑类步骤没有程序可知的总数，只展示累计完成数。
+  cumulative?: boolean;
   started_at?: string;
   activity?: string;
   detail_text?: string;
@@ -227,7 +229,7 @@ export interface ContentGenerationPlanData {
   writing_focus?: string;
   /** 小节配图适配性，0-10 分，目前仅供正文编排记录。 */
   image_suitability_score: number;
-  /** 编排后由程序按全文评分和图片数量档位决定，暂不参与生图。 */
+  /** 编排后由程序按全文评分和配图比例决定是否参与新增配图。 */
   image_needed: boolean;
   knowledge: {
     item_ids: string[];

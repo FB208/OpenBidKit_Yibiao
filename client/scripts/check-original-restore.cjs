@@ -57,7 +57,7 @@ function checkNumberedInputAndSchema() {
   assert.doesNotMatch(index.content, /L000006 \|/u, '带句读的编号正文不应进入标题候选');
 
   const validator = createPiJsonValidator({
-    workspaceDir: __dirname, trackFailures: false,
+    workspaceDir: __dirname,
     validationSchemas: { 'original-restore-result.json': restoration.ORIGINAL_RESTORATION_JSON_SCHEMA },
   });
   const output = {
@@ -91,10 +91,12 @@ function checkNumberedInputAndSchema() {
   assert.ok(prompt.includes('大型表格、成组图片、证书和清单等大块材料'));
   assert.ok(prompt.includes('只有多个目标小节确实都需要完整保留该材料时'));
   assert.ok(prompt.includes('纯空白签字、职务、日期、盖章栏'));
-  assert.ok(prompt.includes('将结果直接写入 original-restore-result.json'));
+  assert.ok(prompt.includes('将来源范围和标题处理结果保存到 original-restore-result.json'));
   assert.ok(prompt.includes('不重复输出逐行原文'));
   assert.ok(prompt.includes('使用 read、find 或 bash 补充核对并修正'));
-  assert.ok(prompt.includes('工具返回校验通过后无需再调用 json-validation'));
+  assert.ok(prompt.includes('可用 json-validation 自查，只传 file_path'));
+  assert.ok(prompt.includes('结束后程序统一校验 JSON 格式以及原文、表格、图片和覆盖范围'));
+  assert.ok(!prompt.includes('自动校验'));
   assert.ok(!prompt.includes('完成后调用 json-validation'));
   const resumePrompt = restoration.buildOriginalRestorationPrompt({
     resume: true, numberedPartPaths: numberedParts.map(file => file.path),
@@ -196,7 +198,7 @@ async function checkOriginalRestore() {
     let sessionState = mode === 'resume' ? { session_file: 'original-session.jsonl', status: 'paused' } : null;
     const originalSessionFile = 'original-session.jsonl';
     const validator = createPiJsonValidator({
-      workspaceDir: __dirname, trackFailures: true,
+      workspaceDir: __dirname,
       validationSchemas: { 'original-restore-result.json': restoration.ORIGINAL_RESTORATION_JSON_SCHEMA },
     });
     const scope = {
@@ -239,7 +241,7 @@ async function checkOriginalRestore() {
             assert.ok(options.prompt.startsWith('继续同一次'));
           } else sessionState = { run_id: options.task_id, session_file: originalSessionFile };
           options.onCheckpoint(sessionState);
-          assert.equal(options.auto_validate_json, true);
+          assert.equal(Object.hasOwn(options, 'auto_validate_json'), false, '结果在提交时统一校验');
           assert.equal(options.json_validation_schemas['original-restore-result.json'], restoration.ORIGINAL_RESTORATION_JSON_SCHEMA);
           assert.equal(options.files.find(file => file.path === 'original-plan.md').content, originalPlanMarkdown);
           assert.equal(options.files.find(file => file.path === 'original-plan-numbered.md').content, numberMarkdownLines(originalPlanMarkdown));
@@ -263,7 +265,6 @@ async function checkOriginalRestore() {
             const bad = structuredClone(result);
             bad.assignments[0].source_ranges[0].start_line = '1';
             assert.equal(validator.validateContent('original-restore-result.json', JSON.stringify(bad)).details.valid, false);
-            assert.throws(() => validator.assertValid(), /尚未通过校验/);
             bad.assignments[0].source_ranges[0].start_line = 1;
             bad.assignments[0].source_ranges[0].end_line = 2;
             assert.throws(() => options.validateOutput({ output_content: JSON.stringify(bad) }), /未交代去向/);
@@ -272,7 +273,6 @@ async function checkOriginalRestore() {
           if (mode === 'invalid-output') result.assignments[0].source_ranges[0].end_line = 2;
           const outputContent = JSON.stringify(result);
           assert.equal(validator.validateContent('original-restore-result.json', outputContent).details.valid, true);
-          validator.assertValid();
           if (mode !== 'invalid-output') options.validateOutput({ output_content: outputContent });
           return { output_content: outputContent, task_id: options.task_id, session_id: 'original-session' };
         },

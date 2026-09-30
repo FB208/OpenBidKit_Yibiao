@@ -2,13 +2,9 @@ const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs'
 const {
   GLOBAL_FACTS_OUTPUT_FILE,
   GLOBAL_FACTS_JSON_SCHEMA,
-  readJson,
+  validateGlobalFactsOutput,
   formatProgressTitle,
 } = require('./globalFactsTaskV2.cjs');
-const {
-  normalizeGlobalFactsResponse,
-  validateGlobalFactsResponse,
-} = require('./globalFactsTask.cjs');
 
 function buildAgentFactsInput(groups) {
   return {
@@ -27,10 +23,10 @@ function createGlobalFactsAdjustmentPrompt(requirement) {
 ${requirement}
 
 请按以下要求完成调整：
-1. 先读取 ${GLOBAL_FACTS_OUTPUT_FILE}，理解当前内容，再严格按照用户的调整要求修改；与要求无关的项保持原样，不要顺带重写。
+1. 以当前文件为准，先定位用户要求涉及的节点或事实项，并读取必要上下文。优先使用 edit 局部修改；涉及多个节点或条目的统一调整时，可使用 bash 配合 node、jq 处理。
 2. 修改后仍须保持完整根结构 {"groups":[{"id":"...","title":"...","content":"..."}]}：每项包含 id、title、content。
 3. 材料或用户要求足以判断时直接执行。不确定且不同选择会实质影响结果时，可以自行决定是否调用 ask-user；不要为了确认而反复提问。
-4. 将调整后的完整结果覆盖写回 ${GLOBAL_FACTS_OUTPUT_FILE}。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${GLOBAL_FACTS_OUTPUT_FILE}"}；校验失败后必须先修改文件，再重新校验。
+4. 将调整结果保存到 ${GLOBAL_FACTS_OUTPUT_FILE}，保存后保持完整文件结构和未涉及内容。程序已为该文件预置 Schema，写入后调用 json-validation，只传 {"file_path":"${GLOBAL_FACTS_OUTPUT_FILE}"}；校验失败后必须先修改文件，再重新校验。
 5. 全部完成后，用简体中文输出一段简短的最终总结（不超过 200 字，不使用 Markdown 标题），说明本次实际做了哪些调整；如有未能执行的要求，一并说明原因。该总结会直接展示给用户。`;
 }
 
@@ -91,12 +87,12 @@ async function runGlobalFactsAdjustmentTask({ agentService, workspaceStore, upda
     initial_stage: 'global-facts-adjustment',
     json_validation_schemas: { [GLOBAL_FACTS_OUTPUT_FILE]: GLOBAL_FACTS_JSON_SCHEMA },
     max_retries: 0,
+    // 提交时校验结构，不通过退回当前会话修复。
+    validateOutput: candidate => validateGlobalFactsOutput(candidate.output_content),
     onActivity: publishAgentActivity,
   });
 
-  const generated = readJson(agentResult.output_content, GLOBAL_FACTS_OUTPUT_FILE);
-  const normalized = normalizeGlobalFactsResponse(generated);
-  validateGlobalFactsResponse(normalized);
+  const normalized = agentResult.validation_result;
   const summary = String(agentResult.assistant_text || '').trim() || '全局事实已按要求调整完成。';
 
   logs = [...logs, '全局事实 AI 调整完成'];

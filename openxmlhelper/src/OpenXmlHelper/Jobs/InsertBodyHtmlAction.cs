@@ -37,13 +37,17 @@ static class InsertBodyHtmlAction
 
             var documentPath = WordWorkspace.ResolveWorkspacePath(workspace, request.Input);
             if (!File.Exists(documentPath)) return JobResult.Fail("Word 文件不存在");
+            var assets = new FigureAssets();
             var blockCount = RestrictedHtmlWordInserter.Insert(
                 workspace,
                 documentPath,
                 request.TargetId,
                 request.ImageMaxWidthPercent,
-                request.Html);
-            return JobResult.Success(Name, WordWorkspace.ToRelativePath(workspace, documentPath), blockCount);
+                request.Html,
+                assets);
+            var result = JobResult.Success(Name, WordWorkspace.ToRelativePath(workspace, documentPath), blockCount);
+            result.ImageWarnings = assets.Warnings;
+            return result;
         }
         catch (Exception exception)
         {

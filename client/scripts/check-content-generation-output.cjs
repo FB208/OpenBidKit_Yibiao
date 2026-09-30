@@ -2,9 +2,19 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const cheerio = require('cheerio');
 const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, readContentGenerationResult } = require('../electron/services/contentGenerationAgent.cjs');
 const { runContentGenerationTask, prepareContentGenerationStart } = require('../electron/services/contentGenerationTask.cjs');
 const { scanGeneratedSections, previewContentSection, convertContentSections } = require('../electron/services/contentGenerationOutput.cjs');
+const { taskFilePath } = require('../electron/services/contentGenerationTaskFiles.cjs');
+
+// 批量工具读取固定任务文件：写入后无参数提交。
+function submitTask(tool, workspaceDir, key, callId, params) {
+  const target = path.join(workspaceDir, taskFilePath(key));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify(params), 'utf8');
+  return tool.execute(callId, {});
+}
 
 // 验证基准公式、整数分配及计划保存/再读取，避免只检查提示词文本。
 function checkContentWordPlanning() {
@@ -112,7 +122,7 @@ function createFixture(directory) {
   const inputs = buildContentGenerationFiles({
     outline, targets: outline[0].children.map(item => ({ item })), plans: {},
     projectOverview: '施工项目', globalFacts: [{ title: '工期', content: '六十天' }], globalFactsMode: 'placeholder',
-    wordControl: {}, generationOptions: { imageQuantity: 'light', useAiImages: true },
+    wordControl: {}, generationOptions: { imageQuantity: 30, useAiImages: true },
     template: { config: { page: { size: 'A4' } } }, documentIds: [],
   });
   for (const file of inputs) {
@@ -151,7 +161,7 @@ async function checkContentPreview(directory, outputDir) {
       assert.equal(options.assetRoot, directory);
       assert.equal(options.copyAssets, true);
       if (fail) throw new Error('临时转换失败');
-      return { bytes: Buffer.from(html) };
+      return { bytes: Buffer.from(html), imageWarnings: [] };
     } },
   };
   try {
@@ -185,10 +195,27 @@ async function checkContentPreview(directory, outputDir) {
     const second = await previewContentSection(args);
     assert.match(Buffer.from(second).toString('utf8'), /第二次更新后的正文/);
     assert.equal(calls, 2, '每次点击必须重新转换，不复用缓存');
+    // 提示词结束标签被写成工具调用标记的旧正文：预览前补齐，图片不按缺图占位，源 HTML 不回写。
+    const marked = `<!-- yibiao:block -->\n<figure data-yb-size="wide"><template data-yb-role="prompt">提示词</｜｜DSML｜｜ parameter>\n<img data-yb-asset-ref="原图/现场 图片.png"><figcaption>标记图注</figcaption></figure>\n<p>图后正文</p>`;
+    fs.writeFileSync(htmlFile, marked, 'utf8');
+    const markedPreview = Buffer.from(await previewContentSection(args)).toString('utf8');
+    assert.equal(markedPreview, marked.replace('</｜｜DSML｜｜ parameter>', '</template>'));
+    assert.equal(fs.readFileSync(htmlFile, 'utf8'), marked);
+    // 图片被加粗包裹的旧正文：预览副本中移为 figure 直接子元素，已生成图片不误判为缺图；
+    // 尚无 img 的待生成 figure 在结构修复前换成占位，不被修复删除；源 HTML 不回写。
+    const wrapped = '<!-- yibiao:block -->\n<figure data-yb-size="wide"><template data-yb-role="prompt">提示词</template><strong><img data-yb-asset-ref="原图/现场 图片.png"></strong><figcaption>包裹图注</figcaption></figure>\n'
+      + '<figure data-yb-size="wide"><template data-yb-role="prompt">待生成提示词</template><figcaption>无图图注</figcaption></figure>\n<p>图后正文</p>';
+    fs.writeFileSync(htmlFile, wrapped, 'utf8');
+    const wrappedPreview = cheerio.load(Buffer.from(await previewContentSection(args)).toString('utf8'), null, false);
+    assert.equal(wrappedPreview('figure').length, 1);
+    assert.equal(wrappedPreview('figure > img[data-yb-asset-ref="原图/现场 图片.png"]').length, 1);
+    assert.equal(wrappedPreview('figure > figcaption').text(), '包裹图注');
+    assert.deepEqual(wrappedPreview('p').toArray().map(node => wrappedPreview(node).text()), ['图片生成中：无图图注', '图后正文'], '待生成图片保留占位和图注，顺序不变');
+    assert.equal(fs.readFileSync(htmlFile, 'utf8'), wrapped);
     fail = true;
     await assert.rejects(previewContentSection(args), /临时转换失败/);
-    assert.equal(temporaryDirs.length, 3);
-    assert.equal(new Set(temporaryDirs).size, 3, '每个请求使用独立临时目录');
+    assert.equal(temporaryDirs.length, 5);
+    assert.equal(new Set(temporaryDirs).size, 5, '每个请求使用独立临时目录');
     assert.ok(temporaryDirs.every(item => !fs.existsSync(item)), '成功和失败均清理临时 Word 目录');
     assert.equal(fs.readFileSync(formalFile, 'utf8'), '正式 Word 不变');
     assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
@@ -199,7 +226,7 @@ async function checkContentPreview(directory, outputDir) {
     } finally {
       fs.accessSync = originalAccess;
     }
-    console.log('临时 Word：每次读取最新正文、缺图副本占位、真实读取错误、独立目录及成功/失败清理通过。');
+    console.log('临时 Word：每次读取最新正文、缺图副本占位、提示词异常标记补齐、被包裹图片修复、真实读取错误、独立目录及成功/失败清理通过。');
   } finally {
     fs.mkdtempSync = originalMkdtemp;
   }
@@ -221,7 +248,7 @@ async function checkTask(directory, outputDir) {
   const tick = interval => { for (const timer of [...timers.values()]) if (timer.interval === interval) timer.callback(); };
   let state = {
     outlineData: { outline }, globalFacts: [{ title: '工期', content: '六十天' }], globalFactsTask: { status: 'success' },
-    contentGenerationOptions: { imageQuantity: 'none', layoutCheck: true }, contentGenerationSections: {},
+    contentGenerationOptions: { imageQuantity: 0, layoutCheck: true }, contentGenerationSections: {},
     contentGenerationRuntime: { generation_started: true, phase: 'generating', completed_stages: ['planning'], pending_item_ids: targets.map(section => section.id) },
     contentGenerationTask: { status: 'paused', progress: 18 },
   };
@@ -268,7 +295,7 @@ async function checkTask(directory, outputDir) {
         fs.writeFileSync(path.join(directory, '正文/a0000000-0000-4000-8000-000000000010.html'), '  \n');
         assert.deepEqual(scanGeneratedSections(directory, targets), []);
         for (const [index, section] of targets.entries()) {
-          await generate.execute('generate', { sections: [{ section_id: section.id, instructions: '施工', references: '' }] });
+          await submitTask(generate, directory, 'sections', 'generate', { sections: [{ section_id: section.id, instructions: '施工', references: '' }] });
           assert.equal(state.contentGenerationTask.stats.content.generation_completed, index + 1, '正文成功写入应立即更新主进度');
           tick(10000);
           assert.equal(state.contentGenerationTask.stats.content.generation_completed, index + 1);
@@ -326,13 +353,17 @@ async function checkTask(directory, outputDir) {
         fs.writeFileSync(path.join(directory, '正文生成结果.json'), JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 10 })) }));
         assert.equal((await continueWorkflow(payload, context)).stage, 'auditing');
         assert.equal(state.contentGenerationTask.stats.content.consistency_status, 'running');
-        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', items: targets.map(section => ({ id: section.id, status: 'running' })) });
-        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', items: [{ id: targets[0].id, status: 'success' }, { id: targets[1].id, status: 'error' }] });
+        // 编辑类步骤由 Agent 分批派发，进度按累计计数展示，不以已派发数作分母。
+        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', cumulative: true, items: [{ id: targets[0].id, status: 'running' }] });
+        assert.equal(detail().cumulative, true);
+        assert.equal(detail().pending, 0);
+        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', cumulative: true, items: [{ id: targets[0].id, status: 'success' }, { id: targets[1].id, status: 'error' }] });
         assert.equal(detail().failed, 1);
         assert.equal(detail().completed, 1);
-        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', items: [{ id: targets[1].id, status: 'success' }] });
+        feedback({ step: 'consistency-repair', label: '一致性修复', unit: '节', cumulative: true, items: [{ id: targets[1].id, status: 'success' }] });
         flush();
         assert.equal(detail().completed, 2);
+        assert.equal(detail().total, 2);
         assert.equal(conversions, 0, '审计完成前不得转 Word');
         await tools.find(tool => tool.name === 'complete-consistency-round').execute('done', { summary: '无矛盾', remaining_issues: [] });
         assert.equal((await continueWorkflow(payload, context)).complete, true);
@@ -346,14 +377,14 @@ async function checkTask(directory, outputDir) {
       assert.equal(options.copyAssets, true);
       assert.equal(options.assetRoot, directory);
       assert.equal(config.page.size, 'A4');
-      if (options?.wholeDocument) return { bytes: Buffer.from('自检 Word') };
+      if (options?.wholeDocument) return { bytes: Buffer.from('自检 Word'), imageWarnings: [] };
       assert.ok(agentFinished, '正式转换必须等主任务完成');
       assert.equal([...timers.values()].some(timer => timer.interval === 10000), false);
       conversions++;
       assert.ok([body, body.replace('施工准备与检查', '交付准备与检查')].includes(html), '小节转换应直接使用正文，不附加目录标题');
       if (conversions === 2 && failConversion) throw new Error('模拟转换失败');
       if (pauseConversion) { pauseRequested = true; tick(500); }
-      return { bytes: Buffer.from(html.includes('交付') ? '交付 Word' : '准备 Word') };
+      return { bytes: Buffer.from(html.includes('交付') ? '交付 Word' : '准备 Word'), imageWarnings: [] };
     } },
   };
   try {
@@ -430,7 +461,8 @@ async function checkTask(directory, outputDir) {
     const retainedFiles = ['正文编排决策.json', '正文完整目录.json', ...targets.map(section => section.file), '原图/现场 图片.png'];
     const retainedBytes = retainedFiles.map(file => fs.readFileSync(path.join(directory, file)));
     for (const stage of ['写作', '配图', '扩缩写']) {
-      const persistentState = { word_adjustment_started: stage === '扩缩写' };
+      // 写作阶段模拟生成要求尚未发出；配图和扩缩写时生成要求已由 Runtime 记录为已发出。
+      const persistentState = { word_adjustment_started: stage === '扩缩写', ...(stage === '写作' ? {} : { prompted_stage: 'generating' }) };
       state.contentGenerationSections = {};
       state.contentGenerationRuntime = { generation_started: true, phase: 'generating', completed_stages: ['planning'], pending_item_ids: targets.map(section => section.id) };
       state.contentGenerationTask = { status: 'paused' };
@@ -461,10 +493,14 @@ async function checkTask(directory, outputDir) {
           assert.equal(payload.initial_stage, 'generating');
           assert.equal(state.contentGenerationTask.stats.content.phase, 'generating');
           assert.deepEqual(payload.files, [], '重试不得重写输入快照');
-          assert.match(payload.prompt, /本次继续原会话/);
-          assert.doesNotMatch(payload.prompt, /目录变更后的局部生成任务/);
+          if (stage === '写作') {
+            assert.match(payload.prompt, /本次继续原会话/, '生成要求尚未发出时仍发送完整要求');
+            assert.doesNotMatch(payload.prompt, /目录变更后的局部生成任务/);
+          } else assert.equal(payload.prompt, '继续之前的任务', '生成要求已在原会话发出，只续接原任务');
           assert.equal(persistentState.word_adjustment_started, stage === '扩缩写', '重试不得重置扩缩写保护状态');
-          if (stage === '扩缩写') assert.match(payload.prompt, /本次恢复时已处于图片保护阶段/);
+          assert.equal(persistentState.prompted_stage, stage === '写作' ? undefined : 'generating', '重试不得清除已发出阶段的记录');
+          assert.ok(state.contentGenerationTask.logs.includes('继续正文任务，共 2 个小节。'));
+          assert.ok(state.contentGenerationTask.logs.some(log => /^已有正文 \d+ 节保留，不重新生成；本次补齐 \d+ 节。$/.test(log)), '重试按已有正文说明补齐范围');
           const context = createWorkflowContext(payload, directory);
           const tools = payload.create_tools({ Type, workspaceDir: directory });
           if (stage === '配图') {
@@ -507,6 +543,8 @@ async function checkTask(directory, outputDir) {
         resumedAudit = true;
         assert.equal(payload.initial_stage, 'auditing');
         assert.match(payload.prompt, /正文一致性事实台账\.md/, '重试审计先补齐小节核对，再交给原主会话');
+        assert.ok(state.contentGenerationTask.logs.includes('从全文一致性检查阶段继续，已完成的正文和阶段进度保留。'));
+        assert.equal(state.contentGenerationTask.logs.some(log => /开始重试|本次没有待生成/.test(log)), false, '审计续跑不再提示重试或无待生成小节');
         const context = createWorkflowContext(payload, directory);
         const tools = payload.create_tools({ Type, workspaceDir: directory });
         assert.equal(state.contentGenerationTask.stats.content.consistency_status, 'running');
@@ -636,13 +674,15 @@ async function checkTask(directory, outputDir) {
         assert.deepEqual(payload.prepare_output_files, ['正文编排结果.json']);
         const outputInput = payload.files.find(file => file.path === '正文编排结果.json');
         assert.equal(Boolean(outputInput), !preserveDraft);
+        // 同一轮编排要求已发出时继续只发送“继续之前的任务”；新一轮发送完整编排要求。
+        assert.equal(payload.prompt === '继续之前的任务', preserveDraft);
         // 复现 Runtime：输入覆盖写入，预建输出仅在不存在时创建。
         for (const file of payload.files) fs.writeFileSync(path.join(directory, file.path), file.content, 'utf8');
         if (!fs.existsSync(planningOutput)) fs.writeFileSync(planningOutput, '', 'utf8');
         assert.equal(fs.readFileSync(planningOutput, 'utf8'), preserveDraft ? draft : '');
         fs.writeFileSync(planningOutput, draft, 'utf8');
         hasPlanningSession = true;
-        interruptedState = { ...interruptedState, status: 'running', phase: 'content-planning', session_file: '正文主会话.jsonl' };
+        interruptedState = { ...interruptedState, status: 'running', phase: 'content-planning', session_file: '正文主会话.jsonl', prompted_stage: 'content-planning' };
         payload.onCheckpoint(interruptedState);
         throw interruptedPlanning;
       },
@@ -669,7 +709,7 @@ async function checkTask(directory, outputDir) {
       assert.equal(payload.persistent_task.mode, planningState ? 'resume' : 'create');
       assert.equal(payload.primary_session, true);
       assert.equal(payload.summary_enabled, false);
-      assert.equal(payload.auto_validate_json, true);
+      assert.equal(Object.hasOwn(payload, 'auto_validate_json'), false, '结果在提交时统一校验');
       assert.equal(payload.output_file, '正文生成结果.json', '统一任务主输出不能随编排阶段更换');
       const context = createWorkflowContext(payload, directory);
       await context.writeFiles(payload.files);
@@ -677,10 +717,8 @@ async function checkTask(directory, outputDir) {
       assert.ok(tools.some(tool => tool.name === 'generate-sections'), '正文工具一次注册，交接后直接开放');
       assert.equal(payload.active_tools.includes('generate-sections'), false);
       assert.throws(() => payload.before_tool_call({ toolCall: { name: 'generate-sections' } }), /基础编排尚未完成/);
-      assert.doesNotThrow(() => payload.before_file_write({ filePath: path.join(directory, '正文编排结果.json') }));
-      for (const file of ['正文编排目录.json', targets[0].file]) {
-        assert.throws(() => payload.before_file_write({ filePath: path.join(directory, file) }), /基础编排阶段只能修改/);
-      }
+      // 编排阶段不在写入时限制文件，输入资料被改动时由提交校验前的还原处理。
+      assert.equal(Object.hasOwn(payload, 'before_file_write'), false);
       planningState = { ...planningState, phase: 'content-planning', session_file: '正文主会话.jsonl', status: 'running' };
       payload.onCheckpoint(planningState);
       return context;
@@ -701,7 +739,7 @@ async function checkTask(directory, outputDir) {
         if (payload.files.length) await createWorkflowContext(payload, directory).writeFiles(payload.files);
         else assert.match(prompt, /本次继续原会话/);
       } else {
-        assert.match(prompt, /生效编排/);
+        assert.match(prompt, /基础编排已由程序处理并保存/);
         assert.doesNotMatch(prompt, /目录变更后的局部生成任务/);
       }
       return JSON.parse(fs.readFileSync(path.join(directory, '正文编排决策.json'), 'utf8'));
@@ -759,7 +797,7 @@ async function checkTask(directory, outputDir) {
     assert.equal(planningState.phase, 'generating');
     assert.ok(!state.contentGenerationTask.logs.some(message => message.includes('等待开发者继续')));
     // 部分小节已有编排：模型只补缺失项，但正文交接必须包含本轮全部待生成目标。
-    state = { ...structuredClone(freshPlanningState), contentGenerationOptions: { imageQuantity: 'none', tableRequirement: 'none' },
+    state = { ...structuredClone(freshPlanningState), contentGenerationOptions: { imageQuantity: 0, tableRequirement: 'none' },
       contentGenerationPlans: { [targets[0].id]: { ...savedTargets[targets[0].id], table_requirement: 'none' } } };
     planningState = null;
     const retainedPlan = structuredClone(state.contentGenerationPlans[targets[0].id]);
@@ -781,13 +819,14 @@ async function checkTask(directory, outputDir) {
         assert.equal(input.targets[1].content_plan.image_needed, false, '无图模式以程序筛选为准，不能由模型评分直接配图');
         for (const section of input.targets) {
           assert.equal(section.content_plan.target_words, state.contentGenerationPlans[section.id].plan.target_words);
-          assert.ok(prompt.includes(section.id), '生效编排交接不能遗漏复用编排的小节');
+          assert.ok(!prompt.includes(section.id), '目标列表留在执行清单中按需读取，不进入提示词');
         }
+        assert.ok(prompt.includes(`"target_sections":${input.targets.length}`), '交接摘要统计覆盖全部目标，含复用编排的小节');
         throw stopAtGeneration;
       },
     } }), error => error === stopAtGeneration);
     state.contentGenerationOptions = freshPlanningState.contentGenerationOptions;
-    console.log('统一正文会话：编排交接、开发者模式自动继续、部分复用编排及全量目标传递检查通过。');
+    console.log('统一正文会话：编排交接、开发者模式自动继续、部分复用编排及目标统计摘要检查通过。');
     // 新增固定 3000 字，覆盖无全文目标、多节及当前全部叶子都是新增；旧计划和保存时间保持不变。
     for (const [addedCount, allNew, wordControl] of [
       [1, false, { minimumWords: 150000, maximumWords: 200000 }],
@@ -899,7 +938,7 @@ async function checkTableCleanupTask(directory, outputDir) {
   fs.writeFileSync(path.join(directory, '正文生成结果.json'), JSON.stringify({ sections: targets.map(section => ({ section_id: section.id, file: section.file, words: 1 })) }), 'utf8');
   let state = {
     outlineData: { outline }, globalFacts: [{ title: '工期', content: '六十天' }], globalFactsTask: { status: 'success' },
-    contentGenerationOptions: { tableRequirement: 'none', imageQuantity: 'none' }, contentGenerationSections: {},
+    contentGenerationOptions: { tableRequirement: 'none', imageQuantity: 0 }, contentGenerationSections: {},
     contentGenerationRuntime: { generation_started: true, phase: 'auditing', pending_item_ids: targets.map(section => section.id) },
     contentGenerationTask: { status: 'paused', progress: 80 },
   };
@@ -931,7 +970,6 @@ async function checkTableCleanupTask(directory, outputDir) {
           const file = path.join(directory, payload.output_file);
           const original = fs.readFileSync(file, 'utf8');
           const html = original.replace(/<table>.*?<\/table>/s, '<p>本节责任由项目组承担。</p>');
-          payload.before_file_write({ filePath: file, content: html, originalContent: original, toolName: 'edit' });
           fs.writeFileSync(file, html, 'utf8');
           payload.validateOutput({ output_content: html });
           return {};
@@ -948,7 +986,7 @@ async function checkTableCleanupTask(directory, outputDir) {
           throw Object.assign(new Error('模拟去表格暂停'), { name: 'AbortError' });
         }
         const pending = targets.filter(section => !persistent.table_cleanup.completed_section_ids.includes(section.id));
-        await tools.find(tool => tool.name === 'remove-section-tables').execute('clean', { sections: pending.map(section => ({ section_id: section.id, instructions: '完整转成普通文字' })) });
+        await submitTask(tools.find(tool => tool.name === 'remove-section-tables'), directory, 'tables', 'clean', { sections: pending.map(section => ({ section_id: section.id, instructions: '完整转成普通文字' })) });
         if (mode === 'fail') throw new Error('主 Agent 本次去表格最终失败');
         await tools.find(tool => tool.name === 'complete-table-cleanup').execute();
         assert.equal((await continueWorkflow(payload, context)).complete, true);
@@ -960,9 +998,9 @@ async function checkTableCleanupTask(directory, outputDir) {
       assert.equal(persistent.table_cleanup.status, 'completed');
       assert.doesNotMatch(html, /<table/);
       assert.match(html, /本节责任由项目组承担/);
-      if (options?.wholeDocument) { layoutChecks++; return { bytes: Buffer.from('自检 Word') }; }
+      if (options?.wholeDocument) { layoutChecks++; return { bytes: Buffer.from('自检 Word'), imageWarnings: [] }; }
       conversions++;
-      return { bytes: Buffer.from('已去表格 Word') };
+      return { bytes: Buffer.from('已去表格 Word'), imageWarnings: [] };
     } },
   };
   const run = payload => runContentGenerationTask({ ...args, payload, previousState: structuredClone(state) });
@@ -1093,7 +1131,9 @@ async function checkRealWord(directory, outputDir, hasTables = true) {
   const service = createOpenXmlHelperService({ app, configStore: { load: () => ({}) } });
   try {
     const result = readContentGenerationResult(directory);
-    const outputs = await convertContentSections({ result, outputDir, openXmlHelperService: service, signal: new AbortController().signal });
+    const cleanRepairs = [];
+    const outputs = await convertContentSections({ result, outputDir, openXmlHelperService: service, signal: new AbortController().signal, onStructureRepaired: message => cleanRepairs.push(message) });
+    assert.deepEqual(cleanRepairs, [], '结构完整的正文原样转换，不产生修复记录');
     for (const output of outputs) {
       const zip = new AdmZip(path.join(outputDir, output.file));
       const xml = zip.readAsText('word/document.xml');
@@ -1106,6 +1146,69 @@ async function checkRealWord(directory, outputDir, hasTables = true) {
       }
       assert.match(xml, /<w:drawing[ >]/);
       assert.ok(zip.getEntries().some(entry => /(^|\/)media\/.+\.png$/i.test(entry.entryName)));
+    }
+    // 提示词结束标签被写成工具调用标记的旧正文：转换前补齐，图片和被并入模板的后续正文都能转换，源 HTML 不回写。
+    const markedSection = result.sections[0];
+    const markedFile = path.join(directory, markedSection.file);
+    const markedSource = fs.readFileSync(markedFile, 'utf8');
+    const marked = `<!-- yibiao:block -->\n<figure data-yb-size="wide" data-yb-fit="contain"><template data-yb-role="prompt">提示词</｜｜DSML｜｜ parameter>\n<img data-yb-asset-ref="原图/现场 图片.png"><figcaption>标记图注</figcaption></figure>\n${markedSource}`;
+    try {
+      fs.writeFileSync(markedFile, marked, 'utf8');
+      const markedDir = path.join(path.dirname(outputDir), '标记转换');
+      const [converted] = await convertContentSections({ result: { ...result, sections: [markedSection] }, outputDir: markedDir, openXmlHelperService: service, signal: new AbortController().signal });
+      const xml = new AdmZip(path.join(markedDir, converted.file)).readAsText('word/document.xml');
+      const formal = new AdmZip(path.join(outputDir, outputs[0].file)).readAsText('word/document.xml');
+      assert.match(xml, /标记图注/);
+      assert.match(xml, /(?:施工|交付)准备与检查/);
+      assert.equal((xml.match(/<w:drawing>/g) || []).length, (formal.match(/<w:drawing>/g) || []).length + 1, '补齐后新增图片和原有图片都转换');
+      assert.equal(fs.readFileSync(markedFile, 'utf8'), marked, '转换不回写源 HTML');
+    } finally {
+      fs.writeFileSync(markedFile, markedSource, 'utf8');
+    }
+    // 图片被加粗包裹的旧正文：转换副本中移为 figure 直接子元素后转换，修复记录经回调留痕，源 HTML 不回写。
+    const wrapped = `<!-- yibiao:block -->\n<figure id="wrapped" data-yb-size="wide" data-yb-fit="contain"><template data-yb-role="prompt">提示词</template><strong><img data-yb-asset-ref="原图/现场 图片.png"></strong><figcaption>包裹图注</figcaption></figure>\n${markedSource}`;
+    try {
+      fs.writeFileSync(markedFile, wrapped, 'utf8');
+      const wrappedDir = path.join(path.dirname(outputDir), '包裹转换');
+      const repairs = [];
+      const [converted] = await convertContentSections({
+        result: { ...result, sections: [markedSection] }, outputDir: wrappedDir, openXmlHelperService: service,
+        signal: new AbortController().signal, onStructureRepaired: message => repairs.push(message),
+      });
+      const xml = new AdmZip(path.join(wrappedDir, converted.file)).readAsText('word/document.xml');
+      const formal = new AdmZip(path.join(outputDir, outputs[0].file)).readAsText('word/document.xml');
+      assert.match(xml, /包裹图注/);
+      assert.match(xml, /(?:施工|交付)准备与检查/);
+      assert.equal((xml.match(/<w:drawing>/g) || []).length, (formal.match(/<w:drawing>/g) || []).length + 1, '被包裹图片修复后与原有图片都转换');
+      assert.equal(repairs.length, 1);
+      assert.ok(repairs[0].startsWith(`小节 ${markedSection.number} ${markedSection.title} 正文结构不完整（1 处），已在转换副本中自动修复：`), repairs[0]);
+      assert.match(repairs[0], /figure#wrapped 的图片移为直接子元素/);
+      assert.equal(fs.readFileSync(markedFile, 'utf8'), wrapped, '转换不回写源 HTML');
+    } finally {
+      fs.writeFileSync(markedFile, markedSource, 'utf8');
+    }
+    // 单张图片无法写入 Word：本节照常转换，原位文字提示并经回调写入任务日志。
+    const brokenImage = path.join(directory, '原图/坏图.png');
+    const broken = `<!-- yibiao:block -->\n<figure data-yb-size="wide" data-yb-fit="contain"><template data-yb-role="prompt">提示词</template><img data-yb-asset-ref="原图/坏图.png"><figcaption>坏图图注</figcaption></figure>\n${markedSource}`;
+    try {
+      fs.writeFileSync(brokenImage, '不是图片', 'utf8');
+      fs.writeFileSync(markedFile, broken, 'utf8');
+      const brokenDir = path.join(path.dirname(outputDir), '坏图转换');
+      const skipped = [];
+      const [converted] = await convertContentSections({
+        result: { ...result, sections: [markedSection] }, outputDir: brokenDir, openXmlHelperService: service,
+        signal: new AbortController().signal, onImagesSkipped: message => skipped.push(message),
+      });
+      const xml = new AdmZip(path.join(brokenDir, converted.file)).readAsText('word/document.xml');
+      const formal = new AdmZip(path.join(outputDir, outputs[0].file)).readAsText('word/document.xml');
+      assert.match(xml, /\[图片无法导出\]/);
+      assert.match(xml, /坏图图注/);
+      assert.match(xml, /(?:施工|交付)准备与检查/);
+      assert.equal((xml.match(/<w:drawing>/g) || []).length, (formal.match(/<w:drawing>/g) || []).length, '其他图片照常转换');
+      assert.deepEqual(skipped, [`小节 ${markedSection.number} ${markedSection.title} 有 1 张图片无法写入 Word，已在原位置用文字标出：原图/坏图.png（无法识别图片格式）。`]);
+    } finally {
+      fs.writeFileSync(markedFile, markedSource, 'utf8');
+      fs.rmSync(brokenImage, { force: true });
     }
     if (hasTables) {
       const section = result.sections[0];
@@ -1138,7 +1241,7 @@ async function checkRealWord(directory, outputDir, hasTables = true) {
     await assert.rejects(service.createRestrictedHtmlDocx(body.replace('原图/现场 图片.png', '原图/不存在.png'), { page: {} }, { assetRoot: directory, copyAssets: true }));
     assert.equal(fs.readdirSync(path.join(app.getPath(), 'workspace')).some(name => name.startsWith('restricted-html-assets-')), false);
     assert.deepEqual(fs.readFileSync(path.join(directory, '原图/现场 图片.png')), png);
-    console.log(`真实 OpenXmlHelper：两个独立 Word、${hasTables ? '数据表格保留' : '数据表格已转为普通文字'}、图片、中文路径及成功/失败中转清理通过。`);
+    console.log(`真实 OpenXmlHelper：两个独立 Word、${hasTables ? '数据表格保留' : '数据表格已转为普通文字'}、图片、提示词异常标记补齐及被包裹图片修复后转换、坏图原位提示不中断、中文路径及成功/失败中转清理通过。`);
   } finally {
     await service.close();
   }
@@ -1159,14 +1262,25 @@ function checkExportNumbering() {
   assert.equal(scope.module.exports.formatOutlineTitle(entries[1].item.number, '乙', { numbering_format: 'custom', numbering_template: '{full}' }), '1.1 乙');
 }
 
-// 执行真实启动入口，确认只读取已保存状态，拦截发生在运行态准备和会话清理前。
-function checkImageModelStartup() {
+// 执行真实配置规范化、关闭保存和启动入口，确认页面与后台始终使用已保存的 AI 开关。
+async function checkImageModelStartup() {
+  const vm = require('node:vm');
+  const ts = require('typescript');
+  const renderer = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/contentGenerationOptions.ts'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS },
+  }).outputText, renderer);
+  const normalize = renderer.exports.normalizeContentGenerationOptions;
+  const settings = fs.readFileSync(path.join(__dirname, '../src/features/technical-plan/pages/GenerationSettingsPage.tsx'), 'utf8');
+  const saveStart = settings.indexOf('  const saveContentOptions =');
+  const saveEnd = settings.indexOf('  const openHtmlImageTypesDialog =', saveStart);
+  assert.ok(saveStart >= 0 && saveEnd > saveStart);
   const source = fs.readFileSync(path.join(__dirname, '../electron/services/taskService.cjs'), 'utf8');
   const start = source.indexOf('    startContentGeneration(payload) {');
   const end = source.indexOf('    pauseContentGeneration()', start);
   assert.ok(start >= 0 && end > start);
   for (const status of ['available', 'unavailable', 'untested', undefined]) {
-    for (const [imageQuantity, useAiImages] of [['light', true], ['heavy', true], ['light', false], ['none', true]]) {
+    for (const [imageQuantity, useAiImages] of [[10, true], [30, true], [60, true], [100, true], [30, false], [60, false], [0, true]]) {
       const calls = [];
       const plan = { outlineWordControlSnapshot: {}, contentGenerationOptions: { imageQuantity, useAiImages } };
       const scope = {
@@ -1177,21 +1291,42 @@ function checkImageModelStartup() {
         startManagedTask() { calls.push('start'); },
         activeTasks: new Map(), isActiveTaskStatus: () => false,
       };
-      require('node:vm').runInNewContext(`this.service = {${source.slice(start, end)}};`, scope);
+      vm.runInNewContext(`this.service = {${source.slice(start, end)}};`, scope);
+      const normalized = normalize(plan.contentGenerationOptions, status === 'available');
+      assert.equal(normalized.useAiImages, useAiImages, '模型不可用不能把已保存的开启状态显示为关闭');
       for (const payload of [{}, { regenerate: true }, { targetItemId: 'section' }, { resume: true }, { retryFailedSections: true }]) {
         calls.length = 0;
-        if (imageQuantity !== 'none' && useAiImages && status !== 'available') {
+        if (imageQuantity > 0 && useAiImages && status !== 'available') {
           assert.throws(() => scope.service.startContentGeneration(payload), /已开启 AI 生图.*去设置-生图模型中点击测试，并配置可用渠道/);
           assert.deepEqual(calls, ['config']);
         } else {
           scope.service.startContentGeneration(payload);
           assert.equal(calls.at(-1), 'start');
-          assert.equal(calls.includes('config'), imageQuantity !== 'none' && useAiImages);
+          assert.equal(calls.includes('config'), imageQuantity > 0 && useAiImages);
         }
+      }
+      if (useAiImages && status !== 'available' && imageQuantity > 0) {
+        let saves = 0;
+        const settingsScope = {
+          generationConfigLocked: false, contentOptionsBusy: false, imageModelAvailable: false,
+          currentContentGenerationOptions: normalized, normalizeContentGenerationOptions: normalize,
+          setDraftTableRequirement() {}, setDraftIllustrationOptions() {}, setContentOptionsBusy() {},
+          showToast() {},
+          async onContentGenerationOptionsChange(value) { saves += 1; plan.contentGenerationOptions = value; },
+        };
+        vm.runInNewContext(ts.transpileModule(settings.slice(saveStart, saveEnd) + '\nthis.save = saveContentOptions;', {
+          compilerOptions: { target: ts.ScriptTarget.ES2022 },
+        }).outputText, settingsScope);
+        assert.equal(await settingsScope.save({ ...normalized, useAiImages: false }), true);
+        assert.equal(saves, 1, '关闭必须实际保存，不能因显示值已为 false 而跳过');
+        assert.equal(normalize(plan.contentGenerationOptions, false).useAiImages, false, '再次读取仍应为关闭');
+        calls.length = 0;
+        scope.service.startContentGeneration({});
+        assert.deepEqual(calls, ['prepare', 'start'], '关闭 AI 后非零比例都应放行，且不要求生图模型可用');
       }
     }
   }
-  console.log('正文启动：读取已保存生图状态、不可用提前拦截、可用及关闭 AI/无图放行检查通过。');
+  console.log('正文启动：开关真实状态、不可用时关闭并保存、非零比例关闭 AI 后放行及已开启时拦截检查通过。');
 }
 
 // 所有产物位于独立中文临时目录，不读取或修改用户项目数据。
@@ -1199,7 +1334,7 @@ async function main() {
   checkContentWordPlanning();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '正文转Word检查-'));
   try {
-    checkImageModelStartup();
+    await checkImageModelStartup();
     checkRetiredStageCleanup();
     checkExportNumbering();
     await checkContentPreview(path.join(directory, '临时预览会话'), path.join(directory, '临时预览正式产物'));

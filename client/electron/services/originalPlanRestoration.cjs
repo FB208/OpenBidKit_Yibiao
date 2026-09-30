@@ -1,3 +1,4 @@
+const Ajv = require('ajv');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { numberMarkdownLines } = require('../utils/markdownLineView.cjs');
 
@@ -214,14 +215,14 @@ node_id 必须来自目标小节。原文范围用 start_line 和 end_line，行
 每个小节至多输出一条 assignment；source_ranges 按原文顺序排列。heading_edits 必须提供，无标题时填 []，其中每项的标题 content 仍须填写。程序会根据 source_ranges 和 heading_edits 从无行号原文逐字重建小节正文，不要在 assignment 顶层输出正文 content 字段。
 covered-ranges.json 仅用于核对全文覆盖情况。所有非空原文行须由已有覆盖范围或本次 assignments 覆盖；尚未覆盖的原文列入 unassigned 并说明原因，不能静默遗漏。
 纯空白签字、职务、日期、盖章栏以及不属于方案正文的评标提示，可列入 unassigned 并说明原因；其中包含实际授权、资质信息、证书标题或图片时，仍须作为实质内容还原。
-完成原文阅读、语义归属和来源范围判断后，将结果直接写入 original-restore-result.json。不重复输出逐行原文或同内容的文字版分配说明；仅在读取异常、行号冲突、判断存疑或校验失败时，使用 read、find 或 bash 补充核对并修正。
+将原方案中应保留的内容完整映射到目标小节，并将来源范围和标题处理结果保存到 original-restore-result.json。不重复输出逐行原文或同内容的文字版分配说明；仅在读取异常、行号冲突、判断存疑或校验失败时，使用 read、find 或 bash 补充核对并修正。
 最终写入 original-restore-result.json，格式：
 {"assignments":[{"node_id":"从目标清单复制节点ID","source_ranges":[{"start_line":1,"end_line":8}],"heading_edits":[{"line":1,"content":"**1.1.1 实施安排**"}]}],"unassigned":[{"start_line":9,"end_line":10,"reason":"不适用于正文的签章栏"}]}
-程序已为 original-restore-result.json 预置 JSON Schema，write/edit 会自动校验。工具返回校验通过后无需再调用 json-validation；失败时按工具反馈修正文件并重新写入。
-不要修改输入文件或业务数据库。JSON 格式通过后，程序还会检查原文、表格、图片和覆盖范围；如有错误，按反馈在当前会话中修正输出文件。`;
+程序已为 original-restore-result.json 预置 JSON Schema，可用 json-validation 自查，只传 file_path。
+不要修改输入文件或业务数据库，被改动的输入文件会在提交时还原。结束后程序统一校验 JSON 格式以及原文、表格、图片和覆盖范围；不通过时退回问题，按反馈在当前会话中修正输出文件。`;
 }
 
-// 结构校验交给新版 JSON 工具；范围、标题和覆盖完整性仍由业务校验检查。
+// 提交时先按 Schema 校验结构，再由业务校验检查范围、标题和覆盖完整性。
 const ORIGINAL_RESTORATION_JSON_SCHEMA = {
   type: 'object', required: ['assignments', 'unassigned'], additionalProperties: false,
   $defs: {
@@ -257,6 +258,17 @@ const ORIGINAL_RESTORATION_JSON_SCHEMA = {
     },
   },
 };
+
+const restorationAjv = new Ajv({ allErrors: true, strict: true });
+const validateRestorationSchema = restorationAjv.compile(ORIGINAL_RESTORATION_JSON_SCHEMA);
+
+// 结构错误逐项交回 Agent，便于一次修正全部字段问题。
+function assertOriginalRestorationSchema(value) {
+  if (validateRestorationSchema(value)) return value;
+  const error = new Error(`original-restore-result.json 格式错误：${restorationAjv.errorsText(validateRestorationSchema.errors, { dataVar: 'original-restore-result.json' })}`);
+  error.issues = validateRestorationSchema.errors.map(item => `${item.instancePath || '/'} ${item.message}`);
+  throw error;
+}
 
 // 验证范围、标题和表格完整性，按原始行重建正文并检查全文覆盖情况。
 function validateOriginalRestoration(value, { source, allowedNodeIds, coveredRanges = [] }) {
@@ -333,7 +345,7 @@ function calculateOriginalRestoration(source, ranges, sourceHash) {
 
 module.exports = {
   createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
-  buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration,
+  buildOriginalRestorationPrompt, assertOriginalRestorationSchema, validateOriginalRestoration, calculateOriginalRestoration,
   originalImageReferences, validateOriginalImages, restoredAssignmentContent, ORIGINAL_PLAN_HEADING_INSTRUCTION,
   ORIGINAL_RESTORATION_JSON_SCHEMA,
 };

@@ -112,7 +112,7 @@ function createDeveloperLayoutFigureService({ app, aiService, localImageRenderSe
   /**
    * 把模板占位图补进测试资源目录。
    * 关闭真实生图、章节本来就没有配图、某张图生成失败退回占位图，这几种情况下
-   * 组装出来的 HTML 都会引用模板那几张 webp，不补进来 Word 侧会报"图片资产不存在"；
+   * 组装出来的 HTML 都会引用模板那几张 webp，不补进来 Word 侧只能写“[图片无法导出]”占位；
    * 目录本身也可能还没建过（纯文字那条路不会调 reset），这里一并保证。
    * 只复制不清理：目录里还躺着本轮真实生成的图，不能按模板资源对齐。
    */

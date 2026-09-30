@@ -4,10 +4,12 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
-const { createContentImageProtection } = require('../electron/services/contentGenerationEditTools.cjs');
+const { createContentImageProtection, imageStructure } = require('../electron/services/contentGenerationEditTools.cjs');
+const { taskFilePath } = require('../electron/services/contentGenerationTaskFiles.cjs');
 const { checkWordCount, countHtmlWords, createContentGenerationWordTools } = require('../electron/services/contentGenerationWordTools.cjs');
 const { createContentGenerationTools, runContentGenerationAgent } = require('../electron/services/contentGenerationAgent.cjs');
 const { createPiSession, loadPiModules } = require('../electron/services/pi/piSessionFactory.cjs');
+const { NATIVE_AGENT_TOOLS } = require('../electron/services/agent/agentToolEnvironment.cjs');
 
 // 仅替换测试所需的外部环境；运行真实业务模块，不修改 require 全局缓存。
 function loadWithMocks(relative, mocks) {
@@ -20,7 +22,7 @@ function loadWithMocks(relative, mocks) {
   return mod.exports;
 }
 
-// 真实 Pi 自动执行模型工具调用；只替换模型响应，不替换编辑、钩子或文件写入。
+// 真实 Pi 自动执行模型工具调用；只替换模型响应。图片保护不再拦截写入，改为提交时比对保护开始时的图片结构。
 async function checkImageProtection(root, piAi) {
   const workspaceDir = path.join(root, '图片写入保护');
   fs.mkdirSync(path.join(workspaceDir, '正文'), { recursive: true });
@@ -38,48 +40,34 @@ async function checkImageProtection(root, piAi) {
   }), 'utf8');
   const environment = { shellPath: process.env.ComSpec, layout: { agentDir: path.join(root, 'image-agent') }, instructions: '检查图片保护', env: {} };
   const base = { workspaceDir, environment, config: {}, timeoutMs: 60000, summaryEnabled: false, proxyInfo: { baseUrl: 'http://127.0.0.1:1', token: 'test' } };
-  const childProtection = createContentImageProtection({ workspaceDir, files: [file], active: true });
-  const child = await createPiSession({ ...base, activeTools: ['read', 'edit', 'report-failure'], beforeFileWrite: childProtection.beforeWrite, beforeToolCall: childProtection.beforeToolCall });
-  try {
-    const edit = child.session.agent.state.tools.find(tool => tool.name === 'edit');
-    const candidates = [
-      original.replace(figures[0], ''),
-      original.replace('图片/0.png', '图片/1.png'),
-      original.replace('alt="图片0"', 'alt="替换图片"'),
-      original.replace('图注0', '新图注'),
-      original.replace('图片提示0', '新提示'),
-      original.replace(figures[0], `${figures[0]}${figures[0]}`),
-      original.replace(figures[2], '临时').replace(figures[3], figures[2]).replace('临时', figures[3]),
-      original.replace('data-yb-preset="threeImages"', 'data-yb-preset="fourImages"'),
-      original.replace(`<td>${figures[1]}</td><td><p>右侧说明</p></td>`, `<td><p>右侧说明</p></td><td>${figures[1]}</td>`),
-      original.replace(`<td>${figures[7]}</td><td>${figures[8]}</td>`, `<td colspan="2">${figures[7]}${figures[8]}</td>`),
-      original.replace(figures[0], `<template>${figures[0]}</template>`),
-    ];
-    for (const [index, content] of candidates.entries()) {
-      await assert.rejects(edit.execute('protected', { path: file, edits: [{ oldText: original, newText: content }] }), /受保护图片/, `图片保护样例 ${index}`);
-      assert.deepEqual(fs.readFileSync(absoluteFile), initialBytes, '拒绝必须发生在落盘前，包括原有 BOM 和 CRLF');
-    }
-    const secondFile = path.join(workspaceDir, '正文/小节二.html');
-    fs.writeFileSync(secondFile, '<p>其他小节</p>', 'utf8');
-    for (const target of ['正文/小节二.html', '图片/0.png']) {
-      const oldText = fs.readFileSync(path.join(workspaceDir, target), 'utf8');
-      await assert.rejects(edit.execute('other-file', { path: target, edits: [{ oldText, newText: '修改' }] }), /正文编辑只能/);
-    }
-    assert.equal(fs.readFileSync(secondFile, 'utf8'), '<p>其他小节</p>');
-    assert.deepEqual(fs.readFileSync(path.join(workspaceDir, '图片/0.png')), Buffer.from([0, 0, 255]));
-    // 一次完整替换经过图片但保持图片不变，应允许修改图文表格的说明文字。
-    await edit.execute('allowed', { path: file, edits: [{ oldText: original, newText: original.replace('<p>右侧说明</p>', '<ul><li>扩写后的右侧说明</li></ul>') }] });
-    assert.match(fs.readFileSync(absoluteFile, 'utf8'), /扩写后的右侧说明/);
-  } finally { child.session.dispose(); }
-  fs.writeFileSync(absoluteFile, initialBytes);
+  // 提交时比对图片结构：删除、替换、复制、调序、改图注或提示词、改图片表格布局及移入不可见容器都能识别。
+  const expected = imageStructure(original);
+  const candidates = [
+    original.replace(figures[0], ''),
+    original.replace('图片/0.png', '图片/1.png'),
+    original.replace('alt="图片0"', 'alt="替换图片"'),
+    original.replace('图注0', '新图注'),
+    original.replace('图片提示0', '新提示'),
+    original.replace(figures[0], `${figures[0]}${figures[0]}`),
+    original.replace(figures[2], '临时').replace(figures[3], figures[2]).replace('临时', figures[3]),
+    original.replace('data-yb-preset="threeImages"', 'data-yb-preset="fourImages"'),
+    original.replace(`<td>${figures[1]}</td><td><p>右侧说明</p></td>`, `<td><p>右侧说明</p></td><td>${figures[1]}</td>`),
+    original.replace(`<td>${figures[7]}</td><td>${figures[8]}</td>`, `<td colspan="2">${figures[7]}${figures[8]}</td>`),
+    original.replace(figures[0], `<template>${figures[0]}</template>`),
+  ];
+  for (const [index, content] of candidates.entries()) assert.notEqual(imageStructure(content), expected, `图片保护样例 ${index}`);
+  assert.equal(imageStructure(initialBytes.toString('utf8')), expected, 'BOM 和 CRLF 不影响比对');
+  assert.equal(imageStructure(original.replace('<p>右侧说明</p>', '<ul><li>扩写后的右侧说明</li></ul>')), expected, '图文表格中的说明文字可以调整');
 
   let protection;
   let entered = 0;
-  const main = await createPiSession({ ...base, autoValidateJson: true,
+  const records = {};
+  const main = await createPiSession({ ...base,
     jsonValidationSchemas: { '正文生成结果.json': { type: 'object', required: ['sections'], properties: { sections: { type: 'array' } }, additionalProperties: false } },
-    beforeFileWrite: context => protection.beforeWrite(context), beforeToolCall: context => protection.beforeToolCall(context),
+    beforeToolCall: context => protection.beforeToolCall(context),
     createTools(context) {
-      protection = createContentImageProtection({ workspaceDir, files: [file], allowManifest: true, setActiveTools: context.setActiveTools, onEnter: () => { entered++; } });
+      protection = createContentImageProtection({ workspaceDir, files: [file], setActiveTools: context.setActiveTools, onEnter: () => { entered++; },
+        baseline: { saveRecord: (name, value) => { records[name] = value; }, loadRecord: name => records[name] || null } });
       return createContentGenerationWordTools({ activity: { pending: 0 }, imageProtection: protection,
         validateHtml: require('../electron/services/contentGenerationImageTools.cjs').validateContentImageReferences,
       }, context);
@@ -92,12 +80,11 @@ async function checkImageProtection(root, piAi) {
     const call = (name, args) => ({ type: 'toolCall', id: `call-${calls}-${name}`, name, arguments: args });
     main.session.agent.streamFn = () => {
       calls++;
-      assert.ok(calls <= 2, '错误后应继续一次并在成功编辑后完成，不能额外请求真实模型');
+      assert.ok(calls <= 2, '不能额外请求真实模型');
       const content = calls === 1 ? [
         call('check-word-count', {}),
-        call('edit', { path: file, edits: [{ oldText: figures[0], newText: '' }], task_complete: true }),
-        call('write', { path: file, content: '<p>覆盖正文</p>' }),
-        call('bash', { command: 'echo should-not-run' }),
+        call('edit', { path: file, edits: [{ oldText: figures[0], newText: '' }] }),
+        call('bash', { command: 'echo 命令可用' }),
       ] : [call('edit', { path: file, edits: [{ oldText: '普通说明', newText: '扩写后的普通说明' }], task_complete: true })];
       const message = { role: 'assistant', content, api: 'openai-completions', provider: 'yibiao', model: 'default', stopReason: 'toolUse', timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
       const stream = piAi.createAssistantMessageEventStream();
@@ -107,16 +94,21 @@ async function checkImageProtection(root, piAi) {
     await main.session.prompt('检查字数后调整文字，不修改图片', { expandPromptTemplates: false });
     assert.equal(calls, 2);
     assert.equal(entered, 1);
-    assert.deepEqual(events.map(event => [event.toolName, event.isError]), [['check-word-count', false], ['edit', true], ['write', true], ['bash', true], ['edit', false]]);
-    assert.match(fs.readFileSync(absoluteFile, 'utf8'), /扩写后的普通说明/);
-    figures.forEach(item => assert.ok(fs.readFileSync(absoluteFile, 'utf8').includes(item)));
-    assert.equal(main.session.getActiveToolNames().includes('bash'), false);
+    // 保护阶段写入照常执行，图片块改动留给提交校验按保护开始时的记录退回。
+    assert.deepEqual(events.map(event => [event.toolName, event.isError]), [['check-word-count', false], ['edit', false], ['bash', false], ['edit', false]]);
+    const recorded = protection.recorded(file);
+    assert.equal(recorded.structure, expected, '记录保护开始时的图片结构');
+    assert.equal(recorded.blocks[0], figures[0], '原始图片块按出现顺序保存');
+    assert.equal(recorded.blocks.length, 4, '含图片的表格整体作为一块');
+    assert.deepEqual(records['content-images'][file], recorded, '图片记录保存到任务目录供暂停恢复');
+    const current = fs.readFileSync(absoluteFile, 'utf8');
+    assert.match(current, /扩写后的普通说明/);
+    assert.notEqual(imageStructure(current), recorded.structure, '删掉的图片在提交时识别');
+    assert.ok(main.session.getActiveToolNames().includes('bash'), '保护阶段仍可执行命令');
+    assert.throws(() => protection.beforeToolCall({ toolCall: { name: 'generate-section-images' } }), /正文编辑期间不能调用/);
     const write = main.session.agent.state.tools.find(tool => tool.name === 'write');
-    const badJson = await write.execute('bad-json', { path: '正文生成结果.json', content: '{}' });
-    assert.equal(badJson.isError, true, '图片写入保护不能覆盖原有 JSON 自动校验');
-    await write.execute('good-json', { path: '正文生成结果.json', content: '{"sections":[]}' });
-    main.assertJsonValidationPassed();
-    await assert.rejects(write.execute('input', { path: '正文编排决策.json', content: '{}' }), /正文编辑只能/);
+    const unchecked = await write.execute('unchecked-json', { path: '正文生成结果.json', content: '{}' });
+    assert.ok(!unchecked.isError, '结果清单在提交时统一校验，写入时不拦截');
   } finally { main.session.dispose(); }
 }
 
@@ -131,7 +123,9 @@ async function main() {
     fs.writeFileSync(target, text, 'utf8');
   };
   const html = count => `<!-- yibiao:block -->\n<p id="body">${'文'.repeat(count)}</p>`;
-  const decisions = { targets, has_knowledge_base: false, word_control: { minimumWords: 0, maximumWords: 0, checkTotalWords: true } };
+  const decisions = { execution_summary: {}, targets, has_knowledge_base: false, word_control: { minimumWords: 0, maximumWords: 0, checkTotalWords: true } };
+  // 与正式入口一致提供执行清单，交接摘要从中整理。
+  const decisionFiles = () => [{ path: '正文编排决策.json', content: JSON.stringify(decisions) }];
   const saveDecisions = () => write('正文编排决策.json', JSON.stringify(decisions));
   let service;
   try {
@@ -176,7 +170,7 @@ async function main() {
       environment: { shellPath: process.env.ComSpec, layout: { agentDir: path.join(root, 'agent') }, instructions: '检查原生编辑', env: {} },
       proxyInfo: { baseUrl: 'http://127.0.0.1:1', token: 'test' },
     });
-    assert.deepEqual(created.snapshot.active_tools.sort(), ['edit', 'read', 'report-failure']);
+    assert.deepEqual(created.snapshot.active_tools.sort(), [...NATIVE_AGENT_TOOLS, 'report-failure'].sort(), '原生工具始终启用');
     created.session.dispose();
     const edit = codingAgent.createEditToolDefinition(workspaceDir);
     await assert.rejects(edit.execute('miss', { path: targets[0].file, edits: [{ oldText: '不存在的原文', newText: '替换' }] }), /./);
@@ -203,7 +197,7 @@ async function main() {
         const session = { sessionId: `session-${sessions.length}`, messages: [], subscribe: () => () => {}, dispose() {}, async abort() {},
           prompt: prompt => promptAction(options, prompt) };
         sessions.push(session);
-        return { session, snapshot: {}, assertJsonValidationPassed() {} };
+        return { session, snapshot: {} };
       } },
     });
     const { createAgentService } = loadWithMocks('../electron/services/agentService.cjs', {
@@ -222,7 +216,7 @@ async function main() {
     let allStarted;
     const startedGate = new Promise(resolve => { allStarted = resolve; });
     promptAction = async (options, prompt) => {
-      assert.deepEqual(options.activeTools, ['read', 'edit', 'report-failure']);
+      assert.deepEqual(options.activeTools, [...NATIVE_AGENT_TOOLS, 'report-failure']);
       started += 1;
       if (started === 2) allStarted();
       await batchGate;
@@ -230,6 +224,13 @@ async function main() {
       await edit.execute('edit', { path: section.file, edits: [{ oldText: '文'.repeat(10), newText: '文'.repeat(15) }] });
     };
     const activity = { pending: 0 };
+    // 批量工具读取固定任务文件：写入后无参数提交，工具在调用时同步读取文件。
+    const submit = (tool, key, callId, params, ...rest) => {
+      const target = path.join(workspaceDir, taskFilePath(key));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify(params), 'utf8');
+      return tool.execute(callId, {}, ...rest);
+    };
     const [check, adjust] = createContentGenerationWordTools({
       agentService: { runTask(payload) {
         assert.equal(payload.primary_session, false);
@@ -238,13 +239,22 @@ async function main() {
         return scoped.runTask(payload);
       } }, signal: cancellation.signal, activity, validateHtml: (_root, content) => assert.ok(countHtmlWords(content) > 0),
     }, { Type, workspaceDir });
-    const pending = adjust.execute('batch', { sections: targets.map(section => ({ section_id: section.id, instructions: '扩写五字' })) });
+    const pending = submit(adjust, 'adjust', 'batch', { sections: targets.map(section => ({ section_id: section.id, instructions: '扩写五字' })) });
     await startedGate;
     await assert.rejects(check.execute(), /仍有/);
     assert.equal(service.getPrimarySession().session_id, primary.session_id);
     releaseBatch();
-    assert.ok((await pending).details.results.every(result => result.status === 'success'));
-    assert.equal((await check.execute()).details.total_words, 30);
+    const adjusted = await pending;
+    assert.ok(adjusted.details.results.every(result => result.status === 'success'));
+    assert.deepEqual(JSON.parse(adjusted.content[0].text), { total: 2, success: 2, skipped: 0, unresolved: [] });
+    const counted = await check.execute();
+    assert.equal(counted.details.total_words, 30);
+    // 各节字数写入程序清单，模型只接收总数和差额。
+    const brief = JSON.parse(counted.content[0].text);
+    assert.equal(brief.total_words, 30);
+    assert.equal(brief.detail_file, '程序清单/正文字数统计.json');
+    assert.equal(brief.sections, undefined);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(workspaceDir, brief.detail_file), 'utf8')).sections, counted.details.sections);
     assert.equal(fs.existsSync(path.join(workspaceDir, '正文生成结果.json')), true);
     assert.deepEqual(fs.readdirSync(layout.tasksRoot), []);
 
@@ -254,7 +264,7 @@ async function main() {
       if (prompt.includes(`文件为 ${targets[0].file}`)) failedSession = options;
       if (failedSession === options) throw new Error('模型不可用');
     };
-    const failedBatch = await adjust.execute('partial-error', { sections: targets.map(section => ({ section_id: section.id, instructions: '失败检查' })) });
+    const failedBatch = await submit(adjust, 'adjust', 'partial-error', { sections: targets.map(section => ({ section_id: section.id, instructions: '失败检查' })) });
     assert.deepEqual(failedBatch.details.results.map(result => result.status), ['error', 'success']);
     assert.match(failedBatch.details.results[0].error, /模型不可用/);
     assert.equal(fs.readFileSync(path.join(workspaceDir, targets[0].file), 'utf8'), html(15));
@@ -263,13 +273,13 @@ async function main() {
 
     // 同批多个失败不重复上报；重试成功仍保留成功统计。
     promptAction = async () => { throw new Error('批次失败'); };
-    const failedAll = await adjust.execute('all-error', { sections: targets.map(section => ({ section_id: section.id, instructions: '批次失败检查' })) });
+    const failedAll = await submit(adjust, 'adjust', 'all-error', { sections: targets.map(section => ({ section_id: section.id, instructions: '批次失败检查' })) });
     assert.ok(failedAll.details.results.every(result => result.status === 'error'));
     assert.equal(failureReports.length, 0);
     assert.equal(runtimeEvents.filter(event => event === 'failed').length, 3);
     promptAction = async () => {};
     const successCount = runtimeEvents.filter(event => event === 'success').length;
-    const retried = await adjust.execute('retry', { sections: [{ section_id: targets[0].id, instructions: '重试检查' }] });
+    const retried = await submit(adjust, 'adjust', 'retry', { sections: [{ section_id: targets[0].id, instructions: '重试检查' }] });
     assert.equal(retried.details.results[0].status, 'success');
     assert.equal(runtimeEvents.filter(event => event === 'success').length, successCount + 1);
     assert.equal(failureReports.length, 0);
@@ -288,7 +298,7 @@ async function main() {
       assert.match(prompt, /统计完成后保持正文不变/);
     };
     await runContentGenerationAgent({
-      signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: () => [], aiService: { chat: async () => '', requestJson: async () => ({ issues: [], facts: [] }) },
+      signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: decisionFiles, aiService: { chat: async () => '', requestJson: async () => ({ issues: [], facts: [] }) },
       agentService: { hasPersistentTaskSession: () => false, updatePersistentTask() {}, runTask(payload) {
         const { persistent_task, ...transient } = payload;
         return scoped.runTask({ ...transient, workspace_dir: workspaceDir }).then(result => ({ ...result, workspace_dir: workspaceDir }));
@@ -302,7 +312,7 @@ async function main() {
     const finalError = new Error('主任务最终失败');
     promptAction = async () => { throw finalError; };
     await assert.rejects(runContentGenerationAgent({
-      signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: () => [], aiService: { chat: async () => '', requestJson: async () => ({ issues: [], facts: [] }) },
+      signal: cancellation.signal, hasKnowledgeBase: false, buildFiles: decisionFiles, aiService: { chat: async () => '', requestJson: async () => ({ issues: [], facts: [] }) },
       agentService: { hasPersistentTaskSession: () => false, updatePersistentTask() {}, runTask(payload) {
         const { persistent_task, ...transient } = payload;
         return scoped.runTask({ ...transient, workspace_dir: workspaceDir });
@@ -326,7 +336,7 @@ async function main() {
     // 生成未完成时不能计数；取消并发编辑后保留主工作区和已完成编辑。
     let finishGeneration;
     const tools = createContentGenerationTools({ signal: cancellation.signal, aiService: { chat: () => new Promise(resolve => { finishGeneration = resolve; }) } }, { Type, workspaceDir });
-    const generating = tools[0].execute('generate', { sections: [{ section_id: targets[0].id, instructions: '', references: '' }] });
+    const generating = submit(tools[0], 'sections', 'generate', { sections: [{ section_id: targets[0].id, instructions: '', references: '', regenerate: true }] });
     await assert.rejects(tools.find(tool => tool.name === 'check-word-count').execute(), /仍有/);
     finishGeneration(html(20));
     await generating;
@@ -337,7 +347,7 @@ async function main() {
       entered();
       cancellation.signal.addEventListener('abort', () => reject(cancellation.signal.reason), { once: true });
     });
-    const cancelPending = adjust.execute('cancel', { sections: [{ section_id: targets[0].id, instructions: '取消检查' }] });
+    const cancelPending = submit(adjust, 'adjust', 'cancel', { sections: [{ section_id: targets[0].id, instructions: '取消检查' }] });
     await enteredGate;
     cancellation.abort(new Error('用户暂停'));
     await assert.rejects(cancelPending, /用户暂停/);

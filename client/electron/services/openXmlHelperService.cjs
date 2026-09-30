@@ -2,6 +2,7 @@ const { spawn, execFile } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const mime = require('mime-types');
 const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
 const {
   getOpenXmlHelperDebugExecutablePath,
@@ -537,11 +538,15 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     startPreview(next).then(next.resolve, next.reject);
   }
 
-  /** 生成 Word；外部工作区图片按需中转到助手工作区，原始图片不改动。 */
+  /**
+   * 生成 Word；外部工作区图片按需中转到助手工作区，原始图片不改动。
+   * 中转的图片按扩展名声明图片类型，助手仅在文件头无法识别时据此原样嵌入；无法导出的图片在 imageWarnings 中返回。
+   */
   async function createRestrictedHtmlDocx(html, exportFormat, options = {}) {
     let assetRoot = options.assetRoot?.trim() || (options.copyAssets ? getWorkspaceDir(app) : await syncPreviewAssets());
     let temporaryAssets;
     let result;
+    const assetTypes = {};
     try {
       if (options.copyAssets) {
         const workspace = getWorkspaceDir(app);
@@ -558,6 +563,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
           const bytes = options.assets?.get(reference);
           if (bytes) fs.writeFileSync(target, bytes);
           else fs.copyFileSync(path.join(assetRoot, reference), target);
+          const type = mime.lookup(reference);
+          if (type && type.startsWith('image/')) assetTypes[reference] = type;
         }
         assetRoot = path.basename(temporaryAssets);
       }
@@ -572,6 +579,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
           whole_document: Boolean(options.wholeDocument),
           export_format: exportFormat,
           asset_root: assetRoot,
+          asset_types: assetTypes,
           chrome_assets: {
             root: chrome.assetRoot,
             header: chrome.header,
@@ -593,6 +601,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       return {
         bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, TEMPLATE_PREVIEW_FILE))),
         roles: Array.isArray(result.paragraphRoles) ? result.paragraphRoles : [],
+        imageWarnings: result.imageWarnings,
       };
     } finally {
       const jobsRoot = path.resolve(getOpenXmlJobsDir(app));

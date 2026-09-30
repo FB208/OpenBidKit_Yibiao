@@ -144,8 +144,8 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
         open={groupChatOpen}
         onOpenChange={setGroupChatOpen}
         kicker="用户交流"
-        title="扫码加入交流群"
-        description="使用微信扫描下方二维码，加入易标用户交流群。"
+        title="开源软件没有客服！没有客服！！没有客服！！！"
+        description="欢迎AI、招投标相关从业者一起探讨技术～。"
         cardClassName="group-chat-dialog"
         actions={<button type="button" className="secondary-action" onClick={() => setGroupChatOpen(false)}>关闭</button>}
       >

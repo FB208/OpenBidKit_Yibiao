@@ -324,6 +324,7 @@ const bridge = {
   },
   export: {
     exportWord: (payload) => ipcRenderer.invoke('export:word', payload),
+    cancelWordConfirmation: (requestId) => ipcRenderer.invoke('export:cancel-word-confirmation', requestId),
     openFile: (filePath) => ipcRenderer.invoke('export:open-file', filePath),
     onWordExportProgress: (callback) => {
       const listener = (_event, payload) => callback(payload);

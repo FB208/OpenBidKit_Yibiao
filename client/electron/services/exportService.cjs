@@ -4,6 +4,7 @@ const { fileURLToPath } = require('node:url');
 const { app, dialog, nativeImage } = require('electron');
 const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
+const mime = require('mime-types');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
@@ -2907,8 +2908,18 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-/** 非 AI 节点仍读取已有 Markdown；复用现有图片解析和本地 Mermaid 渲染。 */
-async function renderMarkdownForRestrictedHtml(content, assets, context = {}) {
+/** 保留图片来源的扩展名，助手在文件头无法识别时按扩展名声明的类型原样嵌入。 */
+function imageExtensionFromSource(source) {
+  const dataUrl = /^data:([^;,]+)/i.exec(source);
+  if (dataUrl) return mime.extension(dataUrl[1]) || '';
+  return path.extname(source.split(/[?#]/)[0]).slice(1).toLowerCase();
+}
+
+/**
+ * 非 AI 节点仍读取已有 Markdown；复用现有图片解析和本地 Mermaid 渲染。
+ * 单张图片读取失败时原位改为文字提示，原因写入 context.imageFailures，其余正文照常导出。
+ */
+async function renderMarkdownForRestrictedHtml(content, assets, context) {
   const $ = cheerio.load(await renderMarkdownHtml(content, { allowRawHtml: true, enableGfm: true }), null, false);
   for (const code of $('pre > code').toArray()) {
     if (!isMermaidCodeElement($, code)) continue;
@@ -2917,9 +2928,20 @@ async function renderMarkdownForRestrictedHtml(content, assets, context = {}) {
     $(code).parent().replaceWith(img);
   }
   for (const img of $('img').toArray()) {
-    const loaded = normalizeImageForDocx(await loadImage($(img).attr('src'), context));
-    if (!loaded?.buffer?.length) throw new Error(`无法读取图片：${$(img).attr('src') || '空引用'}`);
-    const ref = `export-images/${assets.size}.${loaded.type || 'png'}`;
+    const source = $(img).attr('src') || '';
+    const alt = $(img).attr('alt') || '';
+    let loaded;
+    try {
+      loaded = normalizeImageForDocx(await loadImage(source, context));
+      if (!loaded?.buffer?.length) throw new Error('图片文件不存在或为空');
+    } catch (error) {
+      context.imageFailures.push(error.message);
+      const notice = $('<em>').text(alt ? `[图片无法导出：${alt}]` : '[图片无法导出]');
+      if ($(img).parent().is('p') && $(img).parent().contents().length === 1) $(img).parent().replaceWith($('<p>').append(notice));
+      else $(img).replaceWith(notice);
+      continue;
+    }
+    const ref = `export-images/${assets.size}.${loaded.type || imageExtensionFromSource(source) || 'png'}`;
     assets.set(ref, loaded.buffer);
     const figure = $('<figure data-yb-size="wide" data-yb-fit="contain"></figure>');
     figure.append($('<img>').attr('data-yb-asset-ref', ref));
@@ -2935,6 +2957,8 @@ function createExportService({ configStore, openXmlHelperService, getTechnicalPl
   return {
     async exportWord(payload = {}, onProgress) {
       const technicalExport = payload.source === 'technical-plan' ? getTechnicalPlanExport?.() : null;
+      // 用户确认正文结构问题后再次调用时直接导出，问题小节在转换前自动修复。
+      const structureConfirmed = payload.confirmStructureIssues === true;
       if (payload.source === 'technical-plan') {
         if (!technicalExport) throw new Error('本地数据库尚未就绪');
         payload = technicalExport.prepare();
@@ -2965,6 +2989,17 @@ function createExportService({ configStore, openXmlHelperService, getTechnicalPl
       reportProgress(progressContext, 2, stats.mermaidCount
         ? `检测到 ${stats.mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片。`
         : '正在准备 Word 导出。');
+      // 结构不完整会导致转换报错或后续小节丢失：先交给用户决定，不直接阻止导出。
+      if (technicalExport && !structureConfirmed) {
+        const issues = technicalExport.inspect(payload);
+        if (issues.length) {
+          developerLogger.write('export.word.structure_issues', {
+            section_count: issues.length,
+            issue_count: issues.reduce((sum, item) => sum + item.problems.length, 0),
+          });
+          return { success: false, needsConfirmation: true, issues, message: `${issues.length} 个小节的正文结构不完整` };
+        }
+      }
       const defaultFilename = `${sanitizeFilename(payload.project_name || (payload.feasibility_options ? '可行性研究报告' : '标书文档'))}_${formatExportTimestamp()}.docx`;
       const defaultDir = app?.getPath ? app.getPath('downloads') : process.env.USERPROFILE || process.cwd();
       const result = await dialog.showSaveDialog({

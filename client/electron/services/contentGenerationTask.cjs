@@ -3,15 +3,16 @@ const Ajv = require('ajv');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
+const { AI_UPSTREAM_UNAVAILABLE } = require('../utils/aiBatchGuard.cjs');
 const { createNoopDeveloperLogger } = require('../utils/developerLog.cjs');
 const {
   createOriginalSource, readOriginalRange, buildOriginalRestorationFiles,
-  buildOriginalRestorationPrompt, validateOriginalRestoration, calculateOriginalRestoration,
+  buildOriginalRestorationPrompt, assertOriginalRestorationSchema, validateOriginalRestoration, calculateOriginalRestoration,
   originalImageReferences, validateOriginalImages, ORIGINAL_RESTORATION_JSON_SCHEMA,
 } = require('./originalPlanRestoration.cjs');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
-const { CONTENT_GENERATION_AGENT_TASK_KEY, buildContentGenerationFiles, runContentGenerationAgent, readContentGenerationResult } = require('./contentGenerationAgent.cjs');
+const { CONTENT_GENERATION_AGENT_TASK_KEY, CONTINUE_PROMPT, wasStagePrompted, buildContentGenerationFiles, runContentGenerationAgent, readContentGenerationResult } = require('./contentGenerationAgent.cjs');
 const { scanGeneratedSections, convertContentSections } = require('./contentGenerationOutput.cjs');
 const { createTechnicalPlanExport } = require('./technicalPlanExport.cjs');
 const { runContentLayoutCheck, readWordLayout } = require('./contentGenerationLayout.cjs');
@@ -25,6 +26,7 @@ const CONTENT_PLANNING_OUTLINE_FILE = '正文编排目录.json';
 const CONTENT_PLANNING_OUTPUT_FILE = '正文编排结果.json';
 const CONTENT_PLANNING_KNOWLEDGE_FILE = '参考知识库轻量条目.json';
 const CONTENT_PLANNING_BID_INFO_FILE = '招标文件关键信息.md';
+const CONTENT_PLANNING_TARGETS_FILE = '正文编排目标.json';
 const TABLE_REQUIREMENT_LABELS = {
   none: '不要',
   light: '少量',
@@ -389,8 +391,7 @@ function normalizeContentPlan(value, allowedKnowledgeItemIds) {
 
 // 按全文 AI 小节数确定配图名额；稳定排序保留同分小节的目录顺序，0 分不入选。
 function selectContentImageTargets(leaves, plans, imageQuantity) {
-  const ratio = imageQuantity === 'heavy' ? 0.6 : imageQuantity === 'light' ? 0.3 : 0;
-  const limit = Math.floor(leaves.length * ratio);
+  const limit = Math.floor(leaves.length * imageQuantity / 100);
   const candidates = leaves
     .filter(({ item }) => plans[item.id]?.plan?.image_suitability_score > 0)
     .sort((left, right) => plans[right.item.id].plan.image_suitability_score - plans[left.item.id].plan.image_suitability_score);
@@ -589,23 +590,25 @@ function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, r
     : tableRequirement === 'none'
       ? '表格需求为“不要”，table.needed 必须为 false，table.purpose 留空。'
       : `表格需求为“${tableRequirementLabel}”，全文共 ${totalSections || 0} 个 AI 生成小节，表格上限为 ${maxTables || 0} 个；在当前表格数量受限的模式下，table.needed=true 表示本节适合使用表格，属于候选建议。程序会在编排完成后根据全局数量限制确定最终结果，不应将候选标记理解为最终保留决定。`;
+  // 目标 ID 随目录规模增长，写入编排目标文件，提示词只给数量。
   const targetText = targetItemIds.length
-    ? targetItemIds.map((id) => `- ${id}`).join('\n')
+    ? `共 ${targetItemIds.length} 个，稳定 ID 见 ${CONTENT_PLANNING_TARGETS_FILE} 的 target_ids。`
     : '无。结果输出空 plans 数组。';
   const requirementText = String(regenerateRequirement || '').trim()
-    ? `\n程序已确认以下节点需要应用本次重新生成的额外要求：\n${regenerateTargetItemIds.map((id) => `- ${id}`).join('\n')}\n\n额外要求：\n${String(regenerateRequirement).trim()}\n`
+    ? `\n程序已确认其中 ${regenerateTargetItemIds.length} 个节点需要应用本次重新生成的额外要求，稳定 ID 见 ${CONTENT_PLANNING_TARGETS_FILE} 的 requirement_target_ids。\n\n额外要求：\n${String(regenerateRequirement).trim()}\n`
     : '';
   return `你负责本次投标技术方案正文生成，现在先完成基础编排。程序会处理并保存编排，再在同一会话中交给你生效结果和正文生成要求；本阶段不要提前生成正文或图片。工作区已提供编排材料：
 - ${CONTENT_PLANNING_KNOWLEDGE_FILE}：参考知识库轻量条目，只包含 id、标题和简介。
 - ${CONTENT_PLANNING_BID_INFO_FILE}：招标文件关键信息。
 - ${CONTENT_PLANNING_OUTLINE_FILE}：当前最新的完整目录及已有编排，只读参考。
+- ${CONTENT_PLANNING_TARGETS_FILE}：本次需要编排的目录节点稳定 ID。
 结果单独写入 ${CONTENT_PLANNING_OUTPUT_FILE}，格式为 {"plans":[{"id":"目标小节稳定 ID","content_plan":{...}}]}。
 
 程序已确定本次需要编排的目录节点：
 ${targetText}
 ${requirementText}
 请严格完成以下工作：
-1. 先读取全部三个文件，结合完整目录中的上下级和同级关系进行整体判断。
+1. 结合知识条目、招标文件关键信息，以及完整目录中的上下级和同级关系进行整体判断；读取方式自行决定。
 2. 完整目录仅供参考，不修改参考文件；plans 只包含程序列出的本次目标 AI 叶子，每个目标恰好一项，不提交非目标节点。
 3. 每项只包含 id 和 content_plan；content_plan 必须包含 writing_focus、target_words、knowledge.item_ids、table.needed、table.purpose、image_suitability_score。image_needed 由程序计算，不输出。
 字数编排要求：${wordInstruction} 字数只统计正文可读文字，不包含 HTML 标签和配图提示词；目标用于写作，不要求删减必要信息或重复凑字。
@@ -615,7 +618,7 @@ ${requirementText}
 7. 表格仅在能明显提升职责、步骤、参数、风险、措施或成果等内容的表达清晰度时使用；需要时准确填写用途，不需要时 purpose 留空。
 8. image_suitability_score 是本节配图适配性评分，必须为 0-10 的整数：0 表示不适合配图，10 表示非常适合配图。结合本节标题、说明、写作重点和项目背景，判断图片能否帮助读者理解流程、结构、关系或设备、场景示意等内容；图片带来的理解帮助越明显，评分越高，仅起装饰作用时不应给高分。
 9. id 原样使用目标节点的稳定 ID，不能用显示编号代替。不复制标题、编号、描述或目录树，程序按 ID 保存本次编排。
-10. 用 write 将本次全部目标的编排写入 ${CONTENT_PLANNING_OUTPUT_FILE}；继续任务时可读取已有结果并接着完善，但提交范围始终以本次目标列表为准。程序已为该文件预置 Schema 并开启写入自动校验，失败后根据错误修改。完成全部目标后，在最后一次成功写入或更新时设置 task_complete=true，结束本次基础编排，等待程序在同一会话中继续派发正文生成要求。`;
+10. 将本次全部目标的编排写入 ${CONTENT_PLANNING_OUTPUT_FILE}；内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。继续任务时可读取已有结果并接着完善，但提交范围始终以本次目标列表为准。程序已为该文件预置 Schema，可用 json-validation 自查；结束后程序统一校验，不通过会退回问题清单继续修改。完成全部目标后，在最后一次成功写入或更新时设置 task_complete=true，结束本次基础编排，等待程序在同一会话中继续派发正文生成要求。`;
 }
 
 function formatRestoreTargetsForPrompt(targets) {
@@ -1209,7 +1212,8 @@ function recordContentWorkflowProgress(stats, event) {
   }
   for (const item of event.items || []) items[item.id] = { status: 'pending', ...items[item.id], ...item };
   const steps = { ...previous.steps, [key]: { ...old, items, unit: event.unit || old.unit,
-    total: event.total ?? (event.inventory ? Object.keys(items).length : old.total), done: event.done === true } };
+    total: event.total ?? (event.inventory ? Object.keys(items).length : old.total), done: event.done === true,
+    ...(event.cumulative || old.cumulative ? { cumulative: true } : {}) } };
   if (event.inventory) {
     const applyKey = `${stats.phase}/${round}/image-apply`;
     const applied = { ...steps[applyKey]?.items };
@@ -1233,7 +1237,8 @@ function contentWorkflowDetail(stats) {
   const failed = items.filter(item => ['error', 'needs_repair'].includes(item.status)).length;
   const running = items.filter(item => ['running', 'generating', 'rendering'].includes(item.status)).length;
   const cancelled = items.filter(item => item.status === 'cancelled').length;
-  const total = Math.max(data.total || 0, items.length);
+  // 累计计数的步骤没有程序可知的总数，只统计已出现的条目。
+  const total = data.cumulative ? completed + failed + running + cancelled : Math.max(data.total || 0, items.length);
   const pending = Math.max(0, total - completed - failed - running - cancelled);
   const detail = workflow.step === 'images'
     ? ['ai', 'html', 'mermaid'].flatMap(kind => {
@@ -1245,7 +1250,7 @@ function contentWorkflowDetail(stats) {
   return { step: workflow.step, step_label: workflow.label, completed, total, unit: data.unit,
     failed, running, cancelled, pending, indeterminate: !data.unit && !data.done,
     started_at: workflow.started_at, activity: workflow.activity, detail_text: detail,
-    done: data.done };
+    done: data.done, ...(data.cumulative ? { cumulative: true } : {}) };
 }
 
 // 将当前正文子阶段的计数统一为插件和 Renderer 可直接消费的进度明细。
@@ -1582,14 +1587,24 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   refreshRunLimits(tasksToRun);
+  // 审计、去表格和格式自检的续跑只继续当前阶段；生成阶段的续跑保留已写出的正文，只补齐其余小节。
+  const continuingStageRun = continuingConsistency || continuingTableCleanup || continuingLayout;
+  const continuingGeneration = continuingBody && !continuingStageRun;
   let logs = [retryContentCorrection
     ? `准备重试内容矫正，共 ${leaves.length} 个已生成小节。`
     : resume
       ? `继续已暂停的正文生成任务，共 ${leaves.length} 个小节。`
-      : `准备生成正文，共 ${leaves.length} 个小节。`];
+      : retryFailedSections && (continuingBody || continuingLayout)
+        ? `继续正文任务，共 ${leaves.length} 个小节。`
+        : `准备生成正文，共 ${leaves.length} 个小节。`];
   if (targetItemId) {
     logs = [`准备重新生成正文小节：${targetItemId}。`];
-  } else if (retryFailedSections) {
+  } else if (retryFailedSections && continuingGeneration) {
+    // 小节须转换 Word 后才算完成，已有正文按上次扫描到的非空 HTML 统计，生成工具会自动跳过这些小节。
+    const writtenIds = new Set(contentStats.preview_ready_section_ids);
+    const written = tasksToRun.filter(({ item }) => writtenIds.has(item.id)).length;
+    logs = [...logs, `已有正文 ${written} 节保留，不重新生成；本次补齐 ${tasksToRun.length - written} 节。`];
+  } else if (retryFailedSections && !continuingStageRun) {
     logs = [...logs, `开始重试 ${tasksToRun.length} 个失败或未完成正文小节。`];
   }
   logs = [...logs, `文本模型并发上限：${contentConcurrency}。`];
@@ -1783,6 +1798,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     publishTaskUpdate({ status: 'running', logs, stats: statsSnapshot() });
     reportWorkflowProgress({ step: 'planning', label: '正在准备编排资料并生成小节编排' });
     return {
+      // 同一轮编排暂停或失败后继续；编排要求已发出时主会话只发送“继续之前的任务”。
+      continuing: continuingPlanning,
       prompt: createContentPlanningPrompt({
         targetItemIds, regenerateTargetItemIds, regenerateRequirement, tableRequirement, maxTables,
         totalSections: leaves.length, wordControl, isIncremental,
@@ -1792,6 +1809,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         { path: CONTENT_PLANNING_BID_INFO_FILE, content: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText) },
         { path: CONTENT_PLANNING_OUTLINE_FILE,
           content: JSON.stringify({ outline: buildContentPlanningOutline(outlineData.outline, storedContentPlans) }, null, 2) },
+        { path: CONTENT_PLANNING_TARGETS_FILE, content: JSON.stringify({ target_ids: targetItemIds,
+          ...(String(regenerateRequirement || '').trim() ? { requirement_target_ids: regenerateTargetItemIds } : {}) }, null, 2) },
         // 新一轮清空结果；同一轮继续时保留草稿供 Agent 修复。
         ...(!continuingPlanning ? [{ path: CONTENT_PLANNING_OUTPUT_FILE, content: '' }] : []),
       ],
@@ -1939,7 +1958,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   if (!tasksToRun.length) {
     logs = [...logs, retryContentCorrection
       ? '正文已全部生成，将直接重试内容矫正和后续处理。'
-      : '本次没有待生成的 AI 小节。'];
+      : continuingStageRun
+        ? `从${CONTENT_PHASE_LABELS[contentStats.phase]}阶段继续，已完成的正文和阶段进度保留。`
+        : '本次没有待生成的 AI 小节。'];
   }
 
   // 原图属于已有方案，保存任何后续改写前核对引用，失败时不覆盖旧正文。
@@ -2232,6 +2253,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     writeDeveloperLog('original_restore.agent.start', { target_count: targets.length, original_plan_chars: originalPlanMarkdown.length });
     pauseIfRequested('原方案还原尚未启动，继续后将创建或恢复持久会话。');
     const resumeSession = (resume || retryFailedSections) && agentService.hasPersistentTaskSession(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
+    // 还原要求已在原会话发出时，继续只发送“继续之前的任务”。
+    const restorationPrompted = resumeSession && wasStagePrompted(agentService.loadPersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY)?.state, 'restoring');
     const runId = crypto.randomUUID();
     if (resumeSession) {
       agentService.updatePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY, {
@@ -2261,7 +2284,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         title: '原方案正文还原 Agent',
         primary_session: false,
         summary_enabled: false,
-        prompt: buildOriginalRestorationPrompt({ resume: resumeSession, numberedPartPaths }),
+        prompt: restorationPrompted ? CONTINUE_PROMPT : buildOriginalRestorationPrompt({ resume: resumeSession, numberedPartPaths }),
         output_file: 'original-restore-result.json',
         files: restorationFiles,
         signal: AbortSignal.any([context.signal, controller.signal]),
@@ -2269,9 +2292,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         persistent_task: { task_key: ORIGINAL_RESTORATION_AGENT_TASK_KEY, mode: resumeSession ? 'resume' : 'create' },
         initial_stage: 'restoring',
         json_validation_schemas: { 'original-restore-result.json': ORIGINAL_RESTORATION_JSON_SCHEMA },
-        auto_validate_json: true,
         max_retries: 1,
-        validateOutput: result => validateOriginalRestoration(parseAgentJsonContent(result?.output_content), validationContext),
+        validateOutput: result => validateOriginalRestoration(assertOriginalRestorationSchema(parseAgentJsonContent(result?.output_content)), validationContext),
         onActivity: context.onActivity,
 
       });
@@ -2357,6 +2379,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           hasKnowledgeBase: referenceKnowledgeDocumentIds.length > 0,
           hasOriginalPlan, resolveOriginalImagePath: workspaceStore.resolveOriginalImagePath,
           signal,
+          // 批量工具判定服务端不可用时直接结束本次任务，不交回 Agent 反复重试。
+          failTask(error) {
+            if (!controller.signal.aborted) controller.abort(error);
+          },
           async prepareGeneration(context) {
             if (hasOriginalPlan && !completedStages.has('restoring') && targets.some(({ item }) => !directGenerationIds.has(item.id))) {
               await restoreOriginalMaterialsIfNeeded(targets.filter(({ item }) => !directGenerationIds.has(item.id)), context);
@@ -2503,6 +2529,13 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       const wordSections = await convertContentSections({
         result, outputDir: contentRuntime.html_output.word_output_dir,
         openXmlHelperService, signal, completed: contentRuntime.html_output.word_sections, onActivity: handleContentActivity,
+        // 修复记录随紧接着的 Word 保存检查点一起写入任务日志。
+        onStructureRepaired(message) {
+          logs = [...logs, message];
+        },
+        onImagesSkipped(message) {
+          logs = [...logs, message];
+        },
         onProgress(wordSections) {
           logs = [...logs, `Word 已保存：${wordSections.at(-1).file}（${wordSections.length}/${result.sections.length}）。`];
           saveConvertedSections(wordSections);
@@ -2520,10 +2553,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         contentGenerationRuntime: runtime,
       }, { contentRuntime: runtime });
     } catch (error) {
-      error = scanError || (controller.signal.aborted && isPauseLikeError(controller.signal.reason) ? controller.signal.reason : error);
+      const abortReason = controller.signal.reason;
+      error = scanError || (controller.signal.aborted && (isPauseLikeError(abortReason) || abortReason?.code === AI_UPSTREAM_UNAVAILABLE) ? abortReason : error);
       const paused = isPauseRequested() || isPauseLikeError(error);
       if (!['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase)) {
-        updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: paused ? 'paused' : 'error', agent_connection: 'idle' }, false);
+        updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: paused ? 'paused' : 'error', agent_connection: 'idle', ...(paused ? {} : { error: error.message }) }, false);
       }
       if (paused) {
         if (!['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase) && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
@@ -2539,6 +2573,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             ? '一致性审计已暂停，当前轮次及正文已保留，继续后在同一会话接着处理。'
             : '正文生成已暂停，已完成的 HTML 文件和 Agent 会话已保留，继续后接着生成。');
         throw createContentGenerationPausedError();
+      }
+      // Agent 持久状态同步记录真实失败原因，不保留上次暂停的错误。
+      if (!['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase) && agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
+        agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'error', agent_connection: 'idle', error: error.message });
       }
       checkpointTask({ status: 'error', error: error.message, logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
       throw error;

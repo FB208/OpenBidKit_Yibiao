@@ -57,8 +57,8 @@ static class RestrictedHtmlDocumentRenderer
     static string _parsedHtmlSource = "";
     static IDocument? _parsedHtml;
 
-    /// <summary>一次样张渲染的产物：块数，以及按文档顺序排列的段落角色。</summary>
-    public readonly record struct RenderResult(int BlockCount, IReadOnlyList<string> ParagraphRoles);
+    /// <summary>一次样张渲染的产物：块数、按文档顺序排列的段落角色，以及改为文字提示的配图。</summary>
+    public readonly record struct RenderResult(int BlockCount, IReadOnlyList<string> ParagraphRoles, IReadOnlyList<ImageWarning> ImageWarnings);
 
     /// <summary>新建骨架、直接写入 HTML 正文，再统一应用模板格式。</summary>
     public static RenderResult Render(
@@ -67,10 +67,12 @@ static class RestrictedHtmlDocumentRenderer
         string html,
         JsonElement exportFormat,
         ChromeAssets? chrome = null,
-        bool wholeDocument = false)
+        bool wholeDocument = false,
+        IReadOnlyDictionary<string, string>? assetTypes = null)
     {
         chrome ??= ChromeAssets.Empty;
-        if (wholeDocument) return RenderWholeDocument(assetRoot, outputPath, html, exportFormat, chrome);
+        var assets = new FigureAssets(assetTypes);
+        if (wholeDocument) return RenderWholeDocument(assetRoot, outputPath, html, exportFormat, chrome, assets);
         var format = new FormatReader(exportFormat);
         var prepared = PrepareHtml(html, format);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -86,13 +88,14 @@ static class RestrictedHtmlDocumentRenderer
             mainPart.Document.Body!,
             format.Number(format.Section("image"), "max_width_percent", 90),
             prepared.Document,
+            assets,
             cacheAssets: true);
         ApplyFormatting(document, format, prepared.Tables);
-        return new RenderResult(blockCount, CollectParagraphRoles(document));
+        return new RenderResult(blockCount, CollectParagraphRoles(document), assets.Warnings);
     }
 
     /// <summary>在同一 Word 包内转换各样式范围，共享图片关系；仅在页面范围切换时分节。</summary>
-    static RenderResult RenderWholeDocument(string assetRoot, string outputPath, string html, JsonElement exportFormat, ChromeAssets chrome)
+    static RenderResult RenderWholeDocument(string assetRoot, string outputPath, string html, JsonElement exportFormat, ChromeAssets chrome, FigureAssets assets)
     {
         var format = new FormatReader(exportFormat);
         var basicPage = new Dictionary<string, JsonElement>();
@@ -130,7 +133,7 @@ static class RestrictedHtmlDocumentRenderer
                 body.AppendChild(section.CloneNode(true));
                 var prepared = PrepareHtml(range.InnerHtml, rangeFormat, outlineOnly: true);
                 blockCount += RestrictedHtmlWordInserter.InsertIntoContent(assetRoot, mainPart, body,
-                    rangeFormat.Number(rangeFormat.Section("image"), "max_width_percent", 90), prepared.Document, cacheAssets: true);
+                    rangeFormat.Number(rangeFormat.Section("image"), "max_width_percent", 90), prepared.Document, assets, cacheAssets: true);
                 ApplyLayoutBookmarks(body, result.Concat(pageElements).SelectMany(item => item.Descendants<Wp.BookmarkStart>()).Count());
                 ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
                 foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
@@ -172,7 +175,7 @@ static class RestrictedHtmlDocumentRenderer
         mainPart.Document.Save();
         foreach (var part in mainPart.HeaderParts) part.Header.Save();
         foreach (var part in mainPart.FooterParts) part.Footer.Save();
-        return new RenderResult(blockCount, CollectParagraphRoles(document));
+        return new RenderResult(blockCount, CollectParagraphRoles(document), assets.Warnings);
     }
 
     /// <summary>自检副本的定位段落转为零宽书签，不进入可见正文或改变分页。</summary>

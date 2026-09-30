@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
-import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
@@ -209,6 +209,9 @@ function ContentEditPage({
   const [resetPending, setResetPending] = useState(false);
   const [sectionSubmitting, setSectionSubmitting] = useState(false);
   const [templateRequiredDialogOpen, setTemplateRequiredDialogOpen] = useState(false);
+  const [concurrencyWarning, setConcurrencyWarning] = useState('');
+  const [generationSubmitting, setGenerationSubmitting] = useState(false);
+  const generationStarting = useRef(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
@@ -234,7 +237,7 @@ function ContentEditPage({
     const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [taskInFlight]);
-  const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting;
+  const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting || generationSubmitting;
   const contentStats = task?.stats?.content;
   const previewReadySectionIds = useMemo(() => new Set(contentStats?.preview_ready_section_ids || []), [contentStats?.preview_ready_section_ids]);
   const originalRestoration = hasOriginalPlan && typeof contentStats?.original_restoration?.total_words === 'number' && contentStats.original_restoration.source_hash === originalPlanContentHash
@@ -307,7 +310,10 @@ function ContentEditPage({
     : `正文生成全部完成：共 ${currentProgressDetail?.total || 0} 个小节，实际 ${contentStats?.generated_html_words || 0} 字${completedImageCount ? `，新增配图 ${completedImageCount} 张` : ''}，Word 已全部生成。`;
   const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : progress;
   const displayProgressLabel = contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
-  const displayProgressCount = currentProgressDetail?.unit
+  // 编辑类步骤按累计完成数展示，不以随分批派发增长的已派发数作分母。
+  const displayProgressCount = currentProgressDetail?.cumulative && currentProgressDetail.unit
+    ? `已完成 ${currentProgressDetail.completed} ${currentProgressDetail.unit}${currentProgressDetail.failed ? `，失败 ${currentProgressDetail.failed} ${currentProgressDetail.unit}` : ''}`
+    : currentProgressDetail?.unit
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}${currentProgressDetail.unit}`
     : currentProgressDetail?.indeterminate ? '处理中' : auditing ? auditCorrectionCount : htmlOutputProgress && currentProgressDetail
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}`
@@ -329,7 +335,8 @@ function ContentEditPage({
     ? Math.max(0, Math.floor(((taskInFlight ? progressNow : Date.parse(task?.updated_at || currentProgressDetail.started_at)) - Date.parse(currentProgressDetail.started_at)) / 1000)) : 0;
   const workflowDescription = currentProgressDetail?.started_at ? [
     currentProgressDetail.step_label,
-    currentProgressDetail.unit ? `成功 ${currentProgressDetail.completed}/${currentProgressDetail.total} ${currentProgressDetail.unit}` : '',
+    currentProgressDetail.unit
+      ? `成功 ${currentProgressDetail.completed}${currentProgressDetail.cumulative ? '' : `/${currentProgressDetail.total}`} ${currentProgressDetail.unit}` : '',
     currentProgressDetail.running ? `处理中 ${currentProgressDetail.running}（含队列等待）` : '',
     currentProgressDetail.pending ? `待处理 ${currentProgressDetail.pending}` : '',
     currentProgressDetail.failed ? `失败或待修复 ${currentProgressDetail.failed}` : '',
@@ -545,13 +552,11 @@ function ContentEditPage({
 
   const launchContentGeneration = async ({
     savedGenerationOptions,
-    nextImageModelAvailable,
     config,
     regenerate,
     contentGenerationAction,
   }: {
     savedGenerationOptions: ContentGenerationOptions;
-    nextImageModelAvailable: boolean;
     config?: ClientConfig | null;
     regenerate: boolean;
     contentGenerationAction: ContentGenerationAction;
@@ -569,19 +574,12 @@ function ContentEditPage({
 
     await window.yibiao?.tasks.startContentGeneration({
       regenerate,
-      generationOptions: {
-        ...savedGenerationOptions,
-        useAiImages: nextImageModelAvailable && savedGenerationOptions.useAiImages,
-        useMermaidImages: savedGenerationOptions.useMermaidImages,
-        useHtmlImages: savedGenerationOptions.useHtmlImages,
-        htmlImageTypes: savedGenerationOptions.htmlImageTypes,
-        tableRequirement: savedGenerationOptions.tableRequirement,
-      },
+      generationOptions: savedGenerationOptions,
     });
     trackConfigUsage({
       table_requirement: savedGenerationOptions.tableRequirement,
       use_mermaid_images: savedGenerationOptions.useMermaidImages,
-      use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
+      use_ai_images: savedGenerationOptions.useAiImages,
       content_generation_action: contentGenerationAction,
       enable_consistency_audit: true,
       consistency_repair_mode: 'agent',
@@ -590,15 +588,24 @@ function ContentEditPage({
     showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
-  const startGeneration = async () => {
+  // 启动前提醒当前模型并发偏低；用户确认后仍使用最新配置，重复点击不重复提交。
+  const startGeneration = async (confirmedConcurrency = false) => {
+    if (generationStarting.current || taskBlocksGeneration || (concurrencyWarning && !confirmedConcurrency)) return;
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
     }
 
+    generationStarting.current = true;
+    setGenerationSubmitting(true);
+    if (confirmedConcurrency) setConcurrencyWarning('');
     try {
       if (!await ensureValidContentTemplate()) return;
       const config = await window.yibiao?.config.load();
+      if (config && !confirmedConcurrency && (config.concurrency_limit < 50 || config.image_model.concurrency_limit < 50)) {
+        setConcurrencyWarning(`当前设置的文本模型并发${config.concurrency_limit}，生图模型并发${config.image_model.concurrency_limit}，建议设置50或更高，否则生成速度会比较慢`);
+        return;
+      }
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
@@ -608,9 +615,12 @@ function ContentEditPage({
           : completedCount > 0
             ? 'continue'
             : 'start';
-      await launchContentGeneration({ savedGenerationOptions, nextImageModelAvailable, config, regenerate, contentGenerationAction });
+      await launchContentGeneration({ savedGenerationOptions, config, regenerate, contentGenerationAction });
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
+    } finally {
+      generationStarting.current = false;
+      setGenerationSubmitting(false);
     }
   };
 
@@ -633,7 +643,7 @@ function ContentEditPage({
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
-        use_ai_images: nextImageModelAvailable && savedGenerationOptions.useAiImages,
+        use_ai_images: savedGenerationOptions.useAiImages,
         content_generation_action: 'regenerate_section',
         enable_consistency_audit: false,
         consistency_repair_mode: 'agent',
@@ -840,7 +850,7 @@ function ContentEditPage({
               </button>
             </>
           ) : (
-            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={sectionSubmitting || pausing || !leaves.length}>
+            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={generationSubmitting || sectionSubmitting || pausing || !leaves.length}>
               {generationButtonLabel}
             </button>
           )}
@@ -933,6 +943,19 @@ function ContentEditPage({
           )}
         </article>
       </section>
+
+      <AppDialog
+        open={Boolean(concurrencyWarning)}
+        onOpenChange={(open) => { if (!open) setConcurrencyWarning(''); }}
+        title="生成速度提醒"
+        description={concurrencyWarning}
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setConcurrencyWarning('')}>取消</button>
+            <button type="button" className="primary-action" disabled={generationSubmitting} onClick={() => void startGeneration(true)}>继续生成</button>
+          </>
+        )}
+      />
 
       <AppDialog
         open={templateRequiredDialogOpen}

@@ -4,6 +4,9 @@ const {
   getBundledAgentToolsBinDir,
 } = require('../../utils/paths.cjs');
 
+// 七个 Pi 原生工具统一开放；自定义工具仍由各任务声明。
+const NATIVE_AGENT_TOOLS = ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'];
+
 const SHIM_COMMANDS = [
   'ls',
   'cat',
@@ -976,6 +979,7 @@ function applyAgentToolEnvironment(env, toolEnvironment) {
 }
 
 module.exports = {
+  NATIVE_AGENT_TOOLS,
   BUNDLED_COMMANDS,
   SHIM_COMMANDS,
   applyAgentToolEnvironment,

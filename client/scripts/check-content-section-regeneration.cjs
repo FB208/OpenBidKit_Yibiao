@@ -1,11 +1,15 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { NATIVE_AGENT_TOOLS } = require('../electron/services/agent/agentToolEnvironment.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { createTaskService } = require('../electron/services/taskService.cjs');
 const { createPiSession, loadPiModules } = require('../electron/services/pi/piSessionFactory.cjs');
+const { preparePiEnvironment } = require('../electron/services/pi/piEnvironment.cjs');
 const { countHtmlWords } = require('../electron/services/contentGenerationWordTools.cjs');
+const { createWorkspaceBaseline } = require('../electron/services/pi/piWorkspaceBaseline.cjs');
+const { BASELINE_GROUPS } = require('../electron/services/contentGenerationAgent.cjs');
 
 // 模拟模型响应，保留真实持久 Pi Session、原生 edit 和业务任务调度。
 async function main() {
@@ -29,10 +33,12 @@ async function main() {
   write('所选模板配置.json', JSON.stringify({ config: { page: { size: 'A4' } } }));
   write('正文编排决策.json', JSON.stringify({ outline: [{ id: first, title: '旧标题' }], targets: [{ id: second }] }));
   write('正文生成结果.json', JSON.stringify({ sections: [{ section_id: second }] }));
+  // 主任务未完成的配图任务文件不受单节修改清理。
+  write('任务/配图生成.json', JSON.stringify({ images: [{ image_id: `${second}/主任务图`, kind: 'mermaid', prompt: '主任务配图' }] }));
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(path.join(outputDir, `${first}.docx`), '目标旧 Word');
   fs.writeFileSync(path.join(outputDir, `${second}.docx`), '其他小节 Word');
-  const untouched = [`正文/${second}.html`, '图片/原图.png', '正文编排决策.json', '正文生成结果.json']
+  const untouched = [`正文/${second}.html`, '图片/原图.png', '正文编排决策.json', '正文生成结果.json', '任务/配图生成.json']
     .map(name => [name, fs.readFileSync(path.join(workspaceDir, name))]);
   let state = {
     outlineWordControlSnapshot: { minimumWords: 100000 },
@@ -49,8 +55,11 @@ async function main() {
     } },
   };
   const { piAi } = await loadPiModules();
-  const base = { workspaceDir, sessionsDir, environment: { shellPath: process.env.ComSpec, layout: { agentDir: path.join(root, 'agent') }, instructions: '定向检查', env: {} },
+  const environment = preparePiEnvironment({ isPackaged: false, getPath: () => root, getAppPath: () => path.resolve(__dirname, '..') });
+  const base = { workspaceDir, sessionsDir, environment,
     config: {}, timeoutMs: 60000, proxyInfo: { baseUrl: 'http://127.0.0.1:1', token: 'test' } };
+  // 与 Runtime 一样把原件保存在工作区之外，暂停继续沿用同一登记。
+  const baseline = createWorkspaceBaseline({ workspaceDir, baselineDir: path.join(root, '单节原件') });
   // 测试响应不会访问真实模型。
   function response(content, stopReason) {
     const stream = piAi.createAssistantMessageEventStream();
@@ -66,6 +75,7 @@ async function main() {
   seed.session.dispose();
   let persistent = { session_file: path.basename(sessionFile), consistency: { status: 'completed', remaining_issues: [] }, word_adjustment_started: true };
   let runs = 0;
+  let continuedRuns = 0;
   let conversions = 0;
   let behavior = 'edit';
   let failConversion = false;
@@ -83,17 +93,38 @@ async function main() {
       assert.equal(payload.persistent_task.mode, 'resume');
       assert.equal(payload.task_id, persistent.run_id);
       assert.equal(payload.output_file, file);
-      assert.match(payload.prompt, /1.2 改名后的目标/);
-      assert.match(payload.prompt, /generate-section-images 的 images 一次提交/);
-      assert.match(payload.prompt, /list-section-images/);
-      assert.match(payload.prompt, /apply-section-images/);
-      assert.ok(!payload.prompt.includes('其他小节正文'));
+      for (const name of NATIVE_AGENT_TOOLS) assert.ok(payload.active_tools.includes(name), `单节修改、失败重试和暂停继续均开放 ${name}`);
+      // 修改要求已在原会话发出后继续时只发送“继续之前的任务”，否则发送完整修改要求。
+      if (payload.prompt === '继续之前的任务') continuedRuns++;
+      else {
+        assert.match(payload.prompt, /1.2 改名后的目标/);
+        assert.match(payload.prompt, /写入 任务\/单节修改\/配图生成\.json，格式为/);
+        assert.match(payload.prompt, /用户要求替换已有图片时，对应项加 "regenerate": true/);
+        assert.doesNotMatch(payload.prompt, /一次提交|单张也用 images 数组/);
+        assert.match(payload.prompt, /list-section-images/);
+        assert.match(payload.prompt, /apply-section-images/);
+        assert.ok(!payload.prompt.includes('其他小节正文'));
+      }
+      assert.equal(Object.hasOwn(payload, 'auto_validate_json'), false, '结果在提交时统一校验');
+      assert.deepEqual(Object.keys(payload.json_validation_schemas), ['任务/单节修改/配图生成.json', '任务/单节修改/HTML转图.json', '任务/单节修改/Mermaid转图.json', '任务/单节修改/图片回填.json']);
       assert.equal(payload.continueTask, undefined);
-      if (behavior === 'fail') throw new Error('模拟修改失败');
+      if (behavior === 'fail') {
+        // 模拟 Runtime 已发出修改要求后执行失败。
+        persistent = { ...persistent, prompted_stage: payload.initial_stage };
+        throw new Error('模拟修改失败');
+      }
       if (behavior === 'pause') return new Promise((_, reject) => payload.signal.addEventListener('abort', () => reject(payload.signal.reason), { once: true }));
-      const created = await createPiSession({ ...base, sessionFile, summaryEnabled: false, activeTools: payload.active_tools, createTools: payload.create_tools });
+      const created = await createPiSession({ ...base, sessionFile, summaryEnabled: false, activeTools: payload.active_tools, createTools: payload.create_tools,
+        jsonValidationSchemas: payload.json_validation_schemas, baseline });
       try {
         assert.equal(created.sessionFile, sessionFile);
+        assert.ok(created.session.getActiveToolNames().includes('bash'), '恢复原 Session 后命令工具仍可用');
+        // 通过真实命令工具在中文会话路径创建临时文件，不修改正式小节。
+        const script = "const fs = require('node:fs'); fs.writeFileSync('单节临时笔记.txt', '核对完成', 'utf8'); console.log(fs.readFileSync('单节临时笔记.txt', 'utf8'));";
+        const command = `node -e "eval(Buffer.from('${Buffer.from(script).toString('base64')}', 'base64').toString('utf8'))"`;
+        const commandResult = await created.session.agent.state.tools.find(tool => tool.name === 'bash').execute('command-check', { command });
+        assert.ok(!commandResult.isError, JSON.stringify(commandResult));
+        assert.equal(fs.readFileSync(path.join(workspaceDir, '单节临时笔记.txt'), 'utf8'), '核对完成');
         assert.ok(created.session.agent.state.messages.some(message => JSON.stringify(message).includes('原正文生成任务')));
         for (const name of ['list-section-images', 'apply-section-images', 'generate-section-images', 'render-html-image', 'render-mermaid-image']) assert.ok(created.session.getActiveToolNames().includes(name));
         assert.ok(!created.session.getActiveToolNames().includes('adjust-sections'));
@@ -107,27 +138,31 @@ async function main() {
         const updatedRef = `图片/单节回填${runs}.png`;
         fs.copyFileSync(path.join(workspaceDir, '图片/原图.png'), path.join(workspaceDir, updatedRef));
         const previousHtml = fs.readFileSync(path.join(workspaceDir, file), 'utf8');
-        const results = (await applyImages.execute('apply', { images: [
+        write('任务/单节修改/图片回填.json', JSON.stringify({ images: [
           { image_id: image.image_id, asset_ref: updatedRef, previous_asset_ref: image.asset_ref },
           { image_id: `${second}/原图`, asset_ref: updatedRef, previous_asset_ref: '' },
-        ] })).details.results;
+        ] }));
+        const results = (await applyImages.execute('apply', {})).details.results;
         assert.deepEqual(results.map(item => item.status), ['success', 'error']);
         assert.equal(fs.readFileSync(path.join(workspaceDir, file), 'utf8'), previousHtml.replace(image.asset_ref, updatedRef));
         fs.writeFileSync(path.join(workspaceDir, file), previousHtml, 'utf8');
         const original = fs.readFileSync(path.join(workspaceDir, file), 'utf8').match(/<p>(.*?)<\/p>/)[1];
-        let sourceRequested = false;
+        // 模型先写入任务文件（已有图片需 regenerate 才会替换），再无参数提交。
+        let step = 0;
         created.session.agent.streamFn = () => {
-          if (!sourceRequested) {
-            sourceRequested = true;
-            return response([{ type: 'toolCall', id: `source-${runs}`, name: 'generate-section-images', arguments: {
-              images: [{ image_id: image.image_id, kind: 'ai', prompt: '流程图：准备后实施', style: 'isometric_illustration', size: '1024x1024' }],
+          step++;
+          if (step === 1) {
+            return response([{ type: 'toolCall', id: `task-${runs}`, name: 'write', arguments: {
+              path: '任务/单节修改/配图生成.json',
+              content: JSON.stringify({ images: [{ image_id: image.image_id, kind: 'ai', prompt: '流程图：准备后实施', style: 'isometric_illustration', size: '1024x1024', regenerate: true }] }),
             } }], 'toolUse');
           }
+          if (step === 2) return response([{ type: 'toolCall', id: `source-${runs}`, name: 'generate-section-images', arguments: {} }], 'toolUse');
           const result = created.session.agent.state.messages.findLast(message => message.role === 'toolResult' && message.toolName === 'generate-section-images');
           const source = result.details.results[0];
           assert.equal(source.status, 'success');
           assert.equal(source.applied, true);
-          assert.deepEqual(JSON.parse(result.content[0].text), { total: 1, applied: 1, unresolved: [] }, '成功项不重复写入模型上下文');
+          assert.deepEqual(JSON.parse(result.content[0].text), { total: 1, applied: 1, skipped: 0, unresolved: [] }, '成功项不重复写入模型上下文');
           assert.deepEqual(fs.readFileSync(path.join(workspaceDir, source.asset_ref)), fs.readFileSync(path.join(workspaceDir, '图片/原图.png')));
           assert.equal(fs.readFileSync(path.join(workspaceDir, file), 'utf8'), previousHtml.replace(image.asset_ref, source.asset_ref), '生成成功后程序立即回填本节图片引用');
           return response([{ type: 'toolCall', id: `edit-${runs}`, name: 'edit', arguments: {
@@ -135,6 +170,11 @@ async function main() {
           } }], 'toolUse');
         };
         await created.session.prompt(payload.prompt, { expandPromptTemplates: false });
+        if (runs === 1) {
+          assert.deepEqual(baseline.files(BASELINE_GROUPS.sections), [`正文/${second}.html`], '单节修改登记本节以外的小节');
+          fs.writeFileSync(path.join(workspaceDir, `正文/${second}.html`), '<p>越界修改</p>', 'utf8');
+          assert.deepEqual(baseline.restore(), [`正文/${second}.html`], '越界修改在提交校验前还原');
+        }
         payload.validateOutput();
       } finally { created.session.dispose(); }
       return { workspace_dir: workspaceDir };
@@ -157,7 +197,7 @@ async function main() {
       assert.equal(html, fs.readFileSync(path.join(workspaceDir, file), 'utf8'), '单节转换应直接使用正文，不附加新旧目录标题');
       assert.equal(options.assetRoot, workspaceDir);
       if (failConversion) throw new Error('模拟转换失败');
-      return realHelper ? realHelper.createRestrictedHtmlDocx(html, config, options) : { bytes: Buffer.from(html) };
+      return realHelper ? realHelper.createRestrictedHtmlDocx(html, config, options) : { bytes: Buffer.from(html), imageWarnings: [] };
     } },
   });
   service.subscribeCallback(({ task }) => {
@@ -204,17 +244,22 @@ async function main() {
     assert.equal(runs, runsBeforeRetry, '转换失败重试不能再次调用 Agent');
     assert.equal(state.contentGenerationTask.stats.content.current_words,
       Object.values(state.contentGenerationRuntime.section_words).reduce((sum, value) => sum + value, 0));
+    // 上一次修改留下的阶段记录不得影响新一次修改；修改要求发出前暂停，继续时仍发送完整要求。
+    persistent = { ...persistent, prompted_stage: 'section-modification' };
     behavior = 'pause';
     const pausing = start({ targetItemId: first, requirement: '暂停后继续修改' });
     service.pauseContentGeneration();
     assert.equal((await pausing).status, 'paused');
+    assert.equal(persistent.prompted_stage, null, '新一次修改清除上次的阶段记录');
     assert.throws(() => service.startContentGeneration({ targetItemId: second }), /已暂停/);
     behavior = 'edit';
     assert.equal((await start({ resume: true })).status, 'success');
+    assert.equal(continuedRuns, 0);
     behavior = 'fail';
     assert.equal((await start({ targetItemId: first, requirement: '失败后继续修改' })).status, 'error');
     behavior = 'edit';
     assert.equal((await start({ retryFailedSections: true })).status, 'success');
+    assert.equal(continuedRuns, 1, '修改要求已发出后失败重试只发送“继续之前的任务”');
     for (const [name, bytes] of untouched) assert.deepEqual(fs.readFileSync(path.join(workspaceDir, name)), bytes, name);
     assert.equal(fs.readFileSync(path.join(outputDir, `${second}.docx`), 'utf8'), '其他小节 Word');
     console.log('单节修改检查通过：同一 Session、原生 edit、三类图片工具、互斥、暂停续接、失败重试、目标 Word 更新和其他产物保留。');

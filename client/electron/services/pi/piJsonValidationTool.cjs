@@ -53,12 +53,11 @@ function createToolResult({ filePath, valid, stage, errors = [] }) {
   };
 }
 
-// 每个 Session 共用校验器；只记录受预置规则管理的文件尚未修复的错误。
-function createPiJsonValidator({ workspaceDir, validationSchemas = {}, trackFailures = false }) {
+// 供 Agent 自查的校验器：预置 Schema 的文件只传路径，其余文件由调用方提供 Schema；结果由任务提交时统一把关。
+function createPiJsonValidator({ workspaceDir, validationSchemas = {} }) {
   const ajv = new Ajv({ allErrors: true, strict: true });
-  const pendingFailures = new Map();
 
-  // 原生文件工具传入绝对路径，独立校验传入相对路径，Windows 下统一大小写。
+  // Windows 下统一大小写匹配预置规则。
   function fileKey(filePath) {
     const resolvedPath = path.resolve(workspaceDir, String(filePath || ''));
     return process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
@@ -69,27 +68,16 @@ function createPiJsonValidator({ workspaceDir, validationSchemas = {}, trackFail
     schema,
   ]));
 
-  // 同一文件后续校验通过即清除错误，不要求尚未生成的其他文件提前存在。
-  function recordResult(result) {
-    const key = fileKey(result.details.file_path);
-    if (trackFailures && presetSchemas.has(key)) {
-      if (result.details.valid) pendingFailures.delete(key);
-      else pendingFailures.set(key, result.details);
-    }
-    return result;
-  }
-
-  // 校验本次实际写入的完整内容，独立校验也使用相同的解析和 Ajv 规则。
   function validateContent(filePath, source, suppliedSchema) {
     const relativePath = path.relative(workspaceDir, path.resolve(workspaceDir, filePath)).split(path.sep).join('/');
     let data;
     try {
       data = JSON.parse(source);
     } catch (error) {
-      return recordResult(createToolResult({
+      return createToolResult({
         filePath: relativePath, valid: false, stage: 'parse',
         errors: [{ message: error?.message || String(error) }],
-      }));
+      });
     }
 
     let validate;
@@ -99,15 +87,15 @@ function createPiJsonValidator({ workspaceDir, validationSchemas = {}, trackFail
       if (schema === undefined) throw new Error(`任务未为 ${relativePath} 预置 Schema，调用时必须提供 schema`);
       validate = ajv.compile(schema);
     } catch (error) {
-      return recordResult(createToolResult({
+      return createToolResult({
         filePath: relativePath, valid: false, stage: 'schema',
         errors: [{ message: error?.message || String(error) }],
-      }));
+      });
     }
 
-    return recordResult(createToolResult(validate(data)
+    return createToolResult(validate(data)
       ? { filePath: relativePath, valid: true, stage: 'success' }
-      : { filePath: relativePath, valid: false, stage: 'validation', errors: normalizeAjvErrors(validate.errors) }));
+      : { filePath: relativePath, valid: false, stage: 'validation', errors: normalizeAjvErrors(validate.errors) });
   }
 
   // 独立检查已有文件，保留其相对路径约束和读取失败反馈。
@@ -119,78 +107,17 @@ function createPiJsonValidator({ workspaceDir, validationSchemas = {}, trackFail
       relativePath = resolved.relativePath;
       source = fs.readFileSync(resolved.resolvedPath, 'utf8');
     } catch (error) {
-      return recordResult(createToolResult({
+      return createToolResult({
         filePath, valid: false, stage: 'read', errors: [{ message: error?.message || String(error) }],
-      }));
+      });
     }
     return validateContent(relativePath, source, schema);
-  }
-
-  // 供结束标记及 Runtime 阶段交接共用，避免未修复结果被当作成功。
-  function getPendingError() {
-    if (!pendingFailures.size) return '';
-    return `以下 JSON 文件尚未通过校验，请修复后再结束当前阶段：\n${Array.from(pendingFailures.values(), (failure) => (
-      `${failure.file_path}：${failure.errors.map((error) => `${error.instancePath || '/'} ${error.message}`).join('；')}`
-    )).join('\n')}`;
-  }
-
-  // 模型直接结束但仍留下错误时，禁止 Runtime 接受该阶段结果。
-  function assertValid() {
-    const message = getPendingError();
-    if (message) {
-      const error = new Error(message);
-      error.agentValidationFailed = true;
-      throw error;
-    }
   }
 
   return {
     hasPreset: (filePath) => presetSchemas.has(fileKey(filePath)),
     validateContent,
     validateFile,
-    getPendingError,
-    assertValid,
-  };
-}
-
-// 复用 Pi 原生编辑及同文件队列：业务保护在落盘前，JSON 自动校验在落盘后。
-function withFileWriteHooks(createTool, workspaceDir, { validator, beforeWrite } = {}) {
-  const tool = createTool(workspaceDir);
-  return {
-    ...tool,
-    description: `${tool.description}${validator ? '\n本次任务已开启 JSON 自动校验：有预置 Schema 的文件写入或修改后立即校验；失败时文件仍已修改，请继续修复。已通过自动校验的内容无需再调用 json-validation。' : ''}`,
-    execute: async (...args) => {
-      let validationResult;
-      let originalContent;
-      const operationTool = createTool(workspaceDir, {
-        operations: {
-          mkdir: (directory) => fs.promises.mkdir(directory, { recursive: true }),
-          readFile: async (filePath) => {
-            const buffer = await fs.promises.readFile(filePath);
-            originalContent = buffer.toString('utf8');
-            return buffer;
-          },
-          access: (filePath) => fs.promises.access(filePath, fs.constants.R_OK | fs.constants.W_OK),
-          writeFile: async (filePath, content) => {
-            await beforeWrite?.({ filePath, content, originalContent, toolName: tool.name });
-            await fs.promises.writeFile(filePath, content, 'utf8');
-            if (validator?.hasPreset(filePath)) validationResult = validator.validateContent(filePath, content);
-          },
-        },
-      });
-      const result = await operationTool.execute(...args);
-      if (!validationResult) return result;
-      return {
-        ...result,
-        content: [
-          ...result.content,
-          ...(validationResult.isError ? [{ type: 'text', text: '文件已写入，但 JSON 校验未通过；请根据以下错误修复。' }] : []),
-          ...validationResult.content,
-        ],
-        details: { ...result.details, validation: validationResult.details },
-        ...(validationResult.isError ? { isError: true } : {}),
-      };
-    },
   };
 }
 
@@ -221,5 +148,4 @@ module.exports = {
   JSON_VALIDATION_TOOL_NAME,
   createPiJsonValidator,
   createPiJsonValidationTool,
-  withFileWriteHooks,
 };

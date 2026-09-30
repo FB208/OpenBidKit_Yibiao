@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   use_html_images INTEGER NOT NULL DEFAULT 1,
   html_image_types TEXT NOT NULL DEFAULT '',
   table_requirement TEXT NOT NULL DEFAULT 'heavy',
-  image_quantity TEXT NOT NULL DEFAULT 'light',
+  image_quantity INTEGER NOT NULL DEFAULT 30,
   html_image_optimization INTEGER NOT NULL DEFAULT 0,
   word_count_repair INTEGER NOT NULL DEFAULT 0,
   layout_check INTEGER NOT NULL DEFAULT 0,

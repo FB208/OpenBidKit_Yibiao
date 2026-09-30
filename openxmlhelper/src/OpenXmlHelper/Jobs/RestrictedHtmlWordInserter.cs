@@ -13,6 +13,16 @@ using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
 
+/// <summary>未能导出、已在原位改为文字提示的配图及原因，随任务结果返回 Main。</summary>
+sealed record ImageWarning(string AssetRef, string Reason);
+
+/// <summary>一次转换共用的配图上下文：Main 按扩展名声明的图片类型，以及未能导出的配图。</summary>
+sealed class FigureAssets(IReadOnlyDictionary<string, string>? declaredTypes = null)
+{
+    public IReadOnlyDictionary<string, string> DeclaredTypes { get; } = declaredTypes ?? new Dictionary<string, string>();
+    public List<ImageWarning> Warnings { get; } = [];
+}
+
 /// <summary>把受限 HTML 转为 Open XML 块，写入文档正文或指定块级内容控件。</summary>
 static partial class RestrictedHtmlWordInserter
 {
@@ -28,6 +38,13 @@ static partial class RestrictedHtmlWordInserter
 
     static readonly Dictionary<string, CachedAsset> AssetCache = new(StringComparer.OrdinalIgnoreCase);
     static long AssetCacheBytes;
+
+    // 可按文件头核对的格式；扩展名声明为其中之一而文件头不符时，说明内容与声明不一致，不按声明原样嵌入。
+    static readonly HashSet<string> DetectableImageTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp",
+        "image/tiff", "image/emf", "image/x-emf", "image/wmf", "image/x-wmf",
+    };
 
     /// <summary>
     /// 画框适配方式。
@@ -55,7 +72,8 @@ static partial class RestrictedHtmlWordInserter
         string documentPath,
         string targetId,
         double imageMaxWidthPercent,
-        string html)
+        string html,
+        FigureAssets assets)
     {
         if (string.IsNullOrWhiteSpace(html))
         {
@@ -75,7 +93,8 @@ static partial class RestrictedHtmlWordInserter
                     wordDocument,
                     targetId,
                     imageMaxWidthPercent,
-                    htmlDocument);
+                    htmlDocument,
+                    assets);
                 var errors = new OpenXmlValidator(FileFormatVersions.Microsoft365).Validate(wordDocument).Take(10).ToList();
                 if (errors.Count > 0)
                 {
@@ -99,7 +118,8 @@ static partial class RestrictedHtmlWordInserter
         WordprocessingDocument wordDocument,
         string targetId,
         double imageMaxWidthPercent,
-        IDocument htmlDocument)
+        IDocument htmlDocument,
+        FigureAssets assets)
     {
         var normalizedTargetId = (targetId ?? "").Trim();
         if (!TargetIdPattern().IsMatch(normalizedTargetId))
@@ -123,7 +143,7 @@ static partial class RestrictedHtmlWordInserter
         }
 
         var content = targets[0].SdtContentBlock ?? targets[0].AppendChild(new Wp.SdtContentBlock());
-        return InsertIntoContent(workspace, mainPart, content, imageMaxWidthPercent, htmlDocument);
+        return InsertIntoContent(workspace, mainPart, content, imageMaxWidthPercent, htmlDocument, assets);
     }
 
     /// <summary>直接写入正文或内容控件，保留文档末尾的分节属性并替换配图标记。</summary>
@@ -133,9 +153,10 @@ static partial class RestrictedHtmlWordInserter
         OpenXmlCompositeElement content,
         double imageMaxWidthPercent,
         IDocument htmlDocument,
+        FigureAssets assets,
         bool cacheAssets = false)
     {
-        var prepared = PrepareHtml(workspace, imageMaxWidthPercent, htmlDocument, cacheAssets);
+        var prepared = PrepareHtml(workspace, imageMaxWidthPercent, htmlDocument, assets, cacheAssets);
         // 每个 ol 独立计数，不能沿用前一个列表；显式 start 仍由转换器处理。
         var converter = new HtmlConverter(mainPart) { ContinueNumbering = false };
         var blocks = converter.Parse(prepared.Html);
@@ -155,6 +176,7 @@ static partial class RestrictedHtmlWordInserter
         string workspace,
         double imageMaxWidthPercent,
         IDocument document,
+        FigureAssets assets,
         bool cacheAssets)
     {
         var figures = new List<FigureSpec>();
@@ -183,30 +205,50 @@ static partial class RestrictedHtmlWordInserter
             }
 
             var assetPath = WordWorkspace.ResolveWorkspacePath(workspace, assetRef);
-            if (!File.Exists(assetPath))
-            {
-                throw new InvalidOperationException($"图片资产不存在：{assetRef}");
-            }
-
             var token = $"{FigureTokenPrefix}{Guid.NewGuid():N}";
+            var alt = image.GetAttribute("alt")?.Trim() ?? "";
             var caption = figure.Children.FirstOrDefault(item => item.LocalName == "figcaption")?.TextContent?.Trim() ?? "";
+            var parent = figure.ParentElement ?? throw new InvalidOperationException("figure 缺少父节点");
             var placement = ResolveFigurePlacement(figure, size, imageMaxWidthPercent);
             var fit = ResolveFigureFit(figure);
-            var asset = LoadAsset(assetPath, cacheAssets);
+            CachedAsset asset;
+            try
+            {
+                if (!File.Exists(assetPath)) throw new InvalidOperationException("图片文件不存在");
+                asset = LoadAsset(assetPath, cacheAssets, assets.DeclaredTypes.GetValueOrDefault(assetRef));
+            }
+            catch (Exception error)
+            {
+                // 单张图片无法导出时原位改为文字提示并保留图注，其余正文照常转换。
+                assets.Warnings.Add(new ImageWarning(assetRef, error.Message));
+                var notice = document.CreateElement("p");
+                var emphasis = document.CreateElement("em");
+                emphasis.TextContent = alt.Length > 0 ? $"[图片无法导出：{alt}]" : "[图片无法导出]";
+                notice.AppendChild(emphasis);
+                parent.InsertBefore(notice, figure);
+                if (caption.Length > 0)
+                {
+                    var captionParagraph = document.CreateElement("p");
+                    captionParagraph.TextContent = caption;
+                    parent.InsertBefore(captionParagraph, figure);
+                }
+                figure.Remove();
+                continue;
+            }
             figures.Add(new FigureSpec(
                 token,
                 assetPath,
-                image.GetAttribute("alt")?.Trim() ?? "",
+                alt,
                 caption,
                 size,
                 placement,
                 fit,
                 asset.Dimensions,
+                asset.PartType,
                 asset.Bytes));
 
             var placeholder = document.CreateElement("p");
             placeholder.TextContent = token;
-            var parent = figure.ParentElement ?? throw new InvalidOperationException("figure 缺少父节点");
             parent.InsertBefore(placeholder, figure);
             figure.Remove();
         }
@@ -370,7 +412,7 @@ static partial class RestrictedHtmlWordInserter
             // 高度只会小于等于版面预算，所以排版侧的装箱结论仍然成立。
             (width, height) = FitInside(spec.Dimensions, width, height);
         }
-        var imagePart = mainPart.AddImagePart(ResolveImagePartType(spec.AssetPath));
+        var imagePart = mainPart.AddImagePart(spec.PartType);
         using (var stream = spec.Bytes is null
             ? (Stream)File.OpenRead(spec.AssetPath)
             : new MemoryStream(spec.Bytes, writable: false))
@@ -478,24 +520,15 @@ static partial class RestrictedHtmlWordInserter
         return null;
     }
 
-    static PartTypeInfo ResolveImagePartType(string path)
+    /// <summary>读取配图真实格式、尺寸及可选缓存字节，避免同一批样张配图被反复读盘。</summary>
+    static CachedAsset LoadAsset(string path, bool cacheAssets, string? declaredType)
     {
-        return Path.GetExtension(path).ToLowerInvariant() switch
+        if (!cacheAssets)
         {
-            ".png" => ImagePartType.Png,
-            ".jpg" or ".jpeg" => ImagePartType.Jpeg,
-            ".gif" => ImagePartType.Gif,
-            ".bmp" => ImagePartType.Bmp,
-            ".webp" => new PartTypeInfo("image/webp", ".webp"),
-            _ => throw new InvalidOperationException("Word 配图仅支持 PNG、JPEG、GIF、BMP 和 WebP"),
-        };
-    }
-
-    /// <summary>读取常用图片格式的像素尺寸，用于计算居中裁切。</summary>
-    /// <summary>读取配图字节与尺寸；预览路径会缓存，避免同一批样张配图被反复读盘。</summary>
-    static CachedAsset LoadAsset(string path, bool cacheAssets)
-    {
-        if (!cacheAssets) return new CachedAsset(null, ReadImageDimensions(path));
+            using var file = File.OpenRead(path);
+            var image = ReadImageInfo(file, path, declaredType);
+            return new CachedAsset(null, image.Dimensions, image.PartType);
+        }
 
         var info = new FileInfo(path);
         var key = $"{path}|{info.LastWriteTimeUtc.Ticks}|{info.Length}";
@@ -503,7 +536,8 @@ static partial class RestrictedHtmlWordInserter
 
         var bytes = File.ReadAllBytes(path);
         using var stream = new MemoryStream(bytes, writable: false);
-        var asset = new CachedAsset(bytes, ReadImageDimensions(Path.GetExtension(path), stream));
+        var metadata = ReadImageInfo(stream, path, declaredType);
+        var asset = new CachedAsset(bytes, metadata.Dimensions, metadata.PartType);
         // 只服务体量固定的样张配图；超出上限说明来源不对，整体丢弃而不是无限增长。
         if (AssetCacheBytes + bytes.LongLength > AssetCacheLimitBytes)
         {
@@ -515,23 +549,151 @@ static partial class RestrictedHtmlWordInserter
         return asset;
     }
 
-    static ImageDimensions ReadImageDimensions(string path)
+    /// <summary>
+    /// 按文件头识别格式，尺寸解析和 Word 图片类型共用结果，不依赖文件后缀；尺寸读不到时交由画框决定大小。
+    /// 文件头无法识别时，仅在 Main 按扩展名声明了无法按文件头核对的图片类型时原样嵌入，交给 Word 显示。
+    /// </summary>
+    static (ImageDimensions? Dimensions, PartTypeInfo PartType) ReadImageInfo(Stream stream, string path, string? declaredType)
     {
-        using var stream = File.OpenRead(path);
-        return ReadImageDimensions(Path.GetExtension(path), stream);
+        var format = DetectImageFormat(stream);
+        if (format is null)
+        {
+            if (declaredType is null
+                || !declaredType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                || DetectableImageTypes.Contains(declaredType))
+            {
+                throw new InvalidOperationException("无法识别图片格式");
+            }
+            return (null, new PartTypeInfo(declaredType, Path.GetExtension(path).ToLowerInvariant()));
+        }
+        try
+        {
+            return (format.Value.ReadDimensions(stream), format.Value.PartType);
+        }
+        catch (Exception error) when (error is EndOfStreamException or InvalidOperationException)
+        {
+            return (null, format.Value.PartType);
+        }
     }
 
-    static ImageDimensions ReadImageDimensions(string extension, Stream stream)
+    /// <summary>按文件头识别可核对的图片格式，返回 Word 图片类型及尺寸读取方法；无法识别时返回 null。</summary>
+    static (PartTypeInfo PartType, Func<Stream, ImageDimensions> ReadDimensions)? DetectImageFormat(Stream stream)
     {
-        return extension.ToLowerInvariant() switch
+        Span<byte> header = stackalloc byte[44];
+        header = header[..stream.ReadAtLeast(header, header.Length, throwOnEndOfStream: false)];
+        stream.Position = 0;
+        if (header.StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
+            return (ImagePartType.Png, ReadPngDimensions);
+        if (header.StartsWith(new byte[] { 0xFF, 0xD8, 0xFF }))
+            return (ImagePartType.Jpeg, ReadJpegDimensions);
+        if (header.StartsWith("GIF87a"u8) || header.StartsWith("GIF89a"u8))
+            return (ImagePartType.Gif, ReadGifDimensions);
+        if (header.StartsWith("BM"u8))
+            return (ImagePartType.Bmp, ReadBmpDimensions);
+        if (header.Length >= 12 && header[..4].SequenceEqual("RIFF"u8) && header[8..12].SequenceEqual("WEBP"u8))
+            return (new PartTypeInfo("image/webp", ".webp"), ReadWebpDimensions);
+        // 标准 TIFF 为 42，BigTIFF 为 43；两者都按原字节嵌入，BigTIFF 不读尺寸。
+        if (header.StartsWith("II*\0"u8) || header.StartsWith("MM\0*"u8) || header.StartsWith("II+\0"u8) || header.StartsWith("MM\0+"u8))
+            return (ImagePartType.Tiff, ReadTiffDimensions);
+        if (header.Length >= 44 && BinaryPrimitives.ReadUInt32LittleEndian(header[..4]) == 1 && header[40..44].SequenceEqual(" EMF"u8))
+            return (ImagePartType.Emf, ReadEmfDimensions);
+        if (header.StartsWith(WmfPlaceableKey)
+            || (header.Length >= 6
+                && BinaryPrimitives.ReadUInt16LittleEndian(header[..2]) is 1 or 2
+                && BinaryPrimitives.ReadUInt16LittleEndian(header[2..4]) == 9
+                && BinaryPrimitives.ReadUInt16LittleEndian(header[4..6]) is 0x0100 or 0x0300))
+            return (ImagePartType.Wmf, ReadWmfDimensions);
+        return null;
+    }
+
+    static ReadOnlySpan<byte> WmfPlaceableKey => [0xD7, 0xCD, 0xC6, 0x9A];
+
+    /// <summary>读取 TIFF 首个图像目录中的宽高。</summary>
+    static ImageDimensions ReadTiffDimensions(Stream stream)
+    {
+        Span<byte> header = stackalloc byte[8];
+        stream.ReadExactly(header);
+        var littleEndian = header[0] == (byte)'I';
+        if (TiffUInt16(header[2..4], littleEndian) != 42) throw new InvalidOperationException("BigTIFF 不读取尺寸");
+        stream.Position = TiffUInt32(header[4..8], littleEndian);
+        Span<byte> entry = stackalloc byte[12];
+        stream.ReadExactly(entry[..2]);
+        var width = 0;
+        var height = 0;
+        for (var remaining = TiffUInt16(entry[..2], littleEndian); remaining > 0; remaining -= 1)
         {
-            ".png" => ReadPngDimensions(stream),
-            ".jpg" or ".jpeg" => ReadJpegDimensions(stream),
-            ".gif" => ReadGifDimensions(stream),
-            ".bmp" => ReadBmpDimensions(stream),
-            ".webp" => ReadWebpDimensions(stream),
-            _ => throw new InvalidOperationException("Word 配图仅支持 PNG、JPEG、GIF、BMP 和 WebP"),
-        };
+            stream.ReadExactly(entry);
+            var tag = TiffUInt16(entry[..2], littleEndian);
+            if (tag is not (256 or 257)) continue;
+            // 宽高可为 SHORT(3) 或 LONG(4)，值直接存放在条目内。
+            var value = TiffUInt16(entry[2..4], littleEndian) == 3
+                ? TiffUInt16(entry[8..10], littleEndian)
+                : (int)Math.Min(TiffUInt32(entry[8..12], littleEndian), int.MaxValue);
+            if (tag == 256) width = value;
+            else height = value;
+        }
+        return ValidDimensions(width, height);
+    }
+
+    static int TiffUInt16(ReadOnlySpan<byte> bytes, bool littleEndian)
+    {
+        return littleEndian ? BinaryPrimitives.ReadUInt16LittleEndian(bytes) : BinaryPrimitives.ReadUInt16BigEndian(bytes);
+    }
+
+    static uint TiffUInt32(ReadOnlySpan<byte> bytes, bool littleEndian)
+    {
+        return littleEndian ? BinaryPrimitives.ReadUInt32LittleEndian(bytes) : BinaryPrimitives.ReadUInt32BigEndian(bytes);
+    }
+
+    /// <summary>EMF 头记录的 rclFrame 以 0.01 毫米记录画面物理尺寸；无效时退回设备像素边界 rclBounds。</summary>
+    static ImageDimensions ReadEmfDimensions(Stream stream)
+    {
+        Span<byte> header = stackalloc byte[40];
+        stream.ReadExactly(header);
+        var frameWidth = (long)BinaryPrimitives.ReadInt32LittleEndian(header[32..36]) - BinaryPrimitives.ReadInt32LittleEndian(header[24..28]);
+        var frameHeight = (long)BinaryPrimitives.ReadInt32LittleEndian(header[36..40]) - BinaryPrimitives.ReadInt32LittleEndian(header[28..32]);
+        if (frameWidth is > 0 and <= int.MaxValue && frameHeight is > 0 and <= int.MaxValue)
+        {
+            return new ImageDimensions((int)frameWidth, (int)frameHeight);
+        }
+        var boundsWidth = (long)BinaryPrimitives.ReadInt32LittleEndian(header[16..20]) - BinaryPrimitives.ReadInt32LittleEndian(header[8..12]) + 1;
+        var boundsHeight = (long)BinaryPrimitives.ReadInt32LittleEndian(header[20..24]) - BinaryPrimitives.ReadInt32LittleEndian(header[12..16]) + 1;
+        return ValidDimensions((int)Math.Clamp(boundsWidth, 0, int.MaxValue), (int)Math.Clamp(boundsHeight, 0, int.MaxValue));
+    }
+
+    /// <summary>可放置 WMF 的头部直接记录边界框；标准 WMF 取记录中的 SetWindowExt 画布范围。</summary>
+    static ImageDimensions ReadWmfDimensions(Stream stream)
+    {
+        Span<byte> header = stackalloc byte[22];
+        stream.ReadExactly(header);
+        if (header.StartsWith(WmfPlaceableKey))
+        {
+            return ValidDimensions(
+                Math.Abs(BinaryPrimitives.ReadInt16LittleEndian(header[10..12]) - BinaryPrimitives.ReadInt16LittleEndian(header[6..8])),
+                Math.Abs(BinaryPrimitives.ReadInt16LittleEndian(header[12..14]) - BinaryPrimitives.ReadInt16LittleEndian(header[8..10])));
+        }
+
+        // 标准头 18 字节；每条记录以字（2 字节）计长度，META_EOF 为 0。
+        stream.Position = 18;
+        Span<byte> record = stackalloc byte[10];
+        while (stream.Position + 6 <= stream.Length)
+        {
+            var start = stream.Position;
+            stream.ReadExactly(record[..6]);
+            var words = BinaryPrimitives.ReadUInt32LittleEndian(record[..4]);
+            var function = BinaryPrimitives.ReadUInt16LittleEndian(record[4..6]);
+            if (function == 0 || words < 3) break;
+            if (function == 0x020C)
+            {
+                // META_SETWINDOWEXT 参数依次为高、宽。
+                stream.ReadExactly(record[6..10]);
+                return ValidDimensions(
+                    Math.Abs((int)BinaryPrimitives.ReadInt16LittleEndian(record[8..10])),
+                    Math.Abs((int)BinaryPrimitives.ReadInt16LittleEndian(record[6..8])));
+            }
+            stream.Position = start + words * 2L;
+        }
+        throw new InvalidOperationException("WMF 未记录画布尺寸");
     }
 
     /// <summary>读取 WebP 的 VP8、VP8L 或 VP8X 画布尺寸。</summary>
@@ -673,10 +835,10 @@ static partial class RestrictedHtmlWordInserter
         };
     }
 
-    /// <summary>按图片真实比例缩放到不超过给定画框，返回实际占用的宽高。</summary>
-    static (long Width, long Height) FitInside(ImageDimensions dimensions, long boxWidth, long boxHeight)
+    /// <summary>按图片真实比例缩放到不超过给定画框，返回实际占用的宽高；尺寸未知时占满画框。</summary>
+    static (long Width, long Height) FitInside(ImageDimensions? dimensions, long boxWidth, long boxHeight)
     {
-        if (dimensions.Width <= 0 || dimensions.Height <= 0) return (boxWidth, boxHeight);
+        if (dimensions is null || dimensions.Width <= 0 || dimensions.Height <= 0) return (boxWidth, boxHeight);
         var sourceRatio = (double)dimensions.Width / dimensions.Height;
         var boxRatio = (double)boxWidth / boxHeight;
         // 图比画框扁就顶着宽走，比画框瘦就顶着高走。
@@ -685,8 +847,10 @@ static partial class RestrictedHtmlWordInserter
             : (Math.Max(1L, (long)Math.Round(boxHeight * sourceRatio)), boxHeight);
     }
 
-    static CropValues ResolveCenterCrop(ImageDimensions dimensions, FigureSize size)
+    static CropValues ResolveCenterCrop(ImageDimensions? dimensions, FigureSize size)
     {
+        // 尺寸未知时无法计算裁切比例，按画框原样放置。
+        if (dimensions is null) return new CropValues(0, 0, 0, 0);
         var sourceRatio = (double)dimensions.Width / dimensions.Height;
         var targetRatio = (double)size.AspectWidth / size.AspectHeight;
         if (Math.Abs(sourceRatio - targetRatio) < 0.0001) return new CropValues(0, 0, 0, 0);
@@ -704,7 +868,7 @@ static partial class RestrictedHtmlWordInserter
     sealed record TableCellPlacement(double WidthRatio, double HorizontalPaddingPoints);
     sealed record ImageDimensions(int Width, int Height);
 
-    sealed record CachedAsset(byte[]? Bytes, ImageDimensions Dimensions);
+    sealed record CachedAsset(byte[]? Bytes, ImageDimensions? Dimensions, PartTypeInfo PartType);
     sealed record CropValues(int Left, int Top, int Right, int Bottom);
     sealed record FigureSpec(
         string Token,
@@ -714,7 +878,8 @@ static partial class RestrictedHtmlWordInserter
         FigureSize Size,
         FigurePlacement Placement,
         FigureFit Fit,
-        ImageDimensions Dimensions,
+        ImageDimensions? Dimensions,
+        PartTypeInfo PartType,
         byte[]? Bytes);
     sealed record PreparedHtml(string Html, IReadOnlyList<FigureSpec> Figures);
 

@@ -11,7 +11,7 @@ import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMi
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
-import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
+import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent, WordExportStructureIssue } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
@@ -174,6 +174,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
+  // 整本导出前发现正文结构问题时，由用户决定是否继续；继续导出沿用同一次请求。
+  const [exportStructureConfirm, setExportStructureConfirm] = useState<{ requestId: string; issues: WordExportStructureIssue[] } | null>(null);
   const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
   const [exportTemplatesLoading, setExportTemplatesLoading] = useState(false);
   const [exportTemplateEditorOpen, setExportTemplateEditorOpen] = useState(false);
@@ -639,13 +641,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     if (state.step === 'generation-settings') void loadExportTemplates();
   }, [loadExportTemplates, state.step]);
 
-  const runExportWord = async () => {
+  const runExportWord = async (confirmed?: { requestId: string }) => {
     if (!state.outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
       return;
     }
 
-    const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const requestId = confirmed?.requestId || `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let unsubscribe: (() => void) | undefined;
 
     try {
@@ -676,7 +678,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       const result = await window.yibiao?.export.exportWord({
         requestId,
         source: 'technical-plan',
+        ...(confirmed ? { confirmStructureIssues: true } : {}),
       });
+      if (result?.needsConfirmation) {
+        setExportProgress(initialExportProgress);
+        setExportStructureConfirm({ requestId, issues: result.issues || [] });
+        return;
+      }
       if (result?.canceled) {
         setExportProgress(initialExportProgress);
         showToast('已取消导出', 'info');
@@ -717,6 +725,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       const message = error instanceof Error ? error.message : '打开文件失败';
       showToast(message, 'error');
     }
+  };
+
+  // 取消结构确认即结束本次导出，Main 清理待处理请求并照常显示导出提醒。
+  const cancelExportStructureConfirm = () => {
+    const pending = exportStructureConfirm;
+    setExportStructureConfirm(null);
+    if (pending) void window.yibiao?.export.cancelWordConfirmation(pending.requestId);
   };
 
   // 使用“长嘛样”保存的模板直接导出，不再临时改选。
@@ -1260,6 +1275,38 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           </>
         )}
       />
+
+      <AppDialog
+        open={Boolean(exportStructureConfirm)}
+        onOpenChange={(open) => !open && cancelExportStructureConfirm()}
+        kicker="Word 导出"
+        title="部分小节正文结构不完整"
+        description="这些小节的正文存在未闭合的标签或异常的图片结构，多为模型输出被截断或漏写结束标签。继续导出时会自动补齐结构，无法修复的图片不导出；也可以取消后先在正文页重新生成这些小节。"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={cancelExportStructureConfirm}>取消导出</button>
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => {
+                const confirmed = exportStructureConfirm;
+                setExportStructureConfirm(null);
+                if (confirmed) void runExportWord({ requestId: confirmed.requestId });
+              }}
+            >
+              继续导出
+            </button>
+          </>
+        )}
+      >
+        <div className="export-warning-list export-structure-list">
+          <strong>共 {exportStructureConfirm?.issues.length ?? 0} 个小节</strong>
+          {exportStructureConfirm?.issues.slice(0, 20).map((issue) => (
+            <small key={issue.section}>{issue.section}：{issue.problems.length} 处，如 {issue.problems[0]}</small>
+          ))}
+          {(exportStructureConfirm?.issues.length ?? 0) > 20 && <small>另有 {(exportStructureConfirm?.issues.length ?? 0) - 20} 个小节，继续导出后可在导出结果中查看。</small>}
+        </div>
+      </AppDialog>
 
       <Dialog.Root
         open={exportProgress.open}
