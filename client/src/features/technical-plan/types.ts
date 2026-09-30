@@ -8,7 +8,7 @@ export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
-export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'done';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'business-filling' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
 export type OutlineAttribute = '通用' | '商务/资信' | '技术' | '其他' | '目录' | '报价' | '业绩';
@@ -90,7 +90,7 @@ export interface ContentGenerationWorkflowProgress {
 }
 
 export interface ContentGenerationProgressDetail {
-  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction';
+  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction' | 'business';
   phase: ContentGenerationPhase;
   phase_label: string;
   phase_progress: number;
@@ -190,6 +190,7 @@ export interface BackgroundTaskState {
       layout_total?: number;
       layout_completed?: number;
       developer_stage_gate?: ContentGenerationPhase;
+      business_fill?: BusinessTemplateFillState;
     };
   };
 }
@@ -259,6 +260,18 @@ export interface ContentGenerationPlanState {
 
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
+/** 商务模版填写副流程状态，统计以填写项为单位（同名字段或表格单元格）。 */
+export interface BusinessTemplateFillState {
+  phase: 'filling' | 'rendering' | 'completed';
+  status: 'running' | 'paused' | 'interrupted' | 'error' | 'success';
+  field_count: number;
+  filled_count: number;
+  manual_count: number;
+  unresolved: Array<{ label: string; reason: string }>;
+  error?: string | null;
+  updated_at?: string;
+}
+
 export interface ContentGenerationRuntimeState {
   /** 已确认的 HTML 实际字数，按稳定小节 ID 保存，不保存 HTML 正文。 */
   section_words?: Record<string, number>;
@@ -277,6 +290,7 @@ export interface ContentGenerationRuntimeState {
   developer_stage_gate?: ContentGenerationPhase | '';
   target_item_id?: string;
   regenerate_requirement?: string;
+  business_fill?: BusinessTemplateFillState;
   updated_at?: string;
 }
 

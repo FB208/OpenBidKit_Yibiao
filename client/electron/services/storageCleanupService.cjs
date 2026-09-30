@@ -11,6 +11,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 
@@ -21,6 +22,7 @@ const PERSISTENT_AGENT_TASK_KEYS = [
   GLOBAL_FACTS_AGENT_TASK_KEY,
   ORIGINAL_RESTORATION_AGENT_TASK_KEY,
   CONTENT_GENERATION_AGENT_TASK_KEY,
+  BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY,
   FEASIBILITY_OUTLINE_AGENT_TASK_KEY,
 ];
 const LEGACY_WORKSPACE_FILES = [

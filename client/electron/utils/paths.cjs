@@ -79,6 +79,11 @@ function getTechnicalPlanBidTemplateFieldsPath(app) {
   return path.join(getTechnicalPlanDir(app), 'bid-template-fields.json');
 }
 
+/** 投标模版的空白底稿，商务模版回填和失效都以它为基准重新生成最终模版。 */
+function getTechnicalPlanBidTemplateBlankPath(app) {
+  return path.join(getTechnicalPlanDir(app), 'bid-template-blank.docx');
+}
+
 function getTechnicalPlanOriginalPlanMarkdownPath(app) {
   return path.join(getTechnicalPlanDir(app), 'original-plan.md');
 }
@@ -232,6 +237,7 @@ module.exports = {
   getTechnicalPlanBidTemplatePath,
   getTechnicalPlanBidTemplateSourcePath,
   getTechnicalPlanBidTemplateFieldsPath,
+  getTechnicalPlanBidTemplateBlankPath,
   getTechnicalPlanTenderMarkdownPath,
   getTechnicalPlanTenderOriginalsDir,
   getWorkspaceDir,

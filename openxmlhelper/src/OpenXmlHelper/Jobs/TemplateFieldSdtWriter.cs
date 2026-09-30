@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
@@ -51,6 +52,132 @@ static class TemplateFieldSdtWriter
                 break;
         }
         return written;
+    }
+
+    public const char CheckedBox = '☑';
+
+    /// <summary>向已标记的字段控件写入值，保留字段标识；返回本次新写入或修改的元素供调用方校验。</summary>
+    public static IReadOnlyList<OpenXmlElement> Fill(Wp.SdtElement control, TemplateFieldFillValue value)
+    {
+        var written = new List<OpenXmlElement>();
+        var properties = control.GetFirstChild<Wp.SdtProperties>();
+        // 原件自带控件处于占位显示时，Word 会把写入内容当作灰色占位，点击即清空。
+        properties?.RemoveAllChildren<Wp.ShowingPlaceholder>();
+        var name = properties?.GetFirstChild<Wp.SdtAlias>()?.Val?.Value ?? value.Id;
+        if (value.Selected is { } selected)
+        {
+            CheckOptions(control, name, selected, written);
+            return written;
+        }
+
+        var lines = (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        switch (control)
+        {
+            case Wp.SdtRun run:
+            {
+                var content = run.SdtContentRun ?? run.AppendChild(new Wp.SdtContentRun());
+                var sourceRun = content.Descendants<Wp.Run>().FirstOrDefault();
+                content.RemoveAllChildren();
+                written.Add(content.AppendChild(CreateValueRun(lines, sourceRun)));
+                break;
+            }
+            case Wp.SdtBlock block:
+            {
+                var content = block.SdtContentBlock ?? block.AppendChild(new Wp.SdtContentBlock());
+                var sourceParagraph = content.Descendants<Wp.Paragraph>().FirstOrDefault();
+                var sourceRun = sourceParagraph?.Descendants<Wp.Run>().FirstOrDefault();
+                content.RemoveAllChildren();
+                foreach (var line in lines)
+                {
+                    var paragraph = new Wp.Paragraph();
+                    if (sourceParagraph?.ParagraphProperties is not null)
+                    {
+                        paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
+                    }
+                    paragraph.AppendChild(CreateValueRun([line], sourceRun));
+                    written.Add(content.AppendChild(paragraph));
+                }
+                break;
+            }
+            default:
+                throw new InvalidOperationException($"模版字段 {value.Id} 的控件类型不支持填写");
+        }
+        FillFallback(control, name, lines);
+        return written;
+    }
+
+    /// <summary>勾选项只把选中项前的方框改为已勾选，选项文字和格式保持原样。</summary>
+    static void CheckOptions(Wp.SdtElement control, string name, IReadOnlyCollection<string> selected, List<OpenXmlElement> written)
+    {
+        var segments = control switch
+        {
+            Wp.SdtRun run => [run.SdtContentRun?.Descendants<Wp.Text>().ToList() ?? []],
+            _ => control.Descendants<Wp.Paragraph>().Select(item => item.Descendants<Wp.Text>().ToList()).ToList(),
+        };
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var texts in segments)
+        {
+            var joined = string.Concat(texts.Select(item => item.Text));
+            foreach (Match match in TemplateFieldScanner.CheckboxOptionPattern.Matches(joined))
+            {
+                var option = TemplateFieldScanner.TrimOption(match.Groups["option"].Value);
+                if (!selected.Contains(option)) continue;
+                found.Add(option);
+                var offset = match.Index;
+                foreach (var text in texts)
+                {
+                    if (offset < text.Text.Length)
+                    {
+                        text.Text = $"{text.Text[..offset]}{CheckedBox}{text.Text[(offset + 1)..]}";
+                        written.Add(text);
+                        break;
+                    }
+                    offset -= text.Text.Length;
+                }
+            }
+        }
+        var missing = selected.Where(item => !found.Contains(item)).ToList();
+        if (missing.Count > 0)
+        {
+            throw new InvalidOperationException($"勾选项“{name}”中找不到选项：{string.Join('、', missing)}");
+        }
+    }
+
+    /// <summary>文本框兼容显示（mc:Fallback）只有纯文字占位，按同名占位的出现顺序同步写入相同文字。</summary>
+    static void FillFallback(Wp.SdtElement control, string name, IReadOnlyList<string> lines)
+    {
+        var choice = control.Ancestors<AlternateContentChoice>().FirstOrDefault();
+        var fallback = choice?.Parent?.GetFirstChild<AlternateContentFallback>();
+        if (choice is null || fallback is null) return;
+        var index = choice.Descendants<Wp.SdtElement>()
+            .Where(item => item.GetFirstChild<Wp.SdtProperties>()?.GetFirstChild<Wp.SdtAlias>()?.Val?.Value == name)
+            .ToList()
+            .IndexOf(control);
+        var placeholder = $"【待填写：{name}】";
+        var runs = fallback.Descendants<Wp.Run>().Where(item => ReadRunText(item) == placeholder).ToList();
+        if (index < 0 || index >= runs.Count) return;
+        runs[index].InsertBeforeSelf(CreateValueRun(lines, runs[index]));
+        runs[index].Remove();
+    }
+
+    /// <summary>沿用占位格式并去掉淡红底，多行值用换行符分隔。</summary>
+    static Wp.Run CreateValueRun(IReadOnlyList<string> lines, Wp.Run? sourceRun)
+    {
+        var properties = sourceRun?.RunProperties is null
+            ? new Wp.RunProperties()
+            : (Wp.RunProperties)sourceRun.RunProperties.CloneNode(true);
+        properties.RemoveAllChildren<Wp.Shading>();
+        if (properties.RunStyle?.Val?.Value == "PlaceholderText") properties.RunStyle.Remove();
+        var run = new Wp.Run(properties);
+        for (var index = 0; index < lines.Count; index += 1)
+        {
+            if (index > 0) run.AppendChild(new Wp.Break());
+            if (lines[index].Length > 0)
+            {
+                run.AppendChild(new Wp.Text(lines[index]) { Space = SpaceProcessingModeValues.Preserve });
+            }
+        }
+        return run;
     }
 
     static void UpdateExistingControl(Wp.SdtRun control, TemplateFieldDefinition field, int wordId, List<OpenXmlElement> written)

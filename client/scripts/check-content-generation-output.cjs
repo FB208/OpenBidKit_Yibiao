@@ -1282,9 +1282,9 @@ async function checkImageModelStartup() {
   for (const status of ['available', 'unavailable', 'untested', undefined]) {
     for (const [imageQuantity, useAiImages] of [[10, true], [30, true], [60, true], [100, true], [30, false], [60, false], [0, true]]) {
       const calls = [];
-      const plan = { outlineWordControlSnapshot: {}, contentGenerationOptions: { imageQuantity, useAiImages } };
+      const plan = { outlineWordControlSnapshot: {}, outlineData: { outline: [{ id: 'section', content_mode: 'ai-generate' }] }, contentGenerationOptions: { imageQuantity, useAiImages } };
       const scope = {
-        technicalPlanStore: { loadTechnicalPlan: () => plan },
+        technicalPlanStore: { loadTechnicalPlan: () => plan, hasBidTemplate: () => false },
         aiService: { getConfig() { calls.push('config'); return { image_model: { status } }; } },
         prepareContentGenerationStart() { calls.push('prepare'); return {}; },
         runContentGenerationTask() {}, runContentSectionRegenerationTask() {},
@@ -1326,7 +1326,30 @@ async function checkImageModelStartup() {
       }
     }
   }
-  console.log('正文启动：开关真实状态、不可用时关闭并保存、非零比例关闭 AI 后放行及已开启时拦截检查通过。');
+  // 没有 AI 小节时只填写商务模版，不检查生图模型；商务模版未完成时已有成功任务也须启动。
+  const businessCalls = [];
+  const businessPlan = {
+    outlineWordControlSnapshot: {}, outlineData: { outline: [{ id: 'business', content_mode: 'template-fill' }] },
+    contentGenerationOptions: { imageQuantity: 30, useAiImages: true }, contentGenerationTask: { status: 'success' },
+    contentGenerationRuntime: { business_fill: { phase: 'filling', status: 'error' } },
+  };
+  const businessScope = {
+    technicalPlanStore: { loadTechnicalPlan: () => businessPlan, hasBidTemplate: () => true },
+    aiService: { getConfig() { businessCalls.push('config'); return { image_model: { status: 'unavailable' } }; } },
+    prepareContentGenerationStart() { businessCalls.push('prepare'); return {}; },
+    runContentGenerationTask() {}, runContentSectionRegenerationTask() {},
+    startManagedTask() { businessCalls.push('start'); },
+    emit() { businessCalls.push('emit'); },
+    activeTasks: new Map(), isActiveTaskStatus: () => false,
+  };
+  vm.runInNewContext(`this.service = {${source.slice(start, end)}};`, businessScope);
+  businessScope.service.startContentGeneration({});
+  assert.deepEqual(businessCalls, ['prepare', 'start'], '无 AI 小节不检查生图模型，商务模版未完成时重新启动');
+  businessPlan.contentGenerationRuntime.business_fill.phase = 'completed';
+  businessCalls.length = 0;
+  businessScope.service.startContentGeneration({});
+  assert.deepEqual(businessCalls, ['emit'], '商务模版已完成且无待办时直接返回已有结果');
+  console.log('正文启动：开关真实状态、不可用时关闭并保存、非零比例关闭 AI 后放行及已开启时拦截、仅商务模版启动规则检查通过。');
 }
 
 // 所有产物位于独立中文临时目录，不读取或修改用户项目数据。

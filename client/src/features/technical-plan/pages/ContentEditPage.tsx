@@ -25,6 +25,8 @@ interface ContentEditPageProps {
   contentGenerationOptions?: ContentGenerationOptions;
   exportTemplateId: string;
   sections: ContentGenerationSections;
+  bidTemplateExists?: boolean;
+  onOpenBidTemplate?: () => Promise<void>;
   onOpenGenerationSettingsAppearance: () => void;
   onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
@@ -51,7 +53,7 @@ const statusLabels: Record<TreeStatus, string> = {
 };
 
 const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>, string> = {
-  'template-fill': '该小节已标记为模板填写，后续将从招标文件提取并填充内容。',
+  'template-fill': '该小节已标记为模板填写，生成正文时会结合资信库、招标文件和全局事实填写商务模版，完成后可打开商务模版查看。',
   'directory-generate': '该小节已标记为目录生成，不进入 AI 正文生成流程。',
   'manual-fill': '该小节已标记为人工填写，请在导出后补充内容。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
@@ -185,6 +187,8 @@ function ContentEditPage({
   contentGenerationOptions,
   exportTemplateId,
   sections,
+  bidTemplateExists = false,
+  onOpenBidTemplate,
   onOpenGenerationSettingsAppearance,
   onContentGenerationReset,
   onContentSaved,
@@ -279,6 +283,31 @@ function ContentEditPage({
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
   const retryingBodyGeneration = taskFailed && !contentGenerationRuntime?.target_item_id && contentStats?.phase === 'generating';
+  // 商务模版填写与正文并行；没有 AI 小节时只填写商务模版。
+  const businessFill = contentGenerationRuntime?.business_fill ?? contentStats?.business_fill;
+  const businessOnly = !leaves.length && bidTemplateExists;
+  const businessFillPending = bidTemplateExists && businessFill?.phase !== 'completed';
+  const retryingBusinessFill = taskFailed && businessFill?.status === 'error';
+  const businessCompleted = businessOnly && task?.status === 'success' && businessFill?.phase === 'completed';
+  const businessFillSummary = businessFill?.phase === 'completed'
+    ? `已填 ${businessFill.filled_count} 项，人工 ${businessFill.manual_count} 项，无法确定 ${businessFill.unresolved.length} 项`
+    : '';
+  const businessFillLabel = !businessFill
+    ? '待填写'
+    : businessFill.phase === 'completed'
+      ? businessFillSummary
+      : businessFill.status === 'error'
+        ? '填写失败'
+        : businessFill.status === 'paused' || (paused && businessFill.status === 'running')
+          ? '已暂停'
+          : businessFill.status === 'interrupted' || !taskInFlight
+            ? '已中断'
+            : businessFill.phase === 'rendering' ? '回填 Word 中' : '填写中';
+  const businessFillTitle = businessFill?.status === 'error'
+    ? `失败原因：${businessFill.error || '未知错误'}`
+    : businessFill?.phase === 'completed' && businessFill.unresolved.length
+      ? `无法确定的字段：\n${businessFill.unresolved.map((item) => `${item.label}：${item.reason}`).join('\n')}`
+      : '商务模版的 AI 字段由副 Agent 结合资信库、招标文件和全局事实填写，签字、盖章和附件保留人工处理。';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   // 单轮审计：先并发核对各小节事实，再由主 Agent 跨节比对并统一修复。
@@ -377,6 +406,24 @@ function ContentEditPage({
                 : completedCount
                   ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
                   : '点击生成正文后，目录会实时显示每个小节状态。';
+  // 没有 AI 小节时进度区改为展示商务模版填写状态。
+  const businessPanel = businessOnly ? {
+    progress: businessCompleted ? 100 : task?.progress || 0,
+    label: businessCompleted ? '商务模版填写完成' : '商务模版填写',
+    count: businessFillLabel,
+    tone: businessCompleted ? 'success' as const : 'primary' as const,
+    description: taskFailed
+      ? taskErrorMessage
+      : businessCompleted
+        ? `商务模版填写完成：${businessFillSummary}。`
+        : pausing
+          ? '正在暂停商务模版填写。'
+          : paused
+            ? '商务模版填写已暂停，可点击继续。'
+            : running
+              ? latestTaskLog || '商务模版填写中。'
+              : '当前目录没有 AI 生成小节，点击“填写商务模版”后将结合资信库、招标文件和全局事实填写商务模版。',
+  } : null;
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const generationButtonLabel = pausing
     ? '正在暂停中...'
@@ -396,8 +443,12 @@ function ContentEditPage({
           ? '重试去表格'
         : retryingLayoutCheck
           ? '重试格式自检'
+        : retryingBusinessFill
+          ? '重试商务模版填写'
+        : businessOnly
+          ? businessFill?.phase === 'completed' ? '重新填写商务模版' : '填写商务模版'
           : completedCount === leaves.length && leaves.length
-              ? '重新生成正文'
+              ? businessFillPending ? '填写商务模版' : '重新生成正文'
               : completedCount > 0
                 ? '继续生成正文'
                 : '生成正文';
@@ -524,11 +575,13 @@ function ContentEditPage({
 
   // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck)) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingBusinessFill)) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingBusinessFill && !retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck
+        ? '商务模版填写已从原会话继续'
+        : retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -543,7 +596,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingBusinessFill) {
       void retryFailedSections();
       return;
     }
@@ -585,7 +638,9 @@ function ContentEditPage({
       consistency_repair_mode: 'agent',
       enable_original_plan_coverage_audit: false,
     }, config);
-    showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
+    showToast(businessOnly
+      ? '商务模版填写任务已在后台启动'
+      : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
   // 启动前提醒当前模型并发偏低；用户确认后仍使用最新配置，重复点击不重复提交。
@@ -600,16 +655,19 @@ function ContentEditPage({
     setGenerationSubmitting(true);
     if (confirmedConcurrency) setConcurrencyWarning('');
     try {
-      if (!await ensureValidContentTemplate()) return;
+      // 没有 AI 小节时只填写商务模版，不需要正文模板和并发提示。
+      if (leaves.length && !await ensureValidContentTemplate()) return;
       const config = await window.yibiao?.config.load();
-      if (config && !confirmedConcurrency && (config.concurrency_limit < 50 || config.image_model.concurrency_limit < 50)) {
+      if (leaves.length && config && !confirmedConcurrency && (config.concurrency_limit < 50 || config.image_model.concurrency_limit < 50)) {
         setConcurrencyWarning(`当前设置的文本模型并发${config.concurrency_limit}，生图模型并发${config.image_model.concurrency_limit}，建议设置50或更高，否则生成速度会比较慢`);
         return;
       }
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
       const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
-      const regenerate = leaves.length > 0 && completedCount === leaves.length;
+      const regenerate = leaves.length > 0
+        ? completedCount === leaves.length && !businessFillPending
+        : businessFill?.phase === 'completed';
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
           : completedCount > 0
@@ -797,12 +855,17 @@ function ContentEditPage({
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>
           <strong>正文生成</strong>
-          <p>只对标记为“AI生成”的叶子小节生成正文，其他模式保留为待处理。</p>
+          <p>对标记为“AI生成”的叶子小节生成正文；存在商务模版时同步填写模版字段，其他模式保留为待处理。</p>
         </div>
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
           <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          {bidTemplateExists && (
+            <span className={`content-business-fill-status${businessFill?.status === 'error' ? ' is-error' : ''}`} title={businessFillTitle}>
+              商务模版 <strong>{businessFillLabel}</strong>
+            </span>
+          )}
           {hasOriginalPlan && (
             <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
               原方案图片 <strong>{originalRestoration && typeof originalRestoration.total_images === 'number'
@@ -820,6 +883,11 @@ function ContentEditPage({
           )}
         </div>
         <div className="content-generation-actions">
+          {bidTemplateExists && (
+            <button type="button" className="secondary-action" onClick={() => void onOpenBidTemplate?.()}>
+              打开商务模版
+            </button>
+          )}
           {developerMode && (
             <button
               type="button"
@@ -850,7 +918,7 @@ function ContentEditPage({
               </button>
             </>
           ) : (
-            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={generationSubmitting || sectionSubmitting || pausing || !leaves.length}>
+            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={generationSubmitting || sectionSubmitting || pausing || (!leaves.length && !bidTemplateExists)}>
               {generationButtonLabel}
             </button>
           )}
@@ -865,14 +933,19 @@ function ContentEditPage({
           </div>
           <div className={`content-outline-stats${statsCollapsed ? ' is-collapsed' : ''}`}>
             <button type="button" onClick={() => setStatsCollapsed((prev) => !prev)} aria-expanded={!statsCollapsed}>
-              <span>{displayProgressLabel}</span>
-              <strong>{displayProgressCount}</strong>
+              <span>{businessPanel?.label ?? displayProgressLabel}</span>
+              <strong>{businessPanel?.count ?? displayProgressCount}</strong>
               <em>{statsCollapsed ? '展开' : '折叠'}</em>
             </button>
             {!statsCollapsed && (
               <div className="content-outline-stats-body">
-                <ProgressBar value={displayProgress} tone={progressTone} active={progressActive} label={`${progressPhaseLabel}进度 ${displayProgress}%`} />
-                <p>{progressDescription}</p>
+                <ProgressBar
+                  value={businessPanel?.progress ?? displayProgress}
+                  tone={businessPanel?.tone ?? progressTone}
+                  active={progressActive || (businessOnly && taskInFlight)}
+                  label={`${businessPanel?.label ?? progressPhaseLabel}进度 ${businessPanel?.progress ?? displayProgress}%`}
+                />
+                <p>{businessPanel?.description ?? progressDescription}</p>
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>
             )}
@@ -989,7 +1062,7 @@ function ContentEditPage({
             <div className="content-regenerate-card-head">
               <Dialog.Title>重置正文阶段？</Dialog.Title>
               <Dialog.Description>
-                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存。目录、全局事实及 Step 02 生成设置会保留。
+                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存；已填写的商务模版恢复为待填写。目录、全局事实及 Step 02 生成设置会保留。
               </Dialog.Description>
             </div>
             <div className="content-regenerate-actions">

@@ -524,7 +524,8 @@ if (!process.versions.electron) {
     const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('../electron/services/globalFactsAgentV2Config.cjs');
     const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('../electron/services/originalPlanRestorationAgentConfig.cjs');
     const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('../electron/services/contentGenerationAgent.cjs');
-    const taskKeys = [OUTLINE_AGENT_TASK_KEY, TEMPLATE_EXTRACTION_AGENT_TASK_KEY, GLOBAL_FACTS_AGENT_TASK_KEY, ORIGINAL_RESTORATION_AGENT_TASK_KEY, CONTENT_GENERATION_AGENT_TASK_KEY];
+    const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('../electron/services/businessTemplateFillAgentConfig.cjs');
+    const taskKeys = [OUTLINE_AGENT_TASK_KEY, TEMPLATE_EXTRACTION_AGENT_TASK_KEY, GLOBAL_FACTS_AGENT_TASK_KEY, ORIGINAL_RESTORATION_AGENT_TASK_KEY, CONTENT_GENERATION_AGENT_TASK_KEY, BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY];
     const write = file => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '检查内容', 'utf8'); };
     const directory = store.getContentWordOutputDir();
     const generated = path.join(getGeneratedImagesDir(app), 'technical-plan');
@@ -542,7 +543,7 @@ if (!process.versions.electron) {
       path.join(getImportedImagesDir(app), 'other-feature-123', '原图.png'),
       path.join(app.getPath('userData'), 'user_config.json'),
     ];
-    for (const name of [`${id}.docx`, '未登记小节.docx', '__content_word_残留.tmp', 'tender.md', 'original-plan.md', 'bid-template.docx', 'bid-template-fields.json', 'tender-originals/原件.docx', 'illustrations/图片.html']) write(path.join(directory, name));
+    for (const name of [`${id}.docx`, '未登记小节.docx', '__content_word_残留.tmp', 'tender.md', 'original-plan.md', 'bid-template.docx', 'bid-template-fields.json', 'bid-template-blank.docx', 'tender-originals/原件.docx', 'illustrations/图片.html']) write(path.join(directory, name));
     write(path.join(generated, 'illustrations/图片.png'));
     write(path.join(imported, '图片.png'));
     preserved.forEach(write);
@@ -803,7 +804,7 @@ if (!process.versions.electron) {
         ORIGINAL_RESTORATION_AGENT_TASK_KEY: 'technical-plan-original-restoration',
         CONTENT_GENERATION_AGENT_TASK_KEY: 'technical-plan-content-generation', runContentGenerationTask() {}, runContentSectionRegenerationTask() {},
         prepareContentGenerationStart: require('../electron/services/contentGenerationTask.cjs').prepareContentGenerationStart,
-        technicalPlanStore: { loadTechnicalPlan: () => ({ outlineWordControlSnapshot: {}, originalPlanFile: hasOriginal ? { markdownPath: 'original.md' } : null }) },
+        technicalPlanStore: { loadTechnicalPlan: () => ({ outlineWordControlSnapshot: {}, originalPlanFile: hasOriginal ? { markdownPath: 'original.md' } : null }), hasBidTemplate: () => false },
         agentService: { deletePersistentTask(key) {
           if (key === scope.ORIGINAL_RESTORATION_AGENT_TASK_KEY) deletes += 1;
           if (key === scope.CONTENT_GENERATION_AGENT_TASK_KEY) assert.equal(payload.regenerate, true, '普通局部生成不删除正文会话');

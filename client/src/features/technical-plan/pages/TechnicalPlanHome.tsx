@@ -1178,6 +1178,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           contentGenerationOptions={state.contentGenerationOptions}
           exportTemplateId={state.exportTemplateId}
           sections={state.contentGenerationSections}
+          bidTemplateExists={Boolean(state.bidTemplateExists)}
+          onOpenBidTemplate={openBidTemplate}
           onOpenGenerationSettingsAppearance={() => {
             setGenerationSettingsInitialTab('appearance');
             void switchStep('generation-settings');

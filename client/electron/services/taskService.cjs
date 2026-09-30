@@ -13,6 +13,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
@@ -315,7 +316,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService }) {
+function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
@@ -888,7 +889,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         signal: taskControl.signal,
       },
     );
-    runner({ templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+    runner({ templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, credentialLibraryService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
       if (!taskControl.signal.aborted) {
         checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
       }
@@ -1431,6 +1432,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
           technicalPlanStore.clearBidTemplate();
         },
       });
@@ -1481,8 +1483,15 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
             && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
               || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
       }
+      function hasAiSections(items) {
+        return items.some(item => item.children?.length ? hasAiSections(item.children) : item.content_mode === 'ai-generate');
+      }
+      // 商务模版尚未填写完成时同样需要启动，由正文任务按需只执行副 Agent。
+      const businessFillPending = technicalPlanStore.hasBidTemplate()
+        && technicalPlan.contentGenerationRuntime?.business_fill?.phase !== 'completed';
       if (!sectionRegeneration && !continuing && !taskPayload?.regenerate
         && technicalPlan.contentGenerationTask?.status === 'success'
+        && !businessFillPending
         && !hasPendingSections(technicalPlan.outlineData?.outline || [])) {
         const task = technicalPlan.contentGenerationTask;
         emit(task, { technicalPlanPatch: technicalPlan });
@@ -1491,6 +1500,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       // 只读取用户已保存的测试状态，在落库和清理会话前提示，不重新请求生图测试。
       const imageOptions = technicalPlan.contentGenerationOptions;
       if (imageOptions?.imageQuantity > 0 && imageOptions?.useAiImages
+        && hasAiSections(technicalPlan.outlineData?.outline || [])
         && aiService.getConfig().image_model?.status !== 'available') {
         throw new Error('已开启 AI 生图，但当前生图模型不可用。请去设置-生图模型中点击测试，并配置可用渠道。');
       }

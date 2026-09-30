@@ -1,5 +1,5 @@
 // node scripts/check-template-extraction.cjs [--source <招标文件.docx>]
-// 隔离中文工作区，编译并调用真实 OpenXmlHelper，检查投标模版候选识别、字段写入和错误路径，不读写用户项目。
+// 隔离中文工作区，编译并调用真实 OpenXmlHelper，检查投标模版候选识别、字段写入、商务模版回填和错误路径，不读写用户项目。
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -13,6 +13,7 @@ const SOURCE_RELATIVE = 'technical-plan/tender-originals/招标原件.docx';
 const TEMPLATE_SOURCE_RELATIVE = 'technical-plan/bid-template-source.docx';
 const TEMPLATE_RELATIVE = 'technical-plan/bid-template.docx';
 const FIELDS_RELATIVE = 'technical-plan/bid-template-fields.json';
+const BLANK_RELATIVE = 'technical-plan/bid-template-blank.docx';
 const NAMESPACES = [
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"',
@@ -53,7 +54,7 @@ function buildTenderDocx(target) {
     paragraph(run('本授权书声明：位于'), underlined('（公司地址） '), run('的'), underlined(' （公司名称） '), run('的法定代表人代表本公司参加（招标编号'), underlined('       '), run('）的投标。')),
     paragraph(run('投标人： （盖单位公章）')),
     paragraph(run('            年  月  日')),
-    `<w:p><w:r>${textBox('法定代表人身份证正面扫描或复印')}</w:r><w:r>${textBox('法定代表人身份证背面扫描或复印')}</w:r><w:r>${textBox('附：营业执照复印件（加盖公章）')}</w:r></w:p>`,
+    `<w:p><w:r>${textBox('法定代表人身份证正面扫描或复印')}</w:r><w:r>${textBox('法定代表人身份证背面扫描或复印')}</w:r><w:r>${textBox('附：营业执照复印件（加盖公章）')}</w:r><w:r>${textBox('联系人：____')}</w:r></w:p>`,
     paragraph(run('附：授权委托代理人身份证复印件（公章）')),
     paragraph(run('企业性质：□国有 □民营')),
     paragraph(run('项目负责人：'), '<w:sdt><w:sdtPr><w:alias w:val="项目负责人"/><w:id w:val="22"/><w:showingPlcHdr/></w:sdtPr><w:sdtContent><w:r><w:t>单击此处输入文字。</w:t></w:r></w:sdtContent></w:sdt>'),
@@ -142,6 +143,7 @@ async function checkSyntheticTender(helper, workspace) {
   };
   const kinds = candidates.reduce((result, item) => ({ ...result, [item.kind]: (result[item.kind] || 0) + 1 }), {});
   assert.deepEqual(kinds, {
+    'text-placeholder': 1,
     'underlined-space': 6,
     'hint-placeholder': 2,
     'blank-gap': 4,
@@ -217,7 +219,7 @@ async function checkSyntheticTender(helper, workspace) {
   assert.equal(definitions.version, 2);
   assert.equal(definitions.fields.length, candidates.length);
   const fieldKinds = definitions.fields.reduce((result, item) => ({ ...result, [item.kind]: (result[item.kind] || 0) + 1 }), {});
-  assert.deepEqual(fieldKinds, { text: 27, attachment: 5, choice: 2 });
+  assert.deepEqual(fieldKinds, { text: 28, attachment: 5, choice: 2 });
   assert.ok(definitions.fields.filter((item) => item.kind === 'attachment').every((item) => item.fill_by === 'manual'));
   assert.deepEqual(definitions.fields.find((item) => item.name === '企业类型').options, ['有限责任公司', '股份有限公司', '独资企业']);
   const listFields = definitions.fields.filter((item) => item.name === '资料名称');
@@ -242,8 +244,69 @@ async function checkSyntheticTender(helper, workspace) {
   assert.match(xml, /附：授权委托代理人身份证复印件（公章）<\/w:t>[\s\S]*?<\/w:p><w:p>[\s\S]*?【人工处理：授权委托代理人身份证复印件】/, '附件说明后插入附件位置');
   assert.match(xml, /【待填写：公司地址】/);
   assert.match(xml, /投标人：[\s\S]*?【待填写：投标人】/);
+  assert.match(fallbackXml, /【待填写：联系人】/, '文本框文字字段在兼容格式中同步占位');
   assert.deepEqual(fs.readFileSync(sourcePath), sourceBytes, '招标原件保持不变');
   console.log(`字段写入：${definitions.fields.length} 个内容控件，类型 ${JSON.stringify(fieldKinds)}，文本框兼容格式已同步，原件未改动。`);
+  await checkFillTemplate(helper, workspace, definitions);
+}
+
+/** 以空白底稿回填文字、表格逐行、已有控件、勾选项和文本框字段，并检查错误路径与可重复性。 */
+async function checkFillTemplate(helper, workspace, definitions) {
+  const templatePath = path.join(workspace, TEMPLATE_RELATIVE);
+  fs.copyFileSync(templatePath, path.join(workspace, BLANK_RELATIVE));
+  assert.match(readDocumentXml(path.join(workspace, BLANK_RELATIVE)), /showingPlcHdr/, '底稿保留原件控件的占位显示标记');
+  const idOf = (name, row) => {
+    const found = definitions.fields.filter((item) => item.name === name && (row === undefined || item.row === row));
+    assert.equal(found.length, 1, `字段“${name}${row ? `第${row}行` : ''}”应恰好一个，实际 ${found.length}`);
+    return found[0].id;
+  };
+  const values = [
+    { id: idOf('投标人名称'), value: '某某科技有限公司' },
+    { id: idOf('公司地址'), value: '北京市海淀区\n中关村大街1号' },
+    { id: idOf('项目负责人'), value: '张三' },
+    { id: idOf('企业名称'), value: '某某科技有限公司' },
+    { id: idOf('资料名称', 3), value: '营业执照' },
+    { id: idOf('资料名称', 4), value: '资质证书' },
+    { id: idOf('联系人'), value: '李四' },
+    { id: idOf('企业性质'), selected: ['民营'] },
+    { id: idOf('企业类型'), selected: ['股份有限公司'] },
+  ];
+  const fill = (items) => runJob(helper, 'fill-template-fields', { input: BLANK_RELATIVE, output: TEMPLATE_RELATIVE, values: items });
+
+  await assert.rejects(fill([...values, { id: 'f9999', value: '不存在' }]), /模版字段 f9999 不存在/);
+  await assert.rejects(fill([...values, values[0]]), /字段重复/);
+  await assert.rejects(fill([{ id: idOf('企业性质'), selected: ['外资'] }]), /勾选项“企业性质”中找不到选项：外资/);
+  await assert.rejects(fill([{ id: idOf('投标人名称'), value: '  ' }]), /字段值为空/);
+
+  const filled = await fill(values);
+  assert.equal(filled.blockCount, values.length);
+  const xml = readDocumentXml(templatePath);
+  const fallbackXml = (xml.match(/<mc:Fallback>[\s\S]*?<\/mc:Fallback>/g) || []).join('');
+  const choiceXml = xml.replace(/<mc:Fallback>[\s\S]*?<\/mc:Fallback>/g, '');
+  const runOf = (text) => (choiceXml.match(new RegExp(`<w:r>(?:(?!<w:r>).)*?${text}`)) || [''])[0];
+  assert.match(runOf('某某科技有限公司'), /某某科技有限公司/);
+  assert.doesNotMatch(runOf('某某科技有限公司'), /FCE8E6/, '已填字段去掉淡红底');
+  assert.match(choiceXml, /北京市海淀区<\/w:t><w:br \/><w:t xml:space="preserve">中关村大街1号/, '多行值生成换行');
+  assert.match(choiceXml, /营业执照[\s\S]*?资质证书/, '清单表逐行写入');
+  assert.equal((choiceXml.match(/【待填写：资料名称】/g) || []).length, 1, '未提供值的第 5 行保留占位');
+  assert.match(choiceXml, /【待填写：招标编号】/, '未提供值的 ai 字段保留占位');
+  assert.match(choiceXml, /【人工处理：授权委托人】/, '人工字段保留占位');
+  const leaderControl = choiceXml.match(/<w:sdt>(?:(?!<w:sdt>).)*?yibiao:field:[^"]+"(?:(?!<w:sdt>).)*?张三[\s\S]*?<\/w:sdt>/)?.[0] || '';
+  assert.ok(leaderControl, '已有控件写入值');
+  assert.doesNotMatch(leaderControl, /showingPlcHdr/, '已有控件去掉占位显示标记');
+  assert.match(choiceXml, /□国有 ☑民营|☑民营/, '同段勾选项勾选选中项');
+  assert.match(choiceXml, /□国有/, '同段未选项保持原样');
+  assert.match(choiceXml, /☑ 股份有限公司/, '跨段勾选项勾选选中项');
+  assert.match(choiceXml, /□ 有限责任公司/, '跨段未选项保持原样');
+  assert.match(choiceXml, /李四/, '文本框内容控件写入值');
+  assert.match(fallbackXml, /李四/, '文本框兼容格式同步写入值');
+  assert.doesNotMatch(fallbackXml, /【待填写：联系人】/);
+  assert.match(fallbackXml, /【人工处理：法定代表人身份证正面】/, '兼容格式中的人工占位保持原样');
+  assert.equal((choiceXml.match(/w:tag w:val="yibiao:field:/g) || []).length, definitions.fields.length, '字段标识全部保留');
+
+  await fill(values);
+  assert.equal(readDocumentXml(templatePath), xml, '以底稿重复回填结果一致');
+  console.log(`商务模版回填：${values.length} 个字段写入（文字、逐行、已有控件、勾选项、文本框），未知/重复 id、非法选项和空值均按预期报错，重复回填结果一致。`);
 }
 
 /** 对真实招标文件全文扫描并自动分类写入，只输出统计。 */

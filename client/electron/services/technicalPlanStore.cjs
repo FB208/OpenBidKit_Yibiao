@@ -8,6 +8,7 @@ const {
   getTechnicalPlanBidTemplatePath,
   getTechnicalPlanBidTemplateSourcePath,
   getTechnicalPlanBidTemplateFieldsPath,
+  getTechnicalPlanBidTemplateBlankPath,
   getTechnicalPlanOriginalPlanMarkdownPath,
   getTechnicalPlanTenderMarkdownPath,
   getTechnicalPlanTenderOriginalsDir,
@@ -26,6 +27,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 
@@ -36,6 +38,9 @@ const tenderOriginalsDirRelativePath = path.join('technical-plan', 'tender-origi
 const bidTemplateRelativePath = path.join('technical-plan', 'bid-template.docx').replace(/\\/g, '/');
 const bidTemplateSourceRelativePath = path.join('technical-plan', 'bid-template-source.docx').replace(/\\/g, '/');
 const bidTemplateFieldsRelativePath = path.join('technical-plan', 'bid-template-fields.json').replace(/\\/g, '/');
+const bidTemplateBlankRelativePath = path.join('technical-plan', 'bid-template-blank.docx').replace(/\\/g, '/');
+// 字段清单中由商务模版填写写入的键，三者互斥；失效时一并清除。
+const BID_TEMPLATE_FILL_KEYS = ['value', 'selected', 'unresolved_reason'];
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
@@ -470,6 +475,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
   }
   function deleteGlobalFactsAgentTask() {
     agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY);
@@ -504,6 +510,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const bidTemplatePath = getTechnicalPlanBidTemplatePath(app);
   const bidTemplateSourcePath = getTechnicalPlanBidTemplateSourcePath(app);
   const bidTemplateFieldsPath = getTechnicalPlanBidTemplateFieldsPath(app);
+  const bidTemplateBlankPath = getTechnicalPlanBidTemplateBlankPath(app);
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const workspaceDir = path.dirname(path.dirname(tenderMarkdownPath));
@@ -1015,12 +1022,14 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidTemplateSourcePath,
       path.join(sourcePathParts.dir, `${sourcePathParts.name}.chapters.json`),
       bidTemplateFieldsPath,
+      bidTemplateBlankPath,
     ];
     const templateDir = path.dirname(bidTemplatePath);
     if (fs.existsSync(templateDir)) {
       const tempPrefixes = [
         `${path.basename(bidTemplatePath)}.`,
         `${path.basename(bidTemplateFieldsPath)}.`,
+        `${path.basename(bidTemplateBlankPath)}.`,
       ];
       for (const name of fs.readdirSync(templateDir)) {
         if (tempPrefixes.some((prefix) => name.startsWith(prefix) && name.includes('.tmp'))) {
@@ -1037,15 +1046,77 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           { deferOnFailure: false },
         );
       } catch (error) {
-        if (isFileLockError(error)) {
-          const lockError = new Error('投标模版正在被 Word 使用，请关闭后重试');
-          lockError.code = 'BID_TEMPLATE_IN_USE';
-          lockError.cause = error;
-          throw lockError;
-        }
-        throw error;
+        throw toBidTemplateLockError(error);
       }
     }
+  }
+
+  function toBidTemplateLockError(error) {
+    if (!isFileLockError(error)) return error;
+    const lockError = new Error('投标模版正在被 Word 使用，请关闭后重试');
+    lockError.code = 'BID_TEMPLATE_IN_USE';
+    lockError.cause = error;
+    return lockError;
+  }
+
+  function readBidTemplateFields() {
+    return JSON.parse(fs.readFileSync(bidTemplateFieldsPath, 'utf-8'));
+  }
+
+  function hasBidTemplateFillValues(payload) {
+    return (payload?.fields || []).some(field => BID_TEMPLATE_FILL_KEYS.some(key => Object.hasOwn(field, key)));
+  }
+
+  function withoutBidTemplateFillValues(field) {
+    return Object.fromEntries(Object.entries(field).filter(([key]) => !BID_TEMPLATE_FILL_KEYS.includes(key)));
+  }
+
+  // 同目录临时文件写完再改名，Word 占用最终文件时给出关闭提示。
+  function writeBidTemplateFile(targetPath, write) {
+    const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
+    write(tempPath);
+    try {
+      fs.renameSync(tempPath, targetPath);
+    } catch (error) {
+      fs.rmSync(tempPath, { force: true });
+      throw toBidTemplateLockError(error);
+    }
+  }
+
+  // 底稿在首次填写前从刚提取的模版复制；已有填写值说明模版不再是空白，不能充当底稿。
+  function ensureBidTemplateBlank() {
+    if (fs.existsSync(bidTemplateBlankPath)) return;
+    if (hasBidTemplateFillValues(readBidTemplateFields())) {
+      throw new Error('商务模版缺少空白底稿，请重新生成目录');
+    }
+    writeBidTemplateFile(bidTemplateBlankPath, tempPath => fs.copyFileSync(bidTemplatePath, tempPath));
+  }
+
+  // entries 按字段 id 给出 value / selected / unresolved_reason 之一，未列出的字段清除旧值。
+  function saveBidTemplateFieldValues(entries) {
+    const payload = readBidTemplateFields();
+    payload.fields = payload.fields.map(field => ({ ...withoutBidTemplateFillValues(field), ...(entries[field.id] || {}) }));
+    writeBidTemplateFile(bidTemplateFieldsPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8'));
+    return payload;
+  }
+
+  // 已填值随正文一起失效：暂存当前模版与清单，再从底稿恢复占位；事务失败时先删新建文件再恢复暂存文件。
+  function stageBusinessTemplateReset(changes) {
+    if (!fs.existsSync(bidTemplateFieldsPath)) return;
+    const payload = readBidTemplateFields();
+    if (!hasBidTemplateFillValues(payload)) return;
+    if (!fs.existsSync(bidTemplateBlankPath)) throw new Error('商务模版缺少空白底稿，请重新生成目录');
+    try {
+      stageContentFileRemoval(changes, bidTemplatePath);
+      stageContentFileRemoval(changes, bidTemplateFieldsPath);
+    } catch (error) {
+      throw toBidTemplateLockError(error);
+    }
+    changes.created.push(bidTemplatePath);
+    fs.copyFileSync(bidTemplateBlankPath, bidTemplatePath);
+    changes.created.push(bidTemplateFieldsPath);
+    const blankPayload = { ...payload, fields: payload.fields.map(withoutBidTemplateFillValues) };
+    fs.writeFileSync(bidTemplateFieldsPath, `${JSON.stringify(blankPayload, null, 2)}\n`, 'utf-8');
   }
 
   function clearTenderSourceFiles(phase = 'technical-plan-reset') {
@@ -1643,8 +1714,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function clearContentGenerationState(wordChanges) {
     stageContentWordRemoval(wordChanges);
+    stageBusinessTemplateReset(wordChanges);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
     db.prepare("UPDATE technical_plan_outline_nodes SET content = '', updated_at = ?").run(now());
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
@@ -1746,12 +1819,20 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function createContentWordTransaction(callback) {
     const transaction = db.transaction(callback);
     return (...args) => {
-      const changes = { moves: [], removed: [] };
+      const changes = { moves: [], removed: [], created: [] };
       let result;
       try {
         result = transaction(changes, ...args);
       } catch (error) {
         const restoreErrors = [];
+        // 先删除本次新建的文件，腾出原位置再恢复暂存文件。
+        for (const created of changes.created.reverse()) {
+          try {
+            fs.rmSync(created, { force: true });
+          } catch (restoreError) {
+            restoreErrors.push(restoreError);
+          }
+        }
         for (const [source, target] of changes.moves.reverse()) {
           try {
             if (fs.existsSync(source)) throw new Error(`恢复正文文件时原位置被占用：${source}`);
@@ -2139,6 +2220,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, affectedIds, clearAll });
       const nextIds = new Set(flattenOutlineItems(outlineToSave?.outline || []).map(row => row.node_id));
       reconcileContentWords(wordChanges, { snapshot, affectedIds, nextIds, clearAll });
+      if (clearAll) stageBusinessTemplateReset(wordChanges);
       savedOutlineData = outlineToSave ? { ...outlineToSave, outline: numberOutline(outlineToSave.outline) } : outlineToSave;
       saveOutlineData(outlineToSave);
       if (!outlineToSave?.outline?.length) {
@@ -2167,13 +2249,18 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           phase: 'planning',
           direct_generation_item_ids: keepLeafIds([...(retainedRuntime.direct_generation_item_ids || []), ...newLeafIds]),
           pending_item_ids: keepLeafIds([...(retainedRuntime.pending_item_ids || []), ...(generationStarted ? newLeafIds : [])]),
+          // 商务模版填写与 AI 小节无关，局部目录变更保留其状态。
+          ...(previousRuntime.business_fill ? { business_fill: previousRuntime.business_fill } : {}),
         }) });
       }
     });
     transaction();
     if (invalidatesContentTask) {
       agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
-      if (clearAll) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+      if (clearAll) {
+        agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+        agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+      }
       cleanupOriginalImageBatches();
     }
     const savedContentRuntime = safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);
@@ -2702,6 +2789,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     getBidTemplateFieldsRelativePath() {
       return bidTemplateFieldsRelativePath;
     },
+    getBidTemplateBlankRelativePath() {
+      return bidTemplateBlankRelativePath;
+    },
+    readBidTemplateFields,
+    ensureBidTemplateBlank,
+    saveBidTemplateFieldValues,
+    resetBusinessTemplateFill: createContentWordTransaction(changes => stageBusinessTemplateReset(changes)),
     hasBidTemplate() {
       return fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath);
     },

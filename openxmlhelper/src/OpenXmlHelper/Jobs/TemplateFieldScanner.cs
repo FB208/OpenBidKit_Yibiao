@@ -38,7 +38,7 @@ static class TemplateFieldScanner
         @"(?<label>[\p{L}\p{N}（）()《》/·\-]{2,30})[：:](?<gap>[ 　]*)(?<hint>[（(][^（）()\r\n]{1,12}[）)])[ 　。.]*$",
         PatternOptions);
     static readonly Regex DateGapPattern = new(@"(?<y>[ 　]+)年(?<m>[ 　]+)月(?<d>[ 　]+)日", PatternOptions);
-    static readonly Regex CheckboxOptionPattern = new(@"[□☐](?<option>[^□☐]*)", PatternOptions);
+    internal static readonly Regex CheckboxOptionPattern = new(@"[□☐](?<option>[^□☐]*)", PatternOptions);
     static readonly Regex AttachmentNotePattern = new(
         @"(?:后附|附后|另附|附[：:])(?<material>[^。；;]{0,60}(?:复印件|扫描件|证书|执照|证明|证件|资料))",
         PatternOptions);
@@ -936,7 +936,7 @@ static class TemplateFieldScanner
             targetGroup: group);
     }
 
-    static string TrimOption(string value)
+    internal static string TrimOption(string value)
     {
         return value.Trim().TrimEnd('，', ',', '；', ';', '。', '、').Trim();
     }

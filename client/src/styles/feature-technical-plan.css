@@ -1514,6 +1514,20 @@
   letter-spacing: 0;
 }
 
+.content-generation-stats .content-business-fill-status strong {
+  font-size: 13px;
+}
+
+.content-generation-stats .content-business-fill-status.is-error {
+  color: var(--yb-danger);
+  background: var(--yb-danger-soft);
+  border-color: var(--yb-danger-border);
+}
+
+.content-generation-stats .content-business-fill-status.is-error strong {
+  color: var(--yb-danger);
+}
+
 .content-generation-actions {
   display: flex;
   align-items: center;
