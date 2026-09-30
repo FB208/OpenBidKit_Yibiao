@@ -99,15 +99,37 @@ function saveArtifact(name, document) {
   console.log(`保留检查 DOCX：${file}`);
 }
 
-/** 检查真实产物只有平面表，且每行合并单元格完整覆盖同一张表的列网格。 */
+/** 按文档节属性计算正文栏宽（双栏为单栏宽），与转换器生成列网格时的换算一致。 */
+function columnWidthTwips($) {
+  const section = $('w\\:body').children('w\\:sectPr').last();
+  const margin = section.children('w\\:pgMar');
+  const text = Number(section.children('w\\:pgSz').attr('w:w')) - Number(margin.attr('w:left')) - Number(margin.attr('w:right'));
+  const columns = section.children('w\\:cols');
+  return Number(columns.attr('w:num') || 1) === 2 ? Math.trunc((text - Number(columns.attr('w:space'))) / 2) : text;
+}
+
+/** 满宽表格按栏宽 100% 须配合兼容模式 15，Word 才不会把单元格边距加到栏宽之外。 */
+function checkFullWidthTable($, table, message) {
+  const width = $(table).children('w\\:tblPr').children('w\\:tblW');
+  assert.deepEqual([width.attr('w:type'), width.attr('w:w')], ['pct', '5000'], message);
+}
+
+function checkCompatibilityMode(document) {
+  const settings = cheerio.load(document.zip.readAsText('word/settings.xml'), { xmlMode: true });
+  assert.equal(settings('w\\:compat > w\\:compatSetting[w\\:name="compatibilityMode"]').attr('w:val'), '15', '文档须声明兼容模式 15');
+}
+
+/** 检查真实产物只有平面表，表宽随栏宽，且每行合并单元格完整覆盖同一张表的列网格。 */
 function checkFlatTables(document) {
   const { $ } = document;
   assert.equal($('w\\:tbl w\\:tbl').length, 0, '章节页框不可嵌套业务表格');
   assert.equal($('w\\:tc w\\:sectPr').length, 0, '页面分节不可移入单元格');
+  checkCompatibilityMode(document);
   for (const table of $('w\\:tbl').toArray()) {
     const grid = $(table).children('w\\:tblGrid').children('w\\:gridCol');
-    const width = Number($(table).children('w\\:tblPr').children('w\\:tblW').attr('w:w'));
-    assert.equal(grid.toArray().reduce((sum, column) => sum + Number($(column).attr('w:w')), 0), width);
+    // 网格按导出时栏宽计算，只作为列比例；表宽取 100%，Word 里改页边距后随标题边框一起移动。
+    checkFullWidthTable($, table, '页框表按栏宽 100%');
+    assert.equal(grid.toArray().reduce((sum, column) => sum + Number($(column).attr('w:w')), 0), columnWidthTwips($));
     for (const row of $(table).children('w\\:tr').toArray()) {
       const spans = $(row).children('w\\:tc').toArray().map(cell => Number($(cell).children('w\\:tcPr').children('w\\:gridSpan').attr('w:val') || 1));
       assert.equal(spans.reduce((sum, span) => sum + span, 0), grid.length, '每行应完整覆盖统一列网格');
@@ -531,6 +553,8 @@ async function main() {
     assert.ok(word.$('w\\:body').text().includes('1.1 交付节点'));
     assert.equal(word.paragraph('现场施工正文').closest('w\\:tbl').length, 0, '关闭章节页框后正文恢复顶层');
     assert.equal(word.$('w\\:tbl').length, 3, '关闭章节页框后只保留原业务表');
+    checkCompatibilityMode(word);
+    for (const table of word.$('w\\:tbl').toArray()) checkFullWidthTable(word.$, table, '未开页框的满宽业务表同样按栏宽 100%');
     const plainRows = word.$('w\\:tr').toArray();
     const plainHeaders = plainRows.filter(row => word.$(row).find('w\\:t').toArray()
       .some(text => ['设备', '四列表头甲'].includes(word.$(text).text())));

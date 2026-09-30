@@ -43,17 +43,20 @@ function aiSectionFile(item) {
 /** 整本导出只读取当前目录、模板和 Agent 产物，不修改正文工作区。 */
 function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService }) {
   return {
-    /** 保存对话框与转换使用同一次点击时的目录和模板。 */
-    prepare() {
+    /**
+     * 保存对话框与转换使用同一次点击时的目录和模板。
+     * 模板设置页的导出测试传入正在编辑的模板配置，替代项目“长嘛样”已选模板。
+     */
+    prepare({ exportFormat } = {}) {
       const state = technicalPlanStore.loadTechnicalPlan();
       if (!state.outlineData?.outline?.length) throw new Error('没有可导出的目录内容');
-      const template = templateStore.getTemplate(state.exportTemplateId);
-      if (!template) throw new Error('请先到“长嘛样”选择有效的导出模板');
+      const template = exportFormat ? null : templateStore.getTemplate(state.exportTemplateId);
+      if (!exportFormat && !template) throw new Error('请先到“长嘛样”选择有效的导出模板');
       const task = agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
       return {
         project_name: state.outlineData.project_name,
         outline: state.outlineData.outline,
-        export_format: template.config,
+        export_format: exportFormat || template.config,
         export_template_scope: state.exportTemplateScope,
         workspaceDir: task?.paths.workspaceDir,
       };
