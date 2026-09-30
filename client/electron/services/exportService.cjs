@@ -2961,7 +2961,7 @@ function createExportService({ configStore, openXmlHelperService, getTechnicalPl
       const structureConfirmed = payload.confirmStructureIssues === true;
       if (payload.source === 'technical-plan') {
         if (!technicalExport) throw new Error('本地数据库尚未就绪');
-        payload = technicalExport.prepare();
+        payload = technicalExport.prepare({ exportFormat: payload.export_format });
       }
       const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
       const developerLogger = createDeveloperLogger({

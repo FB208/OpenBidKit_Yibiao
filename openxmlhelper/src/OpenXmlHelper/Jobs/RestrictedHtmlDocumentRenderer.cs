@@ -414,11 +414,23 @@ static class RestrictedHtmlDocumentRenderer
         stylesPart.Styles.Save();
     }
 
-    /// <summary>要求 Word 或编辑器打开文档时刷新页码域。</summary>
+    /// <summary>
+    /// 要求 Word 或编辑器打开文档时刷新页码域，并声明 Word 2013 及以上的兼容模式 15。
+    /// 不写兼容模式时 Word 按 2007 规则排版：百分比宽度的表格会把单元格左右边距加在栏宽之外，
+    /// 满宽表格和章节页框只能写死绝对宽度，用户在 Word 里改页边距后就与标题段落边框错开。
+    /// 子元素顺序按 OOXML schema：updateFields 在 compat 之前。
+    /// </summary>
     static void AddDocumentSettings(MainDocumentPart mainPart)
     {
         var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-        settingsPart.Settings = new Wp.Settings(new Wp.UpdateFieldsOnOpen { Val = true });
+        settingsPart.Settings = new Wp.Settings(
+            new Wp.UpdateFieldsOnOpen { Val = true },
+            new Wp.Compatibility(new Wp.CompatibilitySetting
+            {
+                Name = Wp.CompatSettingNameValues.CompatibilityMode,
+                Uri = "http://schemas.microsoft.com/office/word",
+                Val = "15",
+            }));
         settingsPart.Settings.Save();
     }
 
@@ -1113,21 +1125,13 @@ static class RestrictedHtmlDocumentRenderer
         var properties = table.GetFirstChild<Wp.TableProperties>() ?? table.PrependChild(new Wp.TableProperties());
         properties.RemoveAllChildren();
         var fullWidth = format.Bool(style, "full_width", true);
-        // 满宽表格的宽度用 dxa 写死成正文栏宽。tblW 用百分比时 Word 会把单元格左右边距
-        // 加在百分比宽度之外，表格比正文栏宽出两个边距（默认配比 0.4cm），右边顶出页边距。
-        // 嵌套表格的百分比是相对父单元格算的，换成绝对宽度会撑破单元格，只处理顶层表格。
-        var pinnedWidth = fullWidth && table.Parent is Wp.Body;
-        properties.AppendChild(pinnedWidth
-            ? new Wp.TableWidth
-            {
-                Type = Wp.TableWidthUnitValues.Dxa,
-                Width = ContentWidthTwips(format).ToString(CultureInfo.InvariantCulture),
-            }
-            : new Wp.TableWidth
-            {
-                Type = fullWidth ? Wp.TableWidthUnitValues.Pct : Wp.TableWidthUnitValues.Auto,
-                Width = fullWidth ? "5000" : "0",
-            });
+        // 满宽表格按栏宽 100%，用户在 Word 里改页边距或分栏后随之调整；嵌套表格相对父单元格。
+        // 依赖 AddDocumentSettings 的兼容模式 15：外沿正好落在页边距上，不再外扩单元格边距。
+        properties.AppendChild(new Wp.TableWidth
+        {
+            Type = fullWidth ? Wp.TableWidthUnitValues.Pct : Wp.TableWidthUnitValues.Auto,
+            Width = fullWidth ? "5000" : "0",
+        });
 
         var borderColor = Color(format.Text(style, "border_color", "#dcdff6"), "DCDFF6");
         var borderSize = (uint)Math.Clamp((int)Math.Round(format.Number(style, "border_width", 1) * 8), 0, 96);
@@ -1586,7 +1590,11 @@ static class RestrictedHtmlDocumentRenderer
         FlushContent();
     }
 
-    /// <summary>按业务表列边界的并集建网格，正文每段一通栏行，业务表直接展开为同级行。</summary>
+    /// <summary>
+    /// 按业务表列边界的并集建网格，正文每段一通栏行，业务表直接展开为同级行。
+    /// 表宽取栏宽 100%，Word 里改页边距后与标题段落边框一起移动；网格仍按导出时的栏宽计算，
+    /// 只作为各列比例，Word 按新栏宽等比缩放。
+    /// </summary>
     static Wp.Table CreateChapterBodyTable(IReadOnlyList<OpenXmlElement> content, FormatReader format, string color, HashSet<Wp.Paragraph> captions)
     {
         var width = ContentWidthTwips(format);
@@ -1607,7 +1615,7 @@ static class RestrictedHtmlDocumentRenderer
 
         var grid = boundaries.ToArray();
         var result = new Wp.Table(new Wp.TableProperties(
-            new Wp.TableWidth { Type = Wp.TableWidthUnitValues.Dxa, Width = width.ToString(CultureInfo.InvariantCulture) },
+            new Wp.TableWidth { Type = Wp.TableWidthUnitValues.Pct, Width = "5000" },
             new Wp.TableJustification { Val = Wp.TableRowAlignmentValues.Center },
             new Wp.TableBorders(
                 CreateTableBorder<Wp.TopBorder>(color, 6), CreateTableBorder<Wp.LeftBorder>(color, 6),
