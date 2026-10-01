@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 35;
+const schemaVersion = 36;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -1147,6 +1147,14 @@ function addTechnicalPlanImageQuantity(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'image_quantity', "INTEGER NOT NULL DEFAULT 30");
 }
 
+/** 将配图比例列统一改为整数并恢复默认 30%，不转换或保留旧值。 */
+function migrateTechnicalPlanImageQuantity(db) {
+  db.exec(`
+    ALTER TABLE technical_plan_generation_config DROP COLUMN image_quantity;
+    ALTER TABLE technical_plan_generation_config ADD COLUMN image_quantity INTEGER NOT NULL DEFAULT 30;
+  `);
+}
+
 /** 保存正文可选修复开关；默认不执行二次优化或字数修复。 */
 function addTechnicalPlanRepairOptions(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'html_image_optimization', 'INTEGER NOT NULL DEFAULT 0');
@@ -1767,6 +1775,11 @@ const migrations = [
     version: 35,
     description: '技术方案新增格式自检及修复开关',
     up: addTechnicalPlanLayoutCheckOption,
+  },
+  {
+    version: 36,
+    description: '技术方案配图比例字段升级为整数并恢复默认 30%',
+    up: migrateTechnicalPlanImageQuantity,
   },
 ];
 
