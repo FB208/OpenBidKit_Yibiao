@@ -373,7 +373,7 @@ function createContentGenerationConsistencyTools({ agentService, aiService, sign
     name: 'repair-sections', label: '并发修复一致性问题', executionMode: 'sequential',
     description: `主 Agent 确定统一结论后，读取 ${taskFilePath('repair')} 中需要修改的目标小节，分配给子任务并发修复。格式为 {"rules":"可选，统一修复规则","sections":[{"section_id":"从台账“小节目录”原样复制的本轮目标小节 ID","instructions":"本节具体矛盾：段落 ID、矛盾内容及统一结论；只需按 rules 修改时填空字符串"}]}。rules 适用于本次派发的每个小节：同一取值需要在多个小节统一时写明统一后的取值及适用范围，子任务在各自小节按规则修改相关表述。${TASK_FILE_WRITING}文件内容即本次派发的任务，再次派发前按需改写。各子任务原生 edit 自己的小节，只改与矛盾直接相关的内容，保留图片，不检查或调整字数。返回 total、success 和 unresolved：ID 错误、参考小节、正在编辑或缺少要求的项未执行并说明原因，其他小节照常修复，失败项返回主 Agent 重新派发；程序清单/一致性修复结果.json 按小节累积本轮各次派发的最新状态及成功项的 changes（改动段落修改前后的纯文本）。`,
     parameters: Type.Object({}, { additionalProperties: false }),
-    async execute(_callId, _params, toolSignal) {
+    async execute(_callId, _params, toolSignal, onUpdate) {
       requireAuditing();
       const params = readTaskFile(workspaceDir, 'repair');
       // 注册工具时编排尚未完成，实际修复时才读取最终目标；参考小节只读。
@@ -404,7 +404,25 @@ function createContentGenerationConsistencyTools({ agentService, aiService, sign
       // 先登记待完成项，取消或中断恢复后仍需处理；并发批次只增删本批小节，基于最新状态更新。
       const registered = consistency.get();
       consistency.save({ ...registered, failed_sections: [...new Set([...(registered.failed_sections || []), ...ids])] });
-      const { results: edited, restored } = jobs.length ? await editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity,
+      const { results: edited, restored } = jobs.length ? await editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml,
+        onActivity: (event) => {
+          // 保留原有业务进度和日志更新。
+          onActivity?.(event);
+
+          // 一致性修复子任务结束后，通过工具进度刷新主 Agent 计时。
+          if (event.progress?.step !== 'consistency-repair') return;
+
+          for (const item of event.progress.items) {
+            if (!['success', 'error', 'cancelled'].includes(item.status)) {
+              continue;
+            }
+
+            onUpdate?.(result({
+              section_id: item.id,
+              status: item.status,
+            }));
+          }
+        },
         title: '一致性修复', preloadInput: true, instructions: `${REPAIR_INSTRUCTIONS}${rules ? `\n本批统一修复规则（适用于本批每个小节，按语义判断本节全文中的相关表述）：\n${rules}` : ''}`,
       }) : { results: [], restored: [] };
       const succeeded = new Set(edited.filter(item => item.status === 'success').map(item => item.section_id));

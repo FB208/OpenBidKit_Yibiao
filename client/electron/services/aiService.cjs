@@ -5,6 +5,7 @@ const { nativeImage } = require('electron');
 const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
+const { bindAiRequestActivity, notifyAiResponse, withAiResponseActivity } = require('../utils/aiRequestActivity.cjs');
 const {
   copyAiHttpError,
   createAiHttpErrorFromResponse,
@@ -531,6 +532,8 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
   });
 
   if (requestBody.response_format && error.responseFormatUnsupported) {
+    // 第一轮已收到失败响应，重新请求前先通知所属 Agent。
+    notifyAiResponse();
     const retryBody = { ...requestBody };
     delete retryBody.response_format;
     const retryResponse = await sendRequest(retryBody);
@@ -1080,6 +1083,7 @@ async function readSseJsonStream(response, options = {}) {
       break;
     }
 
+    if (value?.byteLength) notifyAiResponse();
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || '';
@@ -1161,11 +1165,13 @@ async function requestTextAiStream(app, config, requestBody, options = {}) {
 }
 
 async function requestTextAi(app, config, requestBody, options = {}) {
-  if (options.requestMode === 'stream') {
-    return requestTextAiStream(app, config, requestBody, options);
-  }
+  return withAiResponseActivity(async () => {
+    if (options.requestMode === 'stream') {
+      return requestTextAiStream(app, config, requestBody, options);
+    }
 
-  return requestTextAiNormal(app, config, requestBody, options);
+    return requestTextAiNormal(app, config, requestBody, options);
+  });
 }
 
 function appendOpenAICompatibleImageItem(state, item) {
@@ -1259,15 +1265,17 @@ async function readOpenAICompatibleImageStream(response) {
 }
 
 async function requestOpenAICompatibleImageData(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
-  const response = await fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options);
-  if (requestBody.stream) {
-    return readOpenAICompatibleImageStream(response);
-  }
-  try {
-    return await response.json();
-  } catch (error) {
-    throw markAiRequestError(error, { retryable: true });
-  }
+  return withAiResponseActivity(async () => {
+    const response = await fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options);
+    if (requestBody.stream) {
+      return readOpenAICompatibleImageStream(response);
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: true });
+    }
+  });
 }
 
 async function createImageFromOpenAICompatibleItem(item, options = {}) {
@@ -1357,27 +1365,29 @@ async function readGoogleImageStream(response) {
 }
 
 async function requestGoogleImageData(baseUrl, imageConfig, requestBody, requestMode, fallbackMessage, options = {}) {
-  let response = null;
-  try {
-    response = await fetch(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
-      method: 'POST',
-      headers: createGoogleHeaders(imageConfig.api_key),
-      body: JSON.stringify(requestBody),
-      signal: options.signal,
-    });
-  } catch (error) {
-    throw markAiRequestError(error, { retryable: true });
-  }
+  return withAiResponseActivity(async () => {
+    let response = null;
+    try {
+      response = await fetch(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
+        method: 'POST',
+        headers: createGoogleHeaders(imageConfig.api_key),
+        body: JSON.stringify(requestBody),
+        signal: options.signal,
+      });
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: true });
+    }
 
-  await ensureOk(response, fallbackMessage, { source: 'google-image-model' });
-  if (requestMode === 'stream') {
-    return readGoogleImageStream(response);
-  }
-  try {
-    return await response.json();
-  } catch (error) {
-    throw markAiRequestError(error, { retryable: true });
-  }
+    await ensureOk(response, fallbackMessage, { source: 'google-image-model' });
+    if (requestMode === 'stream') {
+      return readGoogleImageStream(response);
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: true });
+    }
+  });
 }
 
 function getGoogleImageInlineData(responseData) {
@@ -1569,6 +1579,8 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
       created_at: new Date().toISOString(),
     });
     throw error;
+  } finally {
+    notifyAiResponse();
   }
 }
 
@@ -2194,24 +2206,26 @@ function buildComfyUIImageWorkflow(baseWorkflow, prompt, size) {
 }
 
 async function submitComfyUIPrompt(baseUrl, workflow, options = {}) {
-  let response = null;
-  try {
-    response = await fetch(`${baseUrl}/prompt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: workflow }),
-      signal: options.signal,
-    });
-  } catch (error) {
-    // 提交非幂等：网络错误时任务可能已入队，重试会导致同一提示词重复排队
-    throw markAiRequestError(error, { retryable: false });
-  }
-  await ensureOk(response, 'ComfyUI 任务提交失败', { source: options.source || 'comfyui-image-model' });
-  try {
-    return await response.json();
-  } catch (error) {
-    throw markAiRequestError(error, { retryable: false });
-  }
+  return withAiResponseActivity(async () => {
+    let response = null;
+    try {
+      response = await fetch(`${baseUrl}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: workflow }),
+        signal: options.signal,
+      });
+    } catch (error) {
+      // 提交非幂等：网络错误时任务可能已入队，重试会导致同一提示词重复排队
+      throw markAiRequestError(error, { retryable: false });
+    }
+    await ensureOk(response, 'ComfyUI 任务提交失败', { source: options.source || 'comfyui-image-model' });
+    try {
+      return await response.json();
+    } catch (error) {
+      throw markAiRequestError(error, { retryable: false });
+    }
+  });
 }
 
 function extractComfyUIImages(entry) {
@@ -2236,41 +2250,43 @@ function getComfyUIExecutionError(entry) {
 }
 
 async function waitComfyUIImageResult(baseUrl, promptId, options = {}) {
-  const deadline = Date.now() + AI_REQUEST_TIMEOUT_MS;
-  let lastEntry = null;
-  while (Date.now() < deadline) {
-    if (options.signal?.aborted) {
-      throw createAbortError();
-    }
-    try {
-      const response = await fetch(`${baseUrl}/history/${promptId}`, { signal: options.signal });
-      if (response.ok) {
-        const data = await response.json();
-        const entry = data?.[promptId];
-        if (entry) {
-          lastEntry = entry;
-          const statusStr = entry.status?.status_str || '';
-          if (statusStr === 'error') {
-            throw createAiResponseDataError(getComfyUIExecutionError(entry), entry.status);
-          }
-          if (entry.status?.completed || statusStr === 'success') {
-            const images = extractComfyUIImages(entry);
-            if (images.length > 0) {
-              return { entry, images };
+  return withAiResponseActivity(async () => {
+    const deadline = Date.now() + AI_REQUEST_TIMEOUT_MS;
+    let lastEntry = null;
+    while (Date.now() < deadline) {
+      if (options.signal?.aborted) {
+        throw createAbortError();
+      }
+      try {
+        const response = await fetch(`${baseUrl}/history/${promptId}`, { signal: options.signal });
+        if (response.ok) {
+          const data = await response.json();
+          const entry = data?.[promptId];
+          if (entry) {
+            lastEntry = entry;
+            const statusStr = entry.status?.status_str || '';
+            if (statusStr === 'error') {
+              throw createAiResponseDataError(getComfyUIExecutionError(entry), entry.status);
             }
-            // 已到终态但没有图片输出（典型原因：工作流缺少 SaveImage 节点），继续轮询不会有变化
-            throw createAiResponseDataError('ComfyUI 任务已完成但没有产出图片，请检查工作流是否包含 SaveImage 等图片输出节点', entry.status);
+            if (entry.status?.completed || statusStr === 'success') {
+              const images = extractComfyUIImages(entry);
+              if (images.length > 0) {
+                return { entry, images };
+              }
+              // 已到终态但没有图片输出（典型原因：工作流缺少 SaveImage 节点），继续轮询不会有变化
+              throw createAiResponseDataError('ComfyUI 任务已完成但没有产出图片，请检查工作流是否包含 SaveImage 等图片输出节点', entry.status);
+            }
           }
         }
+      } catch (error) {
+        if (options.signal?.aborted || error?.name === 'AbortError') throw error;
+        if (error?.raw_response_data) throw error;
+        // 轮询期间的瞬时网络错误不致命，继续等待
       }
-    } catch (error) {
-      if (options.signal?.aborted || error?.name === 'AbortError') throw error;
-      if (error?.raw_response_data) throw error;
-      // 轮询期间的瞬时网络错误不致命，继续等待
+      await sleepMs(COMFYUI_POLL_INTERVAL_MS);
     }
-    await sleepMs(COMFYUI_POLL_INTERVAL_MS);
-  }
-  throw createAiResponseDataError('ComfyUI 生图等待超时', lastEntry?.status || null);
+    throw createAiResponseDataError('ComfyUI 生图等待超时', lastEntry?.status || null);
+  });
 }
 
 async function fetchComfyUIImage(baseUrl, image, options = {}) {
@@ -2471,7 +2487,7 @@ function createAiService({ app, configStore }) {
   }
 
   function enqueueTextRequest(request, runner, options = {}) {
-    return textRequestQueue.enqueue(runner, {
+    return textRequestQueue.enqueue(bindAiRequestActivity(runner), {
       scopeId: getQueueScopeId(request),
       signal: options.signal,
       maxAttempts: options.maxAttempts,
@@ -2479,7 +2495,7 @@ function createAiService({ app, configStore }) {
   }
 
   function enqueueImageRequest(request, runner) {
-    return imageRequestQueue.enqueue(runner, { scopeId: getQueueScopeId(request), signal: request?.signal });
+    return imageRequestQueue.enqueue(bindAiRequestActivity(runner), { scopeId: getQueueScopeId(request), signal: request?.signal });
   }
 
   const service = {

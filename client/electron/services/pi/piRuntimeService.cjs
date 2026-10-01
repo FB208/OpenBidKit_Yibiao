@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
+const { getAiRequestActivity, runWithAiRequestActivity, notifyAiResponse } = require('../../utils/aiRequestActivity.cjs');
 const { createAgentOpenAiProxy } = require('../agent/agentOpenAiProxy.cjs');
 const { isExpectedAgentInterruption, resolveAgentAbortReason } = require('../agent/agentInterruption.cjs');
 const { trackAgentRuntime } = require('../agent/agentRuntimeAnalytics.cjs');
@@ -413,6 +414,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           task_token: activeTask.task_token,
           task_id: activeTask.task_id,
           queue_scope_id: activeTask.queue_scope_id,
+          ai_request_activity: activeTask.ai_request_activity,
         } : null,
         verifyLoopback: true,
         loopbackHosts: ['127.0.0.1', '::1', 'localhost'],
@@ -485,7 +487,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           message: compactText(completedText, 200),
           source: 'pi.message',
           visible: Boolean(completedText),
-          activity: true,
+          activity: false,
         });
         return;
       }
@@ -728,8 +730,23 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     }
   }
 
-  // 执行单个 Pi Agent 任务，并保持业务输出协议一致。
+  // 为本轮 Agent 建立 AI 请求归属；子任务自动继承进入时的父任务上下文。
   async function runTask(payload = {}) {
+    const parentActivity = getAiRequestActivity();
+    const taskToken = crypto.randomUUID();
+    const aiActivity = {
+      onResponse() {
+        if (activeTask?.task_token !== taskToken || !activeController || activeController.signal.aborted) return;
+        // AI 响应只刷新空闲时间，不重复经过业务进度回调；状态沿用每秒推送。
+        activeTask.last_activity_at = nowIso();
+        notifyAiResponse(parentActivity);
+      },
+    };
+    return runWithAiRequestActivity(aiActivity, () => executeTask(payload, taskToken, aiActivity));
+  }
+
+  // 执行单个 Pi Agent 任务，并保持业务输出协议一致。
+  async function executeTask(payload, taskToken, aiActivity) {
     if (activeTask) throw new Error(`${runtimeName} 正在执行其他任务`);
     const taskId = payload.task_id || crypto.randomUUID();
     const title = payload.title || '易标智能体任务';
@@ -739,7 +756,6 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const summaryEnabled = payload.summary_enabled !== false;
     const retryAttempts = [];
     const modelRetryStats = { count: 0 };
-    const taskToken = crypto.randomUUID();
     const startedAt = nowIso();
     const persistentConfig = payload.persistent_task && typeof payload.persistent_task === 'object'
       ? payload.persistent_task
@@ -779,6 +795,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       last_activity_at: startedAt,
       last_progress_at: startedAt,
       task_token: taskToken,
+      ai_request_activity: aiActivity,
       onActivity: payload.onActivity,
       onCheckpoint: payload.onCheckpoint,
       waiting_for_user: false,

@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
 const { enqueueJsonLine } = require('../../utils/silentFileLog.cjs');
+const { getAiRequestActivity, runWithAiRequestActivity, notifyAiResponse } = require('../../utils/aiRequestActivity.cjs');
 const {
   markAiRequestError,
 } = require('../../utils/aiRetry.cjs');
@@ -641,6 +642,8 @@ function createSseResponseCollector() {
 
 function createUsageCapturingStream(source, onDone, options = {}) {
   if (!source?.getReader) return source;
+  // ReadableStream 可由不同异步链拉取，创建时固定这条模型请求的归属。
+  const aiActivity = getAiRequestActivity();
 
   const reader = source.getReader();
   const decoder = new TextDecoder('utf-8');
@@ -660,12 +663,13 @@ function createUsageCapturingStream(source, onDone, options = {}) {
 
         if (value) {
           options.onChunk?.(value);
+          if (value.byteLength) notifyAiResponse(aiActivity);
           options.onActivity?.({
             stage: 'model_stream',
             message: '',
             source: 'proxy.stream.chunk',
             visible: false,
-            activity: true,
+            activity: false,
             meta: { bytes: value.byteLength || value.length || 0 },
           });
           collector.push(decoder.decode(value, { stream: true }));
@@ -786,7 +790,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         stage: 'model_request',
         message: safeErrorMessage(error),
         source: 'proxy.upstream.failed',
-        activity: true,
+        activity: false,
         meta: { request_id: requestId, attempt, error: safeErrorMessage(error), stream: true },
       });
       rejectCompletion(error);
@@ -822,7 +826,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         stage: 'model_stream',
         message: '',
         source: 'proxy.upstream.completed',
-        activity: true,
+        activity: false,
         meta: { request_id: requestId, attempt, stream: true },
       });
       streamTimeout?.clear?.();
@@ -882,7 +886,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
     stage: 'model_request',
     message: '',
     source: 'proxy.upstream.completed',
-    activity: true,
+    activity: false,
     meta: { request_id: requestId, attempt, stream: false, adapted_to_sse: Boolean(downstreamWantsStream) },
   });
 
@@ -1066,7 +1070,7 @@ async function requestAgentChatCompletion({ app, aiService, runtimeMeta, openAiB
           stage: 'model_request',
           message: safeErrorMessage(error),
           source: 'proxy.upstream.failed',
-          activity: true,
+          activity: false,
           meta: { request_id: requestId, attempt, error: safeErrorMessage(error) },
         });
       }
@@ -1157,7 +1161,8 @@ async function handleChatCompletions({ req, res, app, aiService, runtimeMeta, no
     activity: true,
     meta: { request: summarizeRequestBody(requestBody) },
   });
-  await requestAgentChatCompletion({
+  // HTTP 入口不继承调用方异步上下文，按 Runtime 当前任务重新绑定。
+  await runWithAiRequestActivity(activityContext?.ai_request_activity || null, () => requestAgentChatCompletion({
     app,
     aiService,
     runtimeMeta,
@@ -1176,7 +1181,7 @@ async function handleChatCompletions({ req, res, app, aiService, runtimeMeta, no
       }
       await pipeWebStreamToNode(upstream.body, res);
     },
-  });
+  }));
 }
 
 function handleModels({ res }) {

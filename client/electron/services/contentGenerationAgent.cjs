@@ -419,7 +419,13 @@ ${job.references || '未提供'}` },
             const cancelled = isBatchCancelled(error, guard.signal);
             if (!cancelled) guard.failure(error);
             onActivity?.({ progress: { step: 'writing', label: '正在生成小节正文', unit: '节', items: [{ id: section.id, status: cancelled ? 'cancelled' : 'error' }] } });
-            return { section_id: section.id, status: 'error', error: error.message };
+            const result = { section_id: section.id, status: 'error', error: error.message };
+            // 小节失败或取消后通知主 Agent，刷新无进展计时。
+            onUpdate?.({
+              content: [{ type: 'text', text: `${cancelled ? '已取消' : '生成失败'} ${section.file}：${error.message}` }],
+              details: result,
+            });
+            return result;
           }
         }))).map(result => [result.section_id, result]));
         combinedSignal.throwIfAborted();
