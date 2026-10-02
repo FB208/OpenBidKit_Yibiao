@@ -4,9 +4,12 @@ import { execFileSync } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const ATOMGIT_API_BASE_URL = 'https://api.atomgit.com/api/v5';
 const ASSET_CONCURRENCY = 3;
+const UPLOAD_MAX_ATTEMPTS = 3;
+const RETRYABLE_UPLOAD_STATUSES = new Set([502, 503, 504]);
 const ATOMGIT_PROXY_IP = '159.138.147.37';
 const ATOMGIT_PROXY_HOSTS = ['api.atomgit.com', 'file.atomgit.com', 'file.gitcode.com'];
 
@@ -228,8 +231,21 @@ async function* trackTransfer(source, progress) {
   }
 }
 
-/** 复用本地上传协议，携带 AtomGit 返回的请求头执行流式 PUT。 */
-async function uploadAtomGitAsset({ owner, repo, token, tagName, asset, filePath }) {
+/** 保留上传错误正文中的诊断信息，隐藏地址与临时凭据。 */
+function summarizeUploadError(text, uploadTarget, token) {
+  let summary = text.replace(/https?:\/\/[^\s<>"']+/gi, '[url omitted]');
+  const secrets = [token, ...Object.values(uploadTarget.headers || {}),
+    ...new URL(uploadTarget.url).searchParams.values()];
+  for (const secret of secrets) {
+    if (typeof secret === 'string' && secret.length >= 8) {
+      summary = summary.replaceAll(secret, '[redacted]');
+    }
+  }
+  return summary.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
+/** 获取本次上传地址并重新打开文件流，携带接口返回的请求头执行 PUT。 */
+async function uploadAtomGitAssetOnce({ owner, repo, token, tagName, asset, filePath, attempt }) {
   const uploadTarget = await atomGitRequest({
     owner,
     repo,
@@ -241,7 +257,7 @@ async function uploadAtomGitAsset({ owner, repo, token, tagName, asset, filePath
     throw new Error(`AtomGit did not return an upload URL for ${asset.name}.`);
   }
   // 只记录域名；完整上传地址和返回的请求头可能包含临时凭据。
-  console.log(`Uploading AtomGit asset: ${asset.name} -> ${new URL(uploadTarget.url).hostname}`);
+  console.log(`Uploading AtomGit asset: ${asset.name} -> ${new URL(uploadTarget.url).hostname} (attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS})`);
   const headers = new Headers(uploadTarget.headers);
   if (!headers.has('Content-Type')) {
     headers.set('Content-Type', asset.contentType || 'application/octet-stream');
@@ -256,13 +272,42 @@ async function uploadAtomGitAsset({ owner, repo, token, tagName, asset, filePath
       body,
       duplex: 'half',
     });
-    await response.body?.cancel();
     if (!response.ok) {
-      throw new Error(`AtomGit upload failed for ${asset.name}: HTTP ${response.status}`);
+      const detail = summarizeUploadError(await response.text(), uploadTarget, token);
+      const server = response.headers.get('server');
+      const requestId = response.headers.get('x-obs-request-id') || response.headers.get('x-request-id');
+      const diagnostics = [server && `server=${server}`, requestId && `request-id=${requestId}`, detail]
+        .filter(Boolean).join('; ');
+      throw Object.assign(new Error(
+        `AtomGit upload failed for ${asset.name}: HTTP ${response.status}${diagnostics ? `; ${diagnostics}` : ''}`,
+      ), { status: response.status });
     }
+    await response.body?.cancel();
     progress.finish();
   } finally {
     body.destroy();
+  }
+}
+
+/** 仅重试上传服务的临时网关错误；重试前确认远端是否已收到附件。 */
+async function uploadAtomGitAsset({ asset, filePath, ...atomGit }) {
+  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await uploadAtomGitAssetOnce({ ...atomGit, asset, filePath, attempt });
+      return;
+    } catch (error) {
+      if (!RETRYABLE_UPLOAD_STATUSES.has(error.status) || attempt === UPLOAD_MAX_ATTEMPTS) {
+        throw error;
+      }
+      const delayMs = attempt * 3_000;
+      console.warn(`${error.message}; checking before retry ${attempt + 1}/${UPLOAD_MAX_ATTEMPTS} in ${delayMs / 1000}s`);
+      await delay(delayMs);
+      const release = await getAtomGitReleaseByTag(atomGit);
+      if (getExistingAssetNames(release).has(asset.name)) {
+        console.log(`AtomGit asset confirmed after upload error: ${asset.name}`);
+        return;
+      }
+    }
   }
 }
 
@@ -290,7 +335,7 @@ async function syncAssets({ filePaths, existingNames, ...atomGit }) {
         uploaded += 1;
       } catch (error) {
         failure ||= error;
-        console.error(`Asset sync failed: ${name}`);
+        console.error(`Asset sync failed: ${name}: ${error.message}`);
       }
     }
   }
