@@ -1,4 +1,7 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import crypto from 'node:crypto';
+import path from 'node:path';
 
 const GITEE_API_BASE_URL = 'https://gitee.com/api/v5';
 const DEFAULT_R2_RELEASE_PREFIX = 'release';
@@ -52,6 +55,20 @@ async function readGithubRelease(releaseJsonPath, tagName) {
   return release;
 }
 
+async function listDownloadFiles(assetsDir) {
+  const entries = await fs.readdir(assetsDir, { withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(assetsDir, entry.name))
+    .filter((filePath) => /\.(?:exe|msi|dmg|zip)$/i.test(path.basename(filePath)))
+    .sort((a, b) => compareAssetNames(path.basename(a), path.basename(b)));
+
+  if (files.length === 0) {
+    throw new Error(`No downloadable release assets found in ${assetsDir}.`);
+  }
+  return files;
+}
+
 function getAssetRank(fileName) {
   if (/-win-x64\.exe$/i.test(fileName)) return 10;
   if (/-win-x64\.msi$/i.test(fileName)) return 20;
@@ -88,24 +105,32 @@ function getAssetKind(fileName) {
   return '安装包';
 }
 
-/** 直接使用构建机生成的大小和 SHA256，保持既有下载表的排序与字段。 */
-function buildDownloadAssets({ files, publicBaseUrl, prefix }) {
-  const downloadable = files
-    .filter((file) => /\.(?:exe|msi|dmg|zip)$/i.test(file.name))
-    .sort((a, b) => compareAssetNames(a.name, b.name));
-  if (downloadable.length === 0) throw new Error('No downloadable release assets in manifest.');
-  return downloadable.map((file) => {
-    const fileName = file.name;
+async function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function buildDownloadAssets({ assetFiles, publicBaseUrl, prefix }) {
+  const assets = [];
+  for (const filePath of assetFiles) {
+    const fileName = path.basename(filePath);
     const key = joinKey(prefix, fileName);
-    return {
+    const stat = await fs.stat(filePath);
+    assets.push({
       name: fileName,
       platform: getAssetPlatform(fileName),
       kind: getAssetKind(fileName),
-      size: file.size,
+      size: stat.size,
       url: createPublicUrl(publicBaseUrl, key),
-      sha256: file.sha256,
-    };
-  });
+      sha256: await sha256File(filePath),
+    });
+  }
+  return assets;
 }
 
 function formatSize(bytes) {
@@ -307,10 +332,11 @@ async function main() {
   const prerelease = Boolean(githubRelease.isPrerelease || githubRelease.prerelease);
   let assets = [];
   if (!prerelease) {
+    const assetsDir = requireEnv('RELEASE_ASSETS_DIR');
     const publicBaseUrl = normalizePublicBaseUrl(requireEnv('R2_PUBLIC_BASE_URL'));
     const prefix = normalizePrefix(optionalEnv('R2_RELEASE_PREFIX', DEFAULT_R2_RELEASE_PREFIX));
-    const manifest = JSON.parse(await fs.readFile(requireEnv('RELEASE_ASSET_MANIFEST'), 'utf-8'));
-    assets = buildDownloadAssets({ files: manifest.files, publicBaseUrl, prefix });
+    const assetFiles = await listDownloadFiles(assetsDir);
+    assets = await buildDownloadAssets({ assetFiles, publicBaseUrl, prefix });
   }
   const releaseName = String(githubRelease.name || githubRelease.tagName || tagName);
   const releaseBody = buildReleaseBody({ githubRelease, assets });

@@ -15,10 +15,6 @@ permissions:
   actions: write
   contents: write
 
-concurrency:
-  group: release-${{ inputs.tag_name || github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
   dispatch-code-mirrors:
     name: Dispatch code mirror sync
@@ -93,24 +89,6 @@ jobs:
           else
             gh release create "$TAG_NAME" --title "$TAG_NAME" --notes-file release_notes.md "${release_flags[@]}"
           fi
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Prepare AtomGit Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          GITHUB_RELEASE_JSON: github-release.json
-        run: |
-          node .github/scripts/sync-atomgit-release.mjs --configure-hosts
-          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
-          node .github/scripts/sync-atomgit-release.mjs --prepare
 
   build-windows:
     name: Build Windows
@@ -201,59 +179,18 @@ jobs:
       - name: Verify packaged Agent tools
         run: node scripts/verify-packaged-agent-tools.cjs --platform win32 --arch x64 --release release
 
-      - name: Install R2 publish tooling
-        working-directory: .
-        run: npm install --no-save --package-lock=false @aws-sdk/client-s3
-
-      - name: Prepare direct release uploads
+      - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-        run: |
-          node ../.github/scripts/sync-atomgit-release.mjs --configure-hosts
-          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
-          mkdir -p release-metadata
-          cp release/*.yml release-metadata/
-
-      - name: Upload Windows assets to GitHub, AtomGit and R2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET || 'openbidkit' }}
-          R2_RELEASE_PREFIX: ${{ vars.R2_RELEASE_PREFIX || 'release' }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          GITHUB_RELEASE_JSON: github-release.json
-          RELEASE_ASSET_MANIFEST: release-metadata/assets.json
         run: |
           shopt -s nullglob
-          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap)
+          files=(release/*.exe release/*.msi release/*.zip release/*.blockmap release/*.yml)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No release assets found."
             exit 1
           fi
-          gh release upload "$TAG_NAME" "${files[@]}" --clobber &
-          github_pid=$!
-          node ../.github/scripts/sync-atomgit-release.mjs --upload "${files[@]}" &
-          atomgit_pid=$!
-          node ../.github/scripts/publish-r2-release.mjs --upload "${files[@]}" &
-          r2_pid=$!
-          status=0
-          for upload_pid in "$github_pid" "$atomgit_pid" "$r2_pid"; do
-            if ! wait "$upload_pid"; then status=1; fi
-          done
-          exit "$status"
-
-      - name: Stage Windows release metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-metadata-windows
-          path: client/release-metadata/
-          if-no-files-found: error
+          gh release upload "$TAG_NAME" "${files[@]}" --clobber
 
   build-macos:
     name: Build macOS ${{ matrix.arch }}
@@ -411,34 +348,10 @@ jobs:
       - name: Verify packaged Agent tools
         run: node scripts/verify-packaged-agent-tools.cjs --platform darwin --arch ${{ matrix.arch }} --release release
 
-      - name: Install R2 publish tooling
-        working-directory: .
-        run: npm install --no-save --package-lock=false @aws-sdk/client-s3
-
-      - name: Prepare direct release uploads
+      - name: Upload macOS release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-        run: |
-          node ../.github/scripts/sync-atomgit-release.mjs --configure-hosts
-          gh release view "$TAG_NAME" --json tagName,name,body,isPrerelease,isDraft,url > github-release.json
-          mkdir -p release-metadata
-          cp release/*-mac.yml release-metadata/
-
-      - name: Upload macOS assets to GitHub, AtomGit and R2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ATOMGIT_ACCESS_TOKEN: ${{ secrets.ATOMGIT_ACCESS_TOKEN }}
-          ATOMGIT_OWNER: ${{ vars.ATOMGIT_OWNER }}
-          ATOMGIT_REPO: ${{ vars.ATOMGIT_REPO }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET || 'openbidkit' }}
-          R2_RELEASE_PREFIX: ${{ vars.R2_RELEASE_PREFIX || 'release' }}
-          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
-          GITHUB_RELEASE_JSON: github-release.json
-          RELEASE_ASSET_MANIFEST: release-metadata/assets.json
         run: |
           shopt -s nullglob
           dmgs=(release/*-mac-${{ matrix.arch }}.dmg)
@@ -450,33 +363,96 @@ jobs:
             exit 1
           fi
 
-          files=("${dmgs[@]}" "${zips[@]}" "${blockmaps[@]}")
-          gh release upload "$TAG_NAME" "${files[@]}" --clobber &
-          github_pid=$!
-          node ../.github/scripts/sync-atomgit-release.mjs --upload "${files[@]}" &
-          atomgit_pid=$!
-          node ../.github/scripts/publish-r2-release.mjs --upload "${files[@]}" &
-          r2_pid=$!
-          status=0
-          for upload_pid in "$github_pid" "$atomgit_pid" "$r2_pid"; do
-            if ! wait "$upload_pid"; then status=1; fi
-          done
-          exit "$status"
+          gh release upload "$TAG_NAME" "${dmgs[@]}" "${zips[@]}" "${blockmaps[@]}" --clobber
 
-      - name: Stage macOS release metadata
+      - name: Stage macOS update manifest
         uses: actions/upload-artifact@v4
         with:
-          name: release-metadata-macos-${{ matrix.arch }}
-          path: client/release-metadata/
+          name: macos-${{ matrix.arch }}
+          path: client/release/*-mac.yml
           if-no-files-found: error
 
-  publish-mirrors:
-    name: Finalize releases
+  publish-macos:
+    name: Publish macOS
     needs:
       - create-release
-      - build-windows
       - build-macos
-    uses: ./.github/workflows/sync-releases.yml
-    with:
-      tag_name: ${{ inputs.tag_name || github.ref_name }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install manifest tooling
+        working-directory: client
+        run: npm ci --ignore-scripts --omit=optional --prefer-offline --no-audit --no-fund
+
+      - name: Download macOS update manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: macos-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Merge macOS update manifests
+        run: |
+          shopt -s nullglob
+          x64_manifests=(artifacts/macos-x64/*-mac.yml)
+          arm64_manifests=(artifacts/macos-arm64/*-mac.yml)
+
+          if [ ${#x64_manifests[@]} -ne 1 ] || [ ${#arm64_manifests[@]} -ne 1 ]; then
+            echo "Expected exactly one macOS update manifest for each architecture."
+            exit 1
+          fi
+
+          manifest_name="$(basename "${x64_manifests[0]}")"
+          if [ "$manifest_name" != "$(basename "${arm64_manifests[0]}")" ]; then
+            echo "macOS update manifest names do not match."
+            exit 1
+          fi
+
+          node client/scripts/merge-mac-update-manifests.cjs \
+            "${x64_manifests[0]}" \
+            "${arm64_manifests[0]}" \
+            "artifacts/$manifest_name"
+
+      - name: Upload merged macOS update manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          shopt -s nullglob
+          manifests=(artifacts/*-mac.yml)
+          if [ ${#manifests[@]} -ne 1 ]; then
+            echo "Expected exactly one merged macOS update manifest."
+            exit 1
+          fi
+          gh release upload "$TAG_NAME" "${manifests[@]}" --clobber
+
+  dispatch-mirror-releases:
+    name: Dispatch mirror Release sync
+    needs:
+      - build-windows
+      - publish-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch mirror Release sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
+        run: >-
+          gh workflow run sync-releases.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref "$DEFAULT_BRANCH"
+          -f tag_name="$TAG_NAME"
