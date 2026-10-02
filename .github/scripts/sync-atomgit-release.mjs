@@ -1,6 +1,34 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { lookup } from 'node:dns/promises';
+import path from 'node:path';
+import { Readable } from 'node:stream';
 
 const ATOMGIT_API_BASE_URL = 'https://api.atomgit.com/api/v5';
+const ASSET_CONCURRENCY = 3;
+const ATOMGIT_PROXY_IP = '159.138.147.37';
+const ATOMGIT_PROXY_HOSTS = ['api.atomgit.com', 'file.atomgit.com', 'file.gitcode.com'];
+
+/** 在当前构建 Runner 配置文章提供的 AtomGit 入口，支持 Windows/macOS/Linux。 */
+async function configureHosts() {
+  const entries = `\n${ATOMGIT_PROXY_HOSTS.map((host) => `${ATOMGIT_PROXY_IP} ${host}`).join('\n')}\n`;
+  if (process.platform === 'win32') {
+    await fs.appendFile(path.join(process.env.SystemRoot, 'System32', 'drivers', 'etc', 'hosts'), entries, 'utf-8');
+  } else {
+    execFileSync('sudo', ['tee', '-a', '/etc/hosts'], {
+      input: entries,
+      stdio: ['pipe', 'ignore', 'inherit'],
+    });
+  }
+  await Promise.all(ATOMGIT_PROXY_HOSTS.map(async (host) => {
+    const { address } = await lookup(host, { family: 4 });
+    if (address !== ATOMGIT_PROXY_IP) {
+      throw new Error(`AtomGit hosts entry did not take effect: ${host} -> ${address}`);
+    }
+    console.log(`AtomGit hosts: ${host} -> ${address}`);
+  }));
+}
 
 /** 读取必填环境变量。 */
 function requireEnv(name) {
@@ -91,27 +119,23 @@ async function getAtomGitReleaseByTag({ owner, repo, token, tagName }) {
   });
 }
 
-/** 检查 AtomGit 是否已同步指定标签。 */
-async function hasAtomGitTag({ owner, repo, token, tagName }) {
-  for (let page = 1; page <= 10; page += 1) {
-    const tags = await atomGitRequest({
-      owner,
-      repo,
-      token,
-      apiPath: '/tags',
-      query: { page, per_page: 100 },
-    });
-    if (!Array.isArray(tags) || tags.length === 0) {
-      return false;
-    }
-    if (tags.some((tag) => tag?.name === tagName)) {
-      return true;
-    }
-    if (tags.length < 100) {
-      return false;
-    }
-  }
-  return false;
+/** 仅推送本次 tag，避免准备 Release 时依赖另一个工作流的执行时序。 */
+function pushAtomGitTag({ owner, repo, token, tagName }) {
+  execFileSync('git', [
+    'push',
+    `https://atomgit.com/${encodePathSegment(owner)}/${encodePathSegment(repo)}.git`,
+    `refs/tags/${tagName}:refs/tags/${tagName}`,
+  ], {
+    windowsHide: true,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'http.https://atomgit.com/.extraHeader',
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`${owner}:${token}`, 'utf8').toString('base64')}`,
+      GIT_TERMINAL_PROMPT: '0',
+    },
+  });
 }
 
 /** 创建新的 AtomGit Release。 */
@@ -150,8 +174,7 @@ async function updateAtomGitRelease({ owner, repo, token, tagName, name, body, r
 }
 
 /** 创建或更新 AtomGit Release 元数据。 */
-async function publishAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus }) {
-  const existingRelease = await getAtomGitReleaseByTag({ owner, repo, token, tagName });
+async function publishAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus, existingRelease }) {
   if (existingRelease) {
     await updateAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus });
     return;
@@ -159,34 +182,197 @@ async function publishAtomGitRelease({ owner, repo, token, tagName, name, body, 
   await createAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus });
 }
 
-/** 同步 AtomGit Release 元数据，不处理附件。 */
+/** 读取真实上传附件名称，排除平台自动生成的源码压缩包。 */
+function getExistingAssetNames(release) {
+  return new Set((release?.assets || [])
+    .filter((asset) => asset.type !== 'source')
+    .map((asset) => asset.name));
+}
+
+/** 每十秒报告一次传输进度，完成时记录总耗时和平均速度。 */
+function createTransferProgress(action, asset) {
+  const startedAt = performance.now();
+  let lastReportedAt = startedAt;
+  let transferredBytes = 0;
+
+  function report(completed) {
+    const now = performance.now();
+    const seconds = Math.max((now - startedAt) / 1000, 0.001);
+    const megabytes = transferredBytes / 1024 / 1024;
+    const totalMegabytes = asset.size / 1024 / 1024;
+    console.log(
+      `[${action}] ${asset.name}: ${megabytes.toFixed(2)}/${totalMegabytes.toFixed(2)} MiB, `
+      + `${seconds.toFixed(1)}s, ${(megabytes / seconds).toFixed(2)} MiB/s${completed ? ' (completed)' : ''}`,
+    );
+    lastReportedAt = now;
+  }
+
+  return {
+    addBytes(bytes) {
+      transferredBytes += bytes;
+      if (performance.now() - lastReportedAt >= 10_000) {
+        report(false);
+      }
+    },
+    finish() {
+      report(true);
+    },
+  };
+}
+
+/** 分块传递文件并记录进度，不将整个安装包加载到内存。 */
+async function* trackTransfer(source, progress) {
+  for await (const chunk of source) {
+    progress.addBytes(chunk.byteLength);
+    yield chunk;
+  }
+}
+
+/** 复用本地上传协议，携带 AtomGit 返回的请求头执行流式 PUT。 */
+async function uploadAtomGitAsset({ owner, repo, token, tagName, asset, filePath }) {
+  const uploadTarget = await atomGitRequest({
+    owner,
+    repo,
+    token,
+    apiPath: `/releases/${encodePathSegment(tagName)}/upload_url`,
+    query: { file_name: asset.name },
+  });
+  if (!uploadTarget?.url) {
+    throw new Error(`AtomGit did not return an upload URL for ${asset.name}.`);
+  }
+  // 只记录域名；完整上传地址和返回的请求头可能包含临时凭据。
+  console.log(`Uploading AtomGit asset: ${asset.name} -> ${new URL(uploadTarget.url).hostname}`);
+  const headers = new Headers(uploadTarget.headers);
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', asset.contentType || 'application/octet-stream');
+  }
+  headers.set('Content-Length', String(asset.size));
+  const progress = createTransferProgress('upload', asset);
+  const body = Readable.from(trackTransfer(createReadStream(filePath), progress));
+  try {
+    const response = await fetch(uploadTarget.url, {
+      method: 'PUT',
+      headers,
+      body,
+      duplex: 'half',
+    });
+    await response.body?.cancel();
+    if (!response.ok) {
+      throw new Error(`AtomGit upload failed for ${asset.name}: HTTP ${response.status}`);
+    }
+    progress.finish();
+  } finally {
+    body.destroy();
+  }
+}
+
+/** 从构建目录并发上传附件；失败后停止领取新附件并等待在途任务结束。 */
+async function syncAssets({ filePaths, existingNames, ...atomGit }) {
+  let nextIndex = 0;
+  let failure = null;
+  let uploaded = 0;
+  let skipped = 0;
+
+  /** 领取下一个本地产物，已有同名附件直接跳过。 */
+  async function worker() {
+    while (!failure && nextIndex < filePaths.length) {
+      const filePath = filePaths[nextIndex++];
+      const name = path.basename(filePath);
+      try {
+        if (existingNames.has(name)) {
+          console.log(`Skipping existing AtomGit asset: ${name}`);
+          skipped += 1;
+          continue;
+        }
+        const { size } = await fs.stat(filePath);
+        const asset = { name, size };
+        await uploadAtomGitAsset({ ...atomGit, asset, filePath });
+        uploaded += 1;
+      } catch (error) {
+        failure ||= error;
+        console.error(`Asset sync failed: ${name}`);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(ASSET_CONCURRENCY, filePaths.length) }, () => worker()));
+  if (failure) {
+    throw failure;
+  }
+  console.log(`AtomGit assets uploaded=${uploaded}, skipped=${skipped}, concurrency=${ASSET_CONCURRENCY}`);
+}
+
+/** 所有平台完成后核对完整附件，再发布最终版本状态及工作流摘要。 */
+async function finalizeRelease({ githubRelease, ...atomGit }) {
+  const manifest = JSON.parse(await fs.readFile(requireEnv('RELEASE_ASSET_MANIFEST'), 'utf-8'));
+  const release = await getAtomGitReleaseByTag(atomGit);
+  const existingNames = getExistingAssetNames(release);
+  const missing = manifest.files.filter((asset) => !existingNames.has(asset.name));
+  if (missing.length > 0) {
+    throw new Error(`AtomGit Release is missing assets: ${missing.map((asset) => asset.name).join(', ')}`);
+  }
+  await publishAtomGitRelease({
+    ...atomGit,
+    existingRelease: release,
+    name: githubRelease.name || atomGit.tagName,
+    body: githubRelease.body || '',
+    releaseStatus: githubRelease.isPrerelease ? 'pre' : 'latest',
+  });
+  const releaseUrl = `https://atomgit.com/${encodePathSegment(atomGit.owner)}/${encodePathSegment(atomGit.repo)}/releases/${encodePathSegment(atomGit.tagName)}`;
+  const summary = `AtomGit Release synchronized: ${atomGit.tagName}; assets=${manifest.files.length}`;
+  console.log(summary);
+  console.log(`AtomGit Release: ${releaseUrl}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, `${summary}\n\n[AtomGit Release](${releaseUrl})\n`, 'utf-8');
+  }
+}
+
+/** 分别执行 Runner 配置、Release 准备、本地产物上传和最终发布。 */
 async function main() {
+  const mode = process.argv[2];
+  if (mode === '--configure-hosts') {
+    await configureHosts();
+    return;
+  }
   const token = requireEnv('ATOMGIT_ACCESS_TOKEN');
   const owner = requireEnv('ATOMGIT_OWNER');
   const repo = requireEnv('ATOMGIT_REPO');
   const tagName = requireEnv('TAG_NAME');
-  const releaseJsonPath = requireEnv('GITHUB_RELEASE_JSON');
-
-  const githubRelease = await readGithubRelease(releaseJsonPath, tagName);
-  const releaseName = String(githubRelease.name || githubRelease.tagName || tagName);
-  const releaseBody = String(githubRelease.body || '');
-  const releaseStatus = githubRelease.isPrerelease ? 'pre' : 'latest';
-
-  if (!await hasAtomGitTag({ owner, repo, token, tagName })) {
-    throw new Error(`AtomGit tag ${tagName} was not found.`);
+  const atomGit = { owner, repo, token, tagName };
+  if (mode === '--upload') {
+    const filePaths = process.argv.slice(3);
+    if (filePaths.length === 0) {
+      throw new Error('No local AtomGit release assets supplied.');
+    }
+    const release = await getAtomGitReleaseByTag(atomGit);
+    if (!release) {
+      throw new Error(`AtomGit Release ${tagName} has not been prepared.`);
+    }
+    await syncAssets({ ...atomGit, filePaths, existingNames: getExistingAssetNames(release) });
+    return;
   }
-  console.log(`AtomGit tag is ready: ${tagName}`);
-  await publishAtomGitRelease({
-    owner,
-    repo,
-    token,
-    tagName,
-    name: releaseName,
-    body: releaseBody,
-    releaseStatus,
-  });
+  if (mode !== '--prepare' && mode !== '--finalize') {
+    throw new Error('Expected --configure-hosts, --prepare, --upload <files...> or --finalize.');
+  }
 
-  console.log(`AtomGit Release metadata published: ${owner}/${repo}@${tagName}`);
+  const githubRelease = await readGithubRelease(requireEnv('GITHUB_RELEASE_JSON'), tagName);
+  if (githubRelease.tagName !== tagName || githubRelease.isDraft) {
+    throw new Error(`GitHub Release must be published and match tag ${tagName}.`);
+  }
+  if (mode === '--finalize') {
+    await finalizeRelease({ ...atomGit, githubRelease });
+    return;
+  }
+  pushAtomGitTag(atomGit);
+  const existingRelease = await getAtomGitReleaseByTag(atomGit);
+  // 新版本先准备为预发布状态，全部附件就绪后才标记为正式版；重跑不降级已有版本。
+  await publishAtomGitRelease({
+    ...atomGit,
+    name: githubRelease.name || tagName,
+    body: githubRelease.body || '',
+    releaseStatus: existingRelease ? existingRelease.release_status : 'pre',
+    existingRelease,
+  });
 }
 
 main().catch((error) => {
