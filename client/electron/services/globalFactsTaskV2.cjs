@@ -451,7 +451,6 @@ async function runGlobalFactsTaskV2({
 module.exports = {
   GLOBAL_FACTS_OUTPUT_FILE,
   GLOBAL_FACTS_JSON_SCHEMA,
-  readJson,
   validateGlobalFactsOutput,
   formatProgressTitle,
   runGlobalFactsTaskV2,
