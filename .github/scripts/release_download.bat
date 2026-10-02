@@ -1,116 +1,107 @@
 @echo off
 setlocal
-title Download and upload latest Yibiao release
+chcp 65001 >nul
+title Publish Yibiao release to AtomGit
 
-set "PS1_FILE=%TEMP%\download_yibiao_latest.ps1"
-set "ATOMGIT_ENV_FILE=%~dp0.env"
+if "%~1"=="" (
+  echo Usage: release_download.bat ^<tag^>
+  exit /b 1
+)
+set "TAG_NAME=%~1"
+set "ATOMGIT_ENTRY_FILE=%~f0"
+set "ATOMGIT_SCRIPT_DIR=%~dp0"
+rem Load the embedded PowerShell as UTF-8, including Chinese paths and messages.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $source = [IO.File]::ReadAllText($env:ATOMGIT_ENTRY_FILE, [Text.Encoding]::UTF8); & ([ScriptBlock]::Create(($source -split '(?m)^# POWERSHELL_START\r?$', 2)[1])) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
+exit /b %ERRORLEVEL%
 
-> "%PS1_FILE%" echo $ErrorActionPreference = 'Stop'
->> "%PS1_FILE%" echo $ProgressPreference = 'SilentlyContinue'
->> "%PS1_FILE%" echo [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
->> "%PS1_FILE%" echo $githubRepo = 'FB208/OpenBidKit_Yibiao'
->> "%PS1_FILE%" echo $githubApi = "https://api.github.com/repos/$githubRepo/releases/latest"
->> "%PS1_FILE%" echo $atomOwner = 'FB208'
->> "%PS1_FILE%" echo $atomRepo = 'OpenBidKit_Yibiao'
->> "%PS1_FILE%" echo $atomApiBase = 'https://api.atomgit.com'
->> "%PS1_FILE%" echo $githubHeaders = @{
->> "%PS1_FILE%" echo   'User-Agent' = 'Windows-Release-Downloader'
->> "%PS1_FILE%" echo   'Accept' = 'application/vnd.github+json'
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo function Read-AtomGitToken {
->> "%PS1_FILE%" echo   param([string]$EnvFile)
->> "%PS1_FILE%" echo   if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
->> "%PS1_FILE%" echo     throw "AtomGit config file not found: $EnvFile"
->> "%PS1_FILE%" echo   }
->> "%PS1_FILE%" echo   foreach ($rawLine in Get-Content -LiteralPath $EnvFile -Encoding UTF8) {
->> "%PS1_FILE%" echo     $line = $rawLine.Trim()
->> "%PS1_FILE%" echo     if ($line.Length -eq 0 -or $line.StartsWith('#')) { continue }
->> "%PS1_FILE%" echo     $separatorIndex = $line.IndexOf('=')
->> "%PS1_FILE%" echo     if ($separatorIndex -lt 0) { continue }
->> "%PS1_FILE%" echo     $key = $line.Substring(0, $separatorIndex).Trim()
->> "%PS1_FILE%" echo     if ($key -ne 'ATOMGIT_TOKEN') { continue }
->> "%PS1_FILE%" echo     $value = $line.Substring($separatorIndex + 1).Trim()
->> "%PS1_FILE%" echo     if ($value.Length -ge 2 -and (($value[0] -eq '"' -and $value[$value.Length - 1] -eq '"') -or ($value[0] -eq "'" -and $value[$value.Length - 1] -eq "'"))) {
->> "%PS1_FILE%" echo       $value = $value.Substring(1, $value.Length - 2)
->> "%PS1_FILE%" echo     }
->> "%PS1_FILE%" echo     if ([string]::IsNullOrWhiteSpace($value)) { throw 'ATOMGIT_TOKEN cannot be empty.' }
->> "%PS1_FILE%" echo     return $value
->> "%PS1_FILE%" echo   }
->> "%PS1_FILE%" echo   throw 'ATOMGIT_TOKEN is missing from the AtomGit config file.'
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo function Get-AssetContentType {
->> "%PS1_FILE%" echo   param([string]$FileName)
->> "%PS1_FILE%" echo   switch ([IO.Path]::GetExtension($FileName).ToLowerInvariant()) {
->> "%PS1_FILE%" echo     '.exe' { return 'application/vnd.microsoft.portable-executable' }
->> "%PS1_FILE%" echo     '.zip' { return 'application/zip' }
->> "%PS1_FILE%" echo     '.dmg' { return 'application/x-apple-diskimage' }
->> "%PS1_FILE%" echo     '.yml' { return 'application/yaml' }
->> "%PS1_FILE%" echo     '.yaml' { return 'application/yaml' }
->> "%PS1_FILE%" echo     default { return 'application/octet-stream' }
->> "%PS1_FILE%" echo   }
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo function Upload-AtomGitAsset {
->> "%PS1_FILE%" echo   param([string]$FilePath, [string]$Tag, [hashtable]$ApiHeaders)
->> "%PS1_FILE%" echo   $fileName = [IO.Path]::GetFileName($FilePath)
->> "%PS1_FILE%" echo   $encodedOwner = [Uri]::EscapeDataString($atomOwner)
->> "%PS1_FILE%" echo   $encodedRepo = [Uri]::EscapeDataString($atomRepo)
->> "%PS1_FILE%" echo   $encodedTag = [Uri]::EscapeDataString($Tag)
->> "%PS1_FILE%" echo   $encodedFileName = [Uri]::EscapeDataString($fileName)
->> "%PS1_FILE%" echo   $uploadApi = "$atomApiBase/api/v5/repos/$encodedOwner/$encodedRepo/releases/$encodedTag/upload_url?file_name=$encodedFileName"
->> "%PS1_FILE%" echo   Write-Host "Getting AtomGit upload URL: $fileName"
->> "%PS1_FILE%" echo   $uploadTarget = Invoke-RestMethod -Uri $uploadApi -Method Get -Headers $ApiHeaders
->> "%PS1_FILE%" echo   if ([string]::IsNullOrWhiteSpace([string]$uploadTarget.url)) {
->> "%PS1_FILE%" echo     throw "AtomGit did not return an upload URL for $fileName."
->> "%PS1_FILE%" echo   }
->> "%PS1_FILE%" echo   $uploadHeaders = @{}
->> "%PS1_FILE%" echo   if ($null -ne $uploadTarget.headers) {
->> "%PS1_FILE%" echo     foreach ($property in $uploadTarget.headers.PSObject.Properties) {
->> "%PS1_FILE%" echo       $uploadHeaders[$property.Name] = [string]$property.Value
->> "%PS1_FILE%" echo     }
->> "%PS1_FILE%" echo   }
->> "%PS1_FILE%" echo   $contentType = Get-AssetContentType -FileName $fileName
->> "%PS1_FILE%" echo   if ($uploadHeaders.ContainsKey('Content-Type')) {
->> "%PS1_FILE%" echo     $contentType = $uploadHeaders['Content-Type']
->> "%PS1_FILE%" echo     $uploadHeaders.Remove('Content-Type')
->> "%PS1_FILE%" echo   }
->> "%PS1_FILE%" echo   Write-Host "Uploading to AtomGit: $fileName"
->> "%PS1_FILE%" echo   Invoke-WebRequest -Uri $uploadTarget.url -Method Put -Headers $uploadHeaders -ContentType $contentType -InFile $FilePath -UseBasicParsing ^| Out-Null
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo $atomToken = Read-AtomGitToken -EnvFile $env:ATOMGIT_ENV_FILE
->> "%PS1_FILE%" echo $atomApiHeaders = @{
->> "%PS1_FILE%" echo   'Accept' = 'application/json'
->> "%PS1_FILE%" echo   'Authorization' = "Bearer $atomToken"
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo Write-Host 'Fetching latest GitHub release...'
->> "%PS1_FILE%" echo $release = Invoke-RestMethod -Uri $githubApi -Headers $githubHeaders
->> "%PS1_FILE%" echo $tag = $release.tag_name
->> "%PS1_FILE%" echo $out = Join-Path (Get-Location) "Yibiao-$tag"
->> "%PS1_FILE%" echo New-Item -ItemType Directory -Force -Path $out ^| Out-Null
->> "%PS1_FILE%" echo Write-Host "Latest version: $tag"
->> "%PS1_FILE%" echo if (-not $release.assets -or $release.assets.Count -eq 0) {
->> "%PS1_FILE%" echo   throw 'No GitHub release assets found.'
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo $downloadedFiles = @()
->> "%PS1_FILE%" echo foreach ($asset in $release.assets) {
->> "%PS1_FILE%" echo   $file = Join-Path $out $asset.name
->> "%PS1_FILE%" echo   Write-Host "Downloading: $($asset.name)"
->> "%PS1_FILE%" echo   Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $file -Headers $githubHeaders -UseBasicParsing
->> "%PS1_FILE%" echo   $downloadedFiles += $file
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo Write-Host ''
->> "%PS1_FILE%" echo Write-Host 'All GitHub release assets downloaded. Starting AtomGit upload...'
->> "%PS1_FILE%" echo foreach ($file in $downloadedFiles) {
->> "%PS1_FILE%" echo   Upload-AtomGitAsset -FilePath $file -Tag $tag -ApiHeaders $atomApiHeaders
->> "%PS1_FILE%" echo }
->> "%PS1_FILE%" echo Write-Host ''
->> "%PS1_FILE%" echo Write-Host "Done. Save path: $out"
->> "%PS1_FILE%" echo Write-Host "AtomGit release: https://atomgit.com/$atomOwner/$atomRepo/releases/$tag"
+# POWERSHELL_START
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$atomOwner = $env:ATOMGIT_OWNER
+$atomRepo = $env:ATOMGIT_REPO
+$atomApiBase = 'https://api.atomgit.com'
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1_FILE%"
-set "EXIT_CODE=%ERRORLEVEL%"
-del /q "%PS1_FILE%" >nul 2>&1
+# 调用共用的准备或完成阶段，原样传递失败结果。
+function Invoke-ReleasePhase {
+  param([string]$Phase)
+  & node (Join-Path $env:ATOMGIT_SCRIPT_DIR 'sync-atomgit-release.mjs') $Phase
+  if ($LASTEXITCODE -ne 0) { throw "AtomGit release phase failed: $Phase" }
+}
 
-echo.
-if not "%EXIT_CODE%"=="0" echo Release download or AtomGit upload failed.
-pause
-exit /b %EXIT_CODE%
+# 根据附件扩展名选择默认 Content-Type。
+function Get-AssetContentType {
+  param([string]$FileName)
+  switch ([IO.Path]::GetExtension($FileName).ToLowerInvariant()) {
+    '.exe' { return 'application/vnd.microsoft.portable-executable' }
+    '.zip' { return 'application/zip' }
+    '.dmg' { return 'application/x-apple-diskimage' }
+    '.yml' { return 'application/yaml' }
+    '.yaml' { return 'application/yaml' }
+    default { return 'application/octet-stream' }
+  }
+}
+
+# 复用现有本地协议，按服务端返回的地址和请求头上传文件。
+function Upload-AtomGitAsset {
+  param([string]$FilePath, [string]$Tag, [hashtable]$ApiHeaders)
+  $fileName = [IO.Path]::GetFileName($FilePath)
+  $encodedOwner = [Uri]::EscapeDataString($atomOwner)
+  $encodedRepo = [Uri]::EscapeDataString($atomRepo)
+  $encodedTag = [Uri]::EscapeDataString($Tag)
+  $encodedFileName = [Uri]::EscapeDataString($fileName)
+  $uploadApi = "$atomApiBase/api/v5/repos/$encodedOwner/$encodedRepo/releases/$encodedTag/upload_url?file_name=$encodedFileName"
+  Write-Host "Getting AtomGit upload URL: $fileName"
+  $uploadTarget = Invoke-RestMethod -Uri $uploadApi -Method Get -Headers $ApiHeaders
+  if ([string]::IsNullOrWhiteSpace([string]$uploadTarget.url)) {
+    throw "AtomGit did not return an upload URL for $fileName."
+  }
+  $uploadHeaders = @{}
+  if ($null -ne $uploadTarget.headers) {
+    foreach ($property in $uploadTarget.headers.PSObject.Properties) {
+      $uploadHeaders[$property.Name] = [string]$property.Value
+    }
+  }
+  $contentType = Get-AssetContentType -FileName $fileName
+  if ($uploadHeaders.ContainsKey('Content-Type')) {
+    $contentType = $uploadHeaders['Content-Type']
+    $uploadHeaders.Remove('Content-Type')
+  }
+  Write-Host "Uploading to AtomGit: $fileName"
+  Invoke-WebRequest -Uri $uploadTarget.url -Method Put -Headers $uploadHeaders -ContentType $contentType -InFile $FilePath -UseBasicParsing | Out-Null
+}
+
+# 每次运行使用独立临时目录，下载和日志不写入日常开发目录。
+$workRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+$workRoot = [IO.Path]::GetFullPath($workRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$workDir = Join-Path $workRoot ('yibiao-atomgit-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $workDir | Out-Null
+$env:GITHUB_RELEASE_JSON = Join-Path $workDir 'release.json'
+try {
+  Invoke-ReleasePhase '--prepare'
+  $release = Get-Content -LiteralPath $env:GITHUB_RELEASE_JSON -Encoding UTF8 -Raw | ConvertFrom-Json
+  $githubHeaders = @{ 'User-Agent' = 'Windows-Release-Downloader' }
+  $atomApiHeaders = @{
+    'Accept' = 'application/json'
+    'Authorization' = "Bearer $env:ATOMGIT_ACCESS_TOKEN"
+  }
+  $downloadedFiles = @()
+  foreach ($asset in $release.pendingAssets) {
+    $file = Join-Path $workDir $asset.name
+    Write-Host "Downloading: $($asset.name)"
+    Invoke-WebRequest -Uri $asset.url -OutFile $file -Headers $githubHeaders -UseBasicParsing
+    $downloadedFiles += $file
+  }
+  foreach ($file in $downloadedFiles) {
+    Upload-AtomGitAsset -FilePath $file -Tag $env:TAG_NAME -ApiHeaders $atomApiHeaders
+  }
+  Invoke-ReleasePhase '--finalize'
+} finally {
+  # 仅清理本次创建且确认位于临时根目录下的目录。
+  $cleanupTarget = [IO.Path]::GetFullPath($workDir)
+  if ([IO.Path]::GetDirectoryName($cleanupTarget) -eq $workRoot -and
+      [IO.Path]::GetFileName($cleanupTarget).StartsWith('yibiao-atomgit-')) {
+    Remove-Item -LiteralPath $cleanupTarget -Recurse -Force
+  }
+}
