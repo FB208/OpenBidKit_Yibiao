@@ -11,6 +11,7 @@ const { restorePiErrorMessage } = require('./piRetryErrorNormalizer.cjs');
 const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
 const { AGENT_REPORTED_FAILURE_CODE } = require('./piTaskFailureTool.cjs');
 const { createWorkspaceBaseline } = require('./piWorkspaceBaseline.cjs');
+const { createSubmissionPolicy, buildSubmissionRepairPrompt } = require('./piSubmissionPolicy.cjs');
 const {
   createPersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -38,8 +39,6 @@ const DEFAULT_NORMAL_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PI_HTTP_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_RETRIES = 3;
-// 提交校验不通过时每个阶段最多退回修复的次数，与执行失败的 max_retries 分开计数。
-const SUBMISSION_RETURN_LIMIT = 3;
 // Runtime 写入的输入文件所在的受保护分组。
 const INPUT_BASELINE_GROUP = 'inputs';
 const STATUS_TICK_MS = 1000;
@@ -212,40 +211,18 @@ function getAssistantErrorDetails(messages = []) {
 }
 
 function buildRetryPrompt(outputFile, error, attempt, maxRetries) {
-  return `上一轮执行未通过程序校验或执行失败：${compactText(error?.message || error, 800)}
+  return `上一轮执行失败：${compactText(error?.message || error, 800)}
 
 本次结果文件：${outputFile}。在当前会话和工作区中，根据上述错误修复该文件。继续遵守当前阶段的可修改范围、工具权限及完成条件；已有文件优先局部修正，不因重试扩大修改范围或重新执行已完成阶段。
 这是第 ${attempt}/${maxRetries} 次自动修复机会。`;
 }
 
-// 按问题数判断修复进展：校验错误附带问题清单时按条数计，只有一句说明的按 1 条计。
-// 退回满上限，或连续两次修复后问题数都没有减少，即停止退回。
-function createSubmissionTracker(limit = SUBMISSION_RETURN_LIMIT) {
-  const counts = [];
-  let returns = 0;
-  return {
-    get returns() { return returns; },
-    allowReturn(error) {
-      counts.push(Array.isArray(error?.issues) && error.issues.length ? error.issues.length : 1);
-      const n = counts.length;
-      const stalled = n >= 3 && counts[n - 1] >= counts[n - 2] && counts[n - 2] >= counts[n - 3];
-      if (returns >= limit || stalled) {
-        if (error && typeof error === 'object') {
-          error.message = `${error.message}\n提交校验已退回修复 ${returns} 次${stalled ? '，且连续两次问题数没有减少' : ''}，停止自动修复。`;
-        }
-        return false;
-      }
-      returns += 1;
-      return true;
-    },
-  };
-}
-
-function createRetrySummary(attempt, error, outputContent) {
+// 记录一次实际发送的修复提示，执行异常和提交报告共用原有重试诊断。
+function createRetrySummary(attempt, message, outputContent) {
   return {
     attempt,
     at: nowIso(),
-    error: compactText(error?.message || error, 600),
+    error: compactText(message, 600),
     output_chars: String(outputContent || '').length,
   };
 }
@@ -905,6 +882,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       let retryCount = 0;
       let stageIndex = Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0);
       let stagePrompt = prompt;
+      let submission = createSubmissionPolicy();
+      const acceptedSubmissionIssues = [];
 
       const createWorkflowMeta = () => ({
         stage: stageIndex,
@@ -1031,40 +1010,48 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           retry_attempts: [...retryAttempts],
           model_retry_count: modelRetryStats.count,
         };
-        if (typeof payload.validateOutput !== 'function') return { candidate: nextCandidate, validation: null };
-        try {
-          const validation = await payload.validateOutput(nextCandidate, {
+        const report = typeof payload.validateOutput === 'function'
+          ? await payload.validateOutput(nextCandidate, {
             attempt,
-            stage: stageIndex,
-            workflow_stage: activeTask.workflow_stage,
-            max_retries: SUBMISSION_RETURN_LIMIT,
-            task_id: taskId,
-            title,
-            output_file: outputFile,
-            workspace_dir: workspaceDir,
-            session_id: session.sessionId,
+            ...createWorkflowMeta(),
             retry_attempts: [...retryAttempts],
-            readFile: createWorkflowMeta().readFile,
-            baseline,
-          });
-          return { candidate: nextCandidate, validation };
-        } catch (validationError) {
-          if (validationError && typeof validationError === 'object') {
-            validationError.agentValidationFailed = true;
-            if (restored.length) {
-              validationError.message = `程序已还原被改动的文件：${restored.join('、')}。这些文件由程序维护，不要修改。\n${validationError.message}`;
-            }
-          }
-          throw validationError;
-        }
+          })
+          : { value: null, issues: [] };
+        return { candidate: nextCandidate, report, restored };
+      };
+
+      // 两类修复共用既有活动、监控及重试记录；提交修复没有固定次数上限。
+      const recordRetry = (message, outputContent, retryPrompt, maximum) => {
+        retryAttempts.push(createRetrySummary(retryAttempts.length + 1, message, outputContent));
+        retryCount = retryAttempts.length;
+        touchActivity({
+          task_token: taskToken,
+          stage: 'retry',
+          message: `${runtimeName} 正在自动修复：${compactText(message, 160)}`,
+          source: 'pi.retry',
+          visible: true,
+          activity: true,
+        });
+        stagePrompt = retryPrompt;
+        emitMonitorEvent({
+          type: 'retry',
+          task_id: taskId,
+          title,
+          attempt: retryCount,
+          ...(maximum === undefined ? {} : { maximum }),
+          message: compactText(message, 600),
+          prompt: stagePrompt,
+        });
       };
 
       while (true) {
         let candidate = null;
-        // 每个阶段分别计数：提交校验不通过按退回上限处理，执行失败沿用任务的 max_retries。
-        const submission = createSubmissionTracker();
+        let acceptedIssues = [];
+        // 执行异常只使用原 max_retries，提交策略在同一业务阶段的续接中保持。
         let executionRetries = 0;
         while (true) {
+          let report;
+          let restored;
           try {
             if (activeController.signal.aborted) throw activeController.signal.reason;
             activeTask.stage_index = stageIndex;
@@ -1087,47 +1074,64 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               throw error;
             }
             assistantText = summaryEnabled ? extractAssistantText(session.messages) : '';
-            ({ candidate, validation: validationResult } = await checkSubmission(submission.returns + 1));
-            retryCount = retryAttempts.length;
-            break;
+            ({ candidate, report, restored } = await checkSubmission(submission.attempts + 1));
           } catch (error) {
             if (activeController.signal.aborted) throw activeController.signal.reason || error;
-            const validationFailed = error?.agentValidationFailed === true;
-            if (validationFailed ? !submission.allowReturn(error) : executionRetries >= maxRetries) throw error;
-            if (!validationFailed) executionRetries += 1;
-            const attempt = validationFailed ? submission.returns : executionRetries;
-            const limit = validationFailed ? SUBMISSION_RETURN_LIMIT : maxRetries;
+            if (executionRetries >= maxRetries) throw error;
+            executionRetries += 1;
             const retryPrompt = typeof payload.buildRetryPrompt === 'function'
-              ? await payload.buildRetryPrompt(error, {
+              ? await payload.buildRetryPrompt({ kind: 'execution', error }, {
                 ...createWorkflowMeta(),
-                attempt,
-                max_retries: limit,
+                attempt: executionRetries,
+                max_retries: maxRetries,
                 retry_attempts: [...retryAttempts],
               })
-              : buildRetryPrompt(outputFile, error, attempt, limit);
+              : buildRetryPrompt(outputFile, error, executionRetries, maxRetries);
             if (retryPrompt === null) throw error;
             const output = await readOutputAsync(workspaceDir, outputFile);
-            retryAttempts.push(createRetrySummary(retryAttempts.length + 1, error, output.content));
-            retryCount = retryAttempts.length;
-            touchActivity({
-              task_token: taskToken,
-              stage: 'retry',
-              message: `${runtimeName} 正在自动修复：${compactText(error?.message || error, 160)}`,
-              source: 'pi.retry',
-              visible: true,
-              activity: true,
-            });
-            stagePrompt = retryPrompt;
-            emitMonitorEvent({
-              type: 'retry',
-              task_id: taskId,
-              title,
-              attempt: retryCount,
-              maximum: limit,
-              message: compactText(error?.message || error, 600),
-              prompt: stagePrompt,
-            });
+            recordRetry(error?.message || String(error), output.content, retryPrompt, maxRetries);
+            continue;
           }
+
+          // 预期产物问题由报告决定；停止决策在执行 catch 之外，不消耗执行重试预算。
+          const decision = submission.inspect(report);
+          if (decision.action === 'stop') {
+            const blocking = report.issues.filter(issue => issue.severity === 'blocking');
+            const error = new Error(`已按最低完成目标再修复一轮，仍存在阻塞流程的问题，任务已停止：\n${blocking.map(issue => issue.message).join('\n')}`);
+            error.agentValidationFailed = true;
+            error.issues = report.issues;
+            throw error;
+          }
+          if (decision.action === 'accept') {
+            validationResult = report.value;
+            acceptedIssues = report.issues;
+            if (acceptedIssues.length) {
+              acceptedSubmissionIssues.push({ stage: activeTask.workflow_stage, issues: acceptedIssues });
+              touchActivity({
+                task_token: taskToken,
+                stage: activeTask.workflow_stage,
+                message: `仍有 ${acceptedIssues.length} 项质量问题，保留当前结果继续后续流程：${compactText(acceptedIssues.map(issue => issue.message).join('；'), 200)}`,
+                source: 'pi.submission.accepted',
+                visible: true,
+                activity: true,
+              });
+            }
+            break;
+          }
+
+          const businessPrompt = typeof payload.buildRetryPrompt === 'function'
+            ? await payload.buildRetryPrompt({ kind: 'submission', report, mode: decision.mode }, {
+              ...createWorkflowMeta(),
+              attempt: decision.attempt,
+              retry_attempts: [...retryAttempts],
+            })
+            : `本次结果文件：${outputFile}。在当前会话和工作区修复，保留已完成内容。`;
+          const repairDetails = [
+            restored.length ? `程序已还原被改动的文件：${restored.join('、')}。这些文件由程序维护，不要修改。` : '',
+            businessPrompt,
+          ].filter(Boolean).join('\n');
+          const retryPrompt = buildSubmissionRepairPrompt(report, decision, repairDetails);
+          recordRetry(report.issues.map(issue => issue.message).join('\n'), candidate.output_content, retryPrompt);
         }
 
         if (typeof payload.continueTask !== 'function') break;
@@ -1136,6 +1140,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         const continuation = await payload.continueTask(candidate, {
           ...createWorkflowMeta(),
           validation_result: validationResult,
+          accepted_issues: acceptedIssues,
         });
         if (!continuation || continuation.complete === true || !continuation.prompt) break;
         emitMonitorEvent({
@@ -1158,6 +1163,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           : stageIndex + 1;
         activeTask.stage_index = stageIndex;
         const continuationStage = continuation.stage || `workflow_stage_${stageIndex}`;
+        if (continuationStage !== completedWorkflowStage) submission = createSubmissionPolicy();
         activeTask.workflow_stage = continuationStage;
         stagePrompt = continuation.prompt;
         // 与压缩并行的程序步骤：先登记错误处理，压缩结束后再等待其完成，之后才发送提示词。
@@ -1212,6 +1218,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         retry_attempts: retryAttempts,
         model_retry_count: modelRetryStats.count,
         validation_result: validationResult,
+        accepted_submission_issues: acceptedSubmissionIssues,
         diagnostics: {
           session: sessionSnapshot,
           events: diagnostics.events.filter((event) => String(event.at || '') >= startedAt),

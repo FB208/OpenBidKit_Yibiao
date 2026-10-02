@@ -5,7 +5,7 @@ const { CONTENT_GENERATION_AGENT_TASK_KEY, CONTINUE_PROMPT, wasStagePrompted, BA
 const { createContentGenerationImageTools, validateContentImageReferences } = require('./contentGenerationImageTools.cjs');
 const { countHtmlWords } = require('./contentGenerationWordTools.cjs');
 const { convertContentSections } = require('./contentGenerationOutput.cjs');
-const { assertHtmlStructure, findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
+const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 const { TASK_DIR, LIST_DIR, SECTION_MODIFICATION_SUBDIR, TASK_FILE_WRITING, taskFilePath, taskFileSchemas, clearTaskArtifacts } = require('./contentGenerationTaskFiles.cjs');
 
 // 单节修改与正文主任务共用工作区，图片任务文件和清单放在独立子目录，不影响主任务未完成的任务文件。
@@ -97,21 +97,40 @@ async function runContentSectionRegenerationTask({ agentService, aiService, work
     }, { ...(['success', 'error'].includes(status) ? { contentSection: sectionState } : {}) }).task;
   }
 
-  // 直接读取目标产物，不依赖或改写全文结果清单；Agent 提交时校验结构，结构问题逐项退回 Agent 修复。
-  function readSection(checkStructure = false) {
-    const html = checkSectionHtml(fs.readFileSync(path.join(workspaceDir, file), 'utf8'));
-    if (checkStructure) {
-      try {
-        assertHtmlStructure(html);
-      } catch (error) {
-        error.issues = findHtmlStructureIssues(html);
-        throw error;
-      }
-    }
-    validateContentImageReferences(workspaceDir, html);
+  // 保存当前小节的真实字数和转换输入，不依赖或改写全文结果清单。
+  function sectionResult(html) {
     words = countHtmlWords(html);
     runtime.section_words[id] = words;
     return { workspaceDir, sections: [{ section_id: id, number: section.number, title: section.title, file, words }] };
+  }
+
+  // 转换阶段继续直接读取产物，文件和执行错误按原流程抛出。
+  function readSection() {
+    const html = checkSectionHtml(fs.readFileSync(path.join(workspaceDir, file), 'utf8'));
+    validateContentImageReferences(workspaceDir, html);
+    return sectionResult(html);
+  }
+
+  // 单节修改是独立主任务，逐项报告提交问题并使用 Runtime 的统一修复预算。
+  function validateSectionOutput(candidate) {
+    const html = String(candidate.output_content || '').trim();
+    const issues = [];
+    const issue = message => ({ severity: 'blocking', file, section_id: id, message });
+    try {
+      checkSectionHtml(html);
+    } catch (error) {
+      if (error?.code || error?.constructor !== Error) throw error;
+      issues.push(issue(error.message));
+    }
+    issues.push(...findHtmlStructureIssues(html).map(issue));
+    try {
+      validateContentImageReferences(workspaceDir, html);
+    } catch (error) {
+      // 校验器的普通 Error 是引用问题；OS 错误和其他执行异常继续抛出。
+      if (error?.code || error?.constructor !== Error) throw error;
+      issues.push(issue(error.message));
+    }
+    return { value: issues.length ? null : sectionResult(html), issues };
   }
 
   try {
@@ -145,7 +164,7 @@ async function runContentSectionRegenerationTask({ agentService, aiService, work
             failTask: error => { if (!controller.signal.aborted) controller.abort(error); },
             taskDir: TASK_SUBDIR, listDir: `${LIST_DIR}/${SECTION_MODIFICATION_SUBDIR}` }, context);
         },
-        validateOutput: () => readSection(true),
+        validateOutput: validateSectionOutput,
         onCheckpoint(checkpoint) {
           agentState = { ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: task.task_id };
           publish('running');

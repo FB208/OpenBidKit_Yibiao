@@ -40,28 +40,33 @@ function formatProgressTitle(value) {
   return Array.from(title).slice(0, 20).join('');
 }
 
-function readJson(content, label) {
-  try {
-    return JSON.parse(String(content || '').trim());
-  } catch (error) {
-    throw new Error(`${label}不是合法 JSON：${error?.message || String(error)}`);
-  }
-}
-
 const factsAjv = new Ajv({ allErrors: true, strict: true });
 const validateFactsSchema = factsAjv.compile(GLOBAL_FACTS_JSON_SCHEMA);
 
-// 生成与 AI 调整共用的提交校验：先按 Schema 检查结构，再整理为业务结果。
+// 生成与 AI 调整共用提交报告；明确的产物问题阻止提交，未知执行错误继续抛出。
 function validateGlobalFactsOutput(content) {
-  const generated = readJson(content, GLOBAL_FACTS_OUTPUT_FILE);
+  let generated;
+  try {
+    generated = JSON.parse(String(content || '').trim());
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { value: null, issues: [{ severity: 'blocking', file: GLOBAL_FACTS_OUTPUT_FILE,
+      message: `${GLOBAL_FACTS_OUTPUT_FILE}不是合法 JSON：${error.message}` }] };
+  }
   if (!validateFactsSchema(generated)) {
-    const error = new Error(`${GLOBAL_FACTS_OUTPUT_FILE} 格式错误：${factsAjv.errorsText(validateFactsSchema.errors, { dataVar: GLOBAL_FACTS_OUTPUT_FILE })}`);
-    error.issues = validateFactsSchema.errors.map(item => `${item.instancePath || '/'} ${item.message}`);
-    throw error;
+    return { value: generated, issues: validateFactsSchema.errors.map(item => ({
+      severity: 'blocking', file: GLOBAL_FACTS_OUTPUT_FILE, path: item.instancePath || '/',
+      message: `${GLOBAL_FACTS_OUTPUT_FILE} 格式错误：${item.instancePath || '/'} ${item.message}`,
+    })) };
   }
   const normalized = normalizeGlobalFactsResponse(generated);
-  validateGlobalFactsResponse(normalized);
-  return normalized;
+  try {
+    validateGlobalFactsResponse(normalized);
+  } catch (error) {
+    if (error?.code || error?.constructor !== Error) throw error;
+    return { value: normalized, issues: [{ severity: 'blocking', file: GLOBAL_FACTS_OUTPUT_FILE, message: error.message }] };
+  }
+  return { value: normalized, issues: [] };
 }
 
 function sanitizeFileName(value, fallback = '招标文件') {

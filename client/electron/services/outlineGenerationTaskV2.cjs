@@ -303,6 +303,63 @@ function buildFinalOutline(candidate, knownIds = new Set()) {
   return { outline: acceptAgentOutline(candidate?.outline || [], knownIds) };
 }
 
+const outputAjv = new Ajv({ allErrors: true, strict: true });
+const validateOutlineSchema = outputAjv.compile(OUTLINE_JSON_SCHEMA);
+
+// 只把空文件、JSON 语法和 Schema 问题写入提交报告，不吞掉执行异常。
+function validateJsonOutput(content, file, validate) {
+  const text = String(content || '').trim();
+  if (!text) return { value: null, issues: [{ severity: 'blocking', file, message: `${file} 未写入或内容为空，请写入完整的 JSON` }] };
+  let generated;
+  try {
+    generated = JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { value: null, issues: [{ severity: 'blocking', file, message: `${file}不是合法 JSON：${error.message}` }] };
+  }
+  return {
+    value: generated,
+    issues: !validate || validate(generated) ? [] : validate.errors.map(item => ({
+      severity: 'blocking', file, path: item.instancePath || '/',
+      message: `${file} 不符合结构要求：${item.instancePath || '/'} ${item.message}`,
+    })),
+  };
+}
+
+// 目录生成与调整共用解析及身份校验；按调用方原有规则检查 Schema，通过后才分配新节点 ID。
+function validateOutlineOutput(content, knownIds = new Set(), { checkSchema = true } = {}) {
+  const report = validateJsonOutput(content, OUTLINE_OUTPUT_FILE, checkSchema ? validateOutlineSchema : null);
+  if (report.issues.length) return report;
+  const seen = new Set();
+  // 模型产物的遍历结构错误进入提交修复，不作为执行异常中断任务。
+  const visit = (items, parentPath) => {
+    if (!Array.isArray(items)) {
+      report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+        path: parentPath, message: `目录结构错误：${parentPath} 必须是数组` });
+      return;
+    }
+    items.forEach((item, index) => {
+      const nodePath = `${parentPath}/${index}`;
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+          path: nodePath, message: `目录结构错误：${nodePath} 必须是非空对象` });
+        return;
+      }
+      if (item.id !== null) {
+        if (!knownIds.has(item.id)) report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+          path: `${nodePath}/id`, message: `目录包含未知 ID：${item.id}；新节点请使用 id:null` });
+        if (seen.has(item.id)) report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+          path: `${nodePath}/id`, message: `目录 ID 重复：${item.id}` });
+        seen.add(item.id);
+      }
+      if (item.children?.length) visit(item.children, `${nodePath}/children`);
+    });
+  };
+  visit(report.value?.outline || [], '/outline');
+  if (!report.issues.length) report.value = buildFinalOutline(report.value, knownIds);
+  return report;
+}
+
 // 根目录身份不随顺序变化，只同步供 Agent 阅读的标题。
 function synchronizeScoreDirectoryPlan(scoreDirectoryPlan, items) {
   const roots = new Map((items || []).map(item => [item.id, item]));
@@ -460,9 +517,9 @@ function createOutputFileRequirements(stage) {
 }
 
 // 仅将产物校验失败交回当前 Session 修复，不重跑用户确认和阶段交接。
-function createOutputRepairPrompt(error, meta) {
-  if (!error?.agentValidationFailed) return null;
-  return `本阶段产物校验失败，请在当前 Session 修复一轮：\n${error.message}\n\n${createOutputFileRequirements(meta.workflow_stage)}\n沿用已有材料和用户确认结果，只修复上述问题；已通过的文件保留，不要重复询问已确认事项。`;
+function createOutputRepairPrompt(request, meta) {
+  if (request.kind === 'execution') return null;
+  return `${createOutputFileRequirements(meta.workflow_stage)}\n沿用已有材料和用户确认结果，只修复本次提交报告中的问题；已通过的文件保留，不要重复询问已确认事项。`;
 }
 
 function normalizeReferenceDocumentIds(storedPlan) {
@@ -760,44 +817,23 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     } : {}),
     [OUTLINE_REVIEW_FILE]: OUTLINE_REVIEW_SCHEMA,
   };
-  const ajv = new Ajv({ allErrors: true, strict: true });
   const outputValidators = Object.fromEntries(
-    Object.entries(jsonValidationSchemas).map(([file, schema]) => [file, ajv.compile(schema)]),
+    Object.entries(jsonValidationSchemas).map(([file, schema]) => [file, outputAjv.compile(schema)]),
   );
 
-  // 对必需文件执行非空、JSON 和已有结构校验；占位文件不能视为产物。
-  function validateOutputFile(content, file) {
-    if (!String(content || '').trim()) throw new Error(`${file} 未写入或内容为空，请写入完整的 JSON`);
-    const generated = readJson(content, file);
-    const validate = outputValidators[file];
-    if (!validate(generated)) {
-      throw new Error(`${file} 不符合结构要求：${ajv.errorsText(validate.errors, { dataVar: file })}`);
-    }
-    return generated;
-  }
-
-  // 在运行时修复循环内检查全部阶段产物，通过后才交接并更新业务状态。
+  // 汇总全部阶段产物的逐项问题；读取失败仍由执行错误处理，通过后才交接。
   async function validateStageOutputs(candidate, meta) {
     const outputs = {};
-    const errors = [];
+    const issues = [];
     for (const file of STAGE_OUTPUT_FILES[meta.workflow_stage]) {
-      try {
-        outputs[file] = validateOutputFile(
-          file === OUTLINE_OUTPUT_FILE ? candidate.output_content : await meta.readFile(file), file,
-        );
-      } catch (error) {
-        errors.push(error.message);
-      }
+      const content = file === OUTLINE_OUTPUT_FILE ? candidate.output_content : await meta.readFile(file);
+      const report = file === OUTLINE_OUTPUT_FILE
+        ? validateOutlineOutput(content, knownNodeIds)
+        : validateJsonOutput(content, file, outputValidators[file]);
+      outputs[file] = report.value;
+      issues.push(...report.issues);
     }
-    if (errors.length) throw new Error(errors.join('\n'));
-    if (outputs[OUTLINE_OUTPUT_FILE]) {
-      try {
-        outputs[OUTLINE_OUTPUT_FILE] = buildFinalOutline(outputs[OUTLINE_OUTPUT_FILE], knownNodeIds);
-      } catch (error) {
-        throw new Error(`${OUTLINE_OUTPUT_FILE} 节点身份不符合要求：${error.message}`);
-      }
-    }
-    return outputs;
+    return { value: outputs, issues };
   }
 
   let initialFiles;
@@ -1025,7 +1061,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       buildRetryPrompt: createOutputRepairPrompt,
       // 在当前 Session 的修复循环内校验一级目录，通过后才进入用户确认。
       validateOutput(candidate) {
-        return buildFinalOutline(validateOutputFile(candidate.output_content, OUTLINE_OUTPUT_FILE));
+        return validateOutlineOutput(candidate.output_content);
       },
       // 将正式身份写回会话，确认和后续任务使用同一份目录。
       async continueTask(_candidate, meta) {
@@ -1455,6 +1491,7 @@ module.exports = {
   OUTLINE_OUTPUT_FILE,
   OUTLINE_JSON_SCHEMA,
   buildFinalOutline,
+  validateOutlineOutput,
   readJson,
   formatProgressTitle,
   createInitialPrompt,

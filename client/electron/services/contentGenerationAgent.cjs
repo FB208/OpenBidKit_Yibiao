@@ -14,9 +14,9 @@ const { TASK_FILE_WRITING, taskFilePath, taskFileSchemas, readTaskFile, writeLis
 const { SUBMISSION_FIX_TOOL, SUBMISSION_FIX_PARALLEL_THRESHOLD, imageStructure, createContentImageProtection, createSubmissionFixTool } = require('./contentGenerationEditTools.cjs');
 const { warmSharedPrefix } = require('./contentGenerationPrefixWarmup.cjs');
 const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
-const { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
+const { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
 const { TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
-const { LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools } = require('./contentGenerationLayoutTools.cjs');
+const { LAYOUT_TOOLS, buildLayoutPrompt, collectLayoutSubmissionIssues, createContentGenerationLayoutTools } = require('./contentGenerationLayoutTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
 // 阶段要求已在原会话发出后，续跑和同阶段续接只发送这一句，由 Agent 依据会话历史和工作区继续。
@@ -239,73 +239,112 @@ function checkSectionHtml(html) {
   return content;
 }
 
-// 提交校验逐节检查正文、图片引用、结构，以及图片保护开始后的图片块和去表格结果。
-// fixable=false 的问题（正文或图片文件缺失等）需要主 Agent 重新生成，子任务无法处理。
-function sectionSubmissionIssues(workspaceDir, section, { imageProtection, requireNoDataTables = false } = {}) {
+// 检查本节实际产物；返回可用性问题和事实，不在这里决定质量验收或修复轮数。
+function inspectSectionArtifact(workspaceDir, section, { recordedImages = null, checkStructure = true } = {}) {
   const base = { section_id: section.id, number: section.number, title: section.title, file: section.file };
   const target = path.join(workspaceDir, section.file);
-  if (!fs.existsSync(target)) return [{ ...base, type: 'missing', issue: '小节 HTML 文件不存在', fixable: false }];
+  if (!fs.existsSync(target)) return {
+    section: { ...base, words: 0 },
+    issues: [{ ...base, type: 'missing', severity: 'blocking', message: '小节 HTML 文件不存在', fixable: false }],
+    facts: { has_data_tables: false },
+  };
   const html = fs.readFileSync(target, 'utf8');
+  const words = countHtmlWords(html);
   const issues = [];
-  try {
-    checkSectionHtml(html);
-  } catch (error) {
-    issues.push({ ...base, type: 'content', issue: error.message, fixable: Boolean(countHtmlWords(html)) });
-  }
-  try {
-    validateContentImageReferences(workspaceDir, html);
-  } catch (error) {
-    issues.push({ ...base, type: 'image-ref', issue: error.message, fixable: false });
-  }
-  for (const issue of findHtmlStructureIssues(html)) issues.push({ ...base, type: 'structure', issue, fixable: true });
-  const recorded = imageProtection?.recorded(section.file);
-  if (recorded && imageStructure(html) !== recorded.structure) {
-    issues.push({ ...base, type: 'image-block', issue: '图片块、图注、提示词、图片引用、数量、顺序或图片表格布局与图片保护开始时不一致', original_image_blocks: recorded.blocks, fixable: true });
-  }
-  if (requireNoDataTables && hasDataTables(html)) issues.push({ ...base, type: 'table', issue: '仍有数据表格，需要转换为段落或列表并保留全部信息', fixable: true });
-  return issues;
-}
-
-// 完整清单写入程序清单，退回说明只列前几处，并按涉及的小节数给出修复方式。
-function submissionIssuesError(workspaceDir, issues, protectionActive) {
-  const file = writeListFile(workspaceDir, 'submission', { issues });
-  const sectionCount = new Set(issues.map(item => item.section_id)).size;
-  const manual = issues.some(item => !item.fixable);
-  const route = sectionCount > SUBMISSION_FIX_PARALLEL_THRESHOLD
-    ? `涉及小节超过 ${SUBMISSION_FIX_PARALLEL_THRESHOLD} 个，调用 ${SUBMISSION_FIX_TOOL} 并发修复${manual ? '，其中正文或图片文件缺失等子任务无法处理的问题由你直接处理' : ''}`
-    : '由你直接修改对应小节';
-  const sample = issues.slice(0, 5).map(item => `${item.number} ${item.title}（${item.file}）${item.issue}${item.original_image_blocks ? '，原始图片块见清单' : ''}`).join('；');
-  const error = new Error(`提交校验未通过：${sectionCount} 个小节共 ${issues.length} 处问题，完整清单见 ${file}。${route}，修复后重新提交结果清单。图片块问题按清单中的原始图片块原样恢复，保留文字修改。前 5 处：${sample}。${structureFixRule(protectionActive)}`);
-  error.issues = issues;
-  return error;
-}
-
-// 读取实际小节文件，校验结果清单覆盖范围并重新统计字数。
-// checkStructure 用于 Agent 提交结果时：逐节问题汇总退回 Agent 修复；仅转换 Word 等程序步骤不检查，避免旧产物无法续转。
-function readContentGenerationResult(workspaceDir, { checkStructure = false, imageProtection, requireNoDataTables = false } = {}) {
-  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, INPUT_FILES.decisions), 'utf8'));
-  let manifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(path.join(workspaceDir, RESULT_FILE), 'utf8'));
-  } catch (error) {
-    throw new Error(`${RESULT_FILE} 不是有效 JSON：${error.message}`);
-  }
-  if (checkStructure && !validateResultManifest(manifest)) throw new Error(`${RESULT_FILE} 格式错误：${resultAjv.errorsText(validateResultManifest.errors, { dataVar: RESULT_FILE })}`);
-  const entries = new Map((manifest.sections || []).map(item => [item.section_id, item]));
-  if (entries.size !== decisions.targets.length || manifest.sections.length !== decisions.targets.length) throw new Error('正文生成结果清单与本次目标小节不一致');
-  for (const section of decisions.targets) {
-    if (entries.get(section.id)?.file !== section.file) throw new Error(`正文结果缺少小节或文件路径不匹配：${section.id}`);
+  try { checkSectionHtml(html); }
+  catch (error) { issues.push({ ...base, type: 'content', severity: 'blocking', message: error.message, fixable: Boolean(words) }); }
+  try { validateContentImageReferences(workspaceDir, html); }
+  catch (error) {
+    if (error.code) throw error;
+    issues.push({ ...base, type: 'image-ref', severity: 'blocking', message: error.message, fixable: false });
   }
   if (checkStructure) {
-    const issues = decisions.targets.flatMap(section => sectionSubmissionIssues(workspaceDir, section, { imageProtection, requireNoDataTables }));
-    if (issues.length) throw submissionIssuesError(workspaceDir, issues, Boolean(imageProtection?.active));
+    for (const message of findHtmlStructureIssues(html)) {
+      issues.push({ ...base, type: 'structure', severity: 'blocking', message, fixable: true });
+    }
   }
-  const sections = decisions.targets.map(section => {
-    const html = checkSectionHtml(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
-    validateContentImageReferences(workspaceDir, html);
-    return { section_id: section.id, number: section.number, title: section.title, file: section.file, words: countHtmlWords(html) };
-  });
-  return { workspaceDir, sections };
+  if (recordedImages && imageStructure(html) !== recordedImages.structure) {
+    issues.push({ ...base, type: 'image-block', severity: 'blocking', message: '图片块、图注、提示词、图片引用、数量、顺序或图片表格布局与图片保护开始时不一致',
+      original_image_blocks: recordedImages.blocks, fixable: true });
+  }
+  return { section: { ...base, words }, issues, facts: { has_data_tables: hasDataTables(html) } };
+}
+
+// 按当前阶段规则报告残留表格，已接受的小节仅豁免这一项质量要求。
+function collectTableSubmissionIssues(inspections, acceptedSectionIds = []) {
+  const accepted = new Set(acceptedSectionIds);
+  return inspections.filter(item => item.facts.has_data_tables && !accepted.has(item.section.section_id)).map(item => ({
+    ...item.section, type: 'table', severity: 'quality', message: '仍有数据表格，需要转换为段落或列表并保留全部信息', fixable: true,
+  }));
+}
+
+// 提交修复工具复查指定小节，复用基础检查和同一份表格质量规则。
+function sectionSubmissionIssues(workspaceDir, section, { imageProtection, requireNoDataTables = false, acceptedTableSectionIds = [] } = {}) {
+  const inspected = inspectSectionArtifact(workspaceDir, section, { recordedImages: imageProtection?.recorded(section.file) });
+  return [...inspected.issues, ...(requireNoDataTables ? collectTableSubmissionIssues([inspected], acceptedTableSectionIds) : [])];
+}
+
+// 整理现有问题清单和操作指引；修复次数及放行决定只由公共运行时负责。
+function contentSubmissionInstructions(workspaceDir, issues, protectionActive) {
+  const sectionIssues = issues.filter(item => item.section_id && ['missing', 'content', 'image-ref', 'structure', 'image-block', 'table'].includes(item.type));
+  if (!sectionIssues.length) return '按问题说明修正当前结果，保留已完成内容和当前阶段范围。';
+  const file = writeListFile(workspaceDir, 'submission', { issues: sectionIssues });
+  const sectionCount = new Set(sectionIssues.map(item => item.section_id)).size;
+  const manual = sectionIssues.some(item => !item.fixable);
+  const route = sectionCount > SUBMISSION_FIX_PARALLEL_THRESHOLD
+    ? '涉及小节超过 ' + SUBMISSION_FIX_PARALLEL_THRESHOLD + ' 个，调用 ' + SUBMISSION_FIX_TOOL + ' 并发修复' + (manual ? '，正文或图片文件缺失等子任务无法处理的问题由你直接处理' : '')
+    : '由你直接修改对应小节';
+  return '完整小节问题见 ' + file + '。' + route + '，修复后重新提交。图片块按清单中的原始图片块恢复，保留文字修改。' + structureFixRule(protectionActive);
+}
+
+// 一次读取清单和各节实际产物，供提交验收及程序读取共同使用。
+function inspectContentArtifacts(workspaceDir, { checkStructure = true, imageProtection } = {}) {
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, INPUT_FILES.decisions), 'utf8'));
+  const issues = [];
+  const manifestPath = path.join(workspaceDir, RESULT_FILE);
+  let manifest;
+  const manifestIssue = message => ({ type: 'manifest', severity: 'blocking', file: RESULT_FILE, message });
+  if (!fs.existsSync(manifestPath)) issues.push(manifestIssue(RESULT_FILE + ' 尚未生成'));
+  else {
+    const content = fs.readFileSync(manifestPath, 'utf8');
+    try { manifest = JSON.parse(content); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      issues.push(manifestIssue(RESULT_FILE + ' 不是有效 JSON：' + error.message));
+    }
+  }
+  if (manifest !== undefined) {
+    if (checkStructure && !validateResultManifest(manifest)) {
+      issues.push(...validateResultManifest.errors.map(error => manifestIssue(RESULT_FILE + ' ' + error.instancePath + ' ' + error.message)));
+    } else if (!manifest || !Array.isArray(manifest.sections)) {
+      issues.push(manifestIssue(RESULT_FILE + ' 必须包含 sections 数组'));
+    } else {
+      const entries = new Map(manifest.sections.map(item => [item.section_id, item]));
+      if (entries.size !== decisions.targets.length || manifest.sections.length !== decisions.targets.length) {
+        issues.push(manifestIssue('正文生成结果清单与本次目标小节不一致'));
+      }
+      for (const section of decisions.targets) {
+        if (entries.get(section.id)?.file !== section.file) issues.push(manifestIssue('正文结果缺少小节或文件路径不匹配：' + section.id));
+      }
+    }
+  }
+  const inspections = decisions.targets.map(section => inspectSectionArtifact(workspaceDir, section, {
+    checkStructure, recordedImages: imageProtection?.recorded(section.file),
+  }));
+  issues.push(...inspections.flatMap(item => item.issues));
+  return { result: { workspaceDir, sections: inspections.map(item => item.section) }, issues, inspections };
+}
+
+// 程序读取当前正文；共用产物检查，不承担 Agent 的阶段质量决策。
+function readContentGenerationResult(workspaceDir, { checkStructure = false, imageProtection, requireNoDataTables = false, acceptedTableSectionIds = [] } = {}) {
+  const inspected = inspectContentArtifacts(workspaceDir, { checkStructure, imageProtection });
+  const issues = [...inspected.issues, ...(requireNoDataTables ? collectTableSubmissionIssues(inspected.inspections, acceptedTableSectionIds) : [])];
+  if (issues.length) {
+    const error = new Error(issues.map(item => item.message).join('\n'));
+    error.issues = issues;
+    throw error;
+  }
+  return inspected.result;
 }
 
 // Agent 批量提交写作任务；复用 scoped AI 队列实现真实并发和统一取消。
@@ -330,8 +369,8 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
     }
     return input;
   }
-  // 编辑子任务提交时同时校验结构，问题退回子任务修复。
-  const validateHtml = (root, html) => { checkSectionHtml(html); validateContentImageReferences(root, html); assertHtmlStructure(html); };
+  // 小节检查通过依赖传递，编辑工具只报告结果，不另开提交修复循环。
+  const inspectSection = (section, options) => inspectSectionArtifact(workspaceDir, section, options);
   return [{
     name: 'generate-sections', label: '批量生成正文小节',
     description: `读取 ${taskFilePath('sections')} 中的全部小节并提交生成受限 HTML，格式为 {"sections":[{"section_id":"…","instructions":"…","references":"…"}]}，每项三个字段都必填。section_id 原样填写正文编排决策 targets 中本节的 id，不使用 number。instructions 仅填写本节新增配图安排，以及已有编排和公共规则之外确有必要的补充要求：配图安排包含布局、组数、逐图表达目的、图片类型和生成方式（aiImage/htmlImage/mermaid），AI 图片另写明画面类型、主体、视角景别和画面形式；没有新增配图和补充要求时填空字符串，失败重试时可填写具体纠错要求。references 为${hasKnowledgeBase ? '知识库等' : ''}补充资料的相关原文摘录并注明来源，完整全局事实由程序提供，无补充资料时填空字符串。程序自动提供本节编排、完整全局事实及公共材料，无需复述目标字数、写作重点、表格安排和格式规则。已生成正文的小节自动跳过，重复提交同一任务文件不会重写；确需整节重写时该项加 "regenerate": true。${TASK_FILE_WRITING}程序队列按用户配置控制实际并发，超出上限的任务自动排队，各节独立落盘。返回 total、success、skipped 和 unresolved（失败小节及原因）；失败小节修正文件中的要求后再次提交即可。`,
@@ -439,21 +478,18 @@ ${job.references || '未提供'}` },
       } finally { activity.pending -= 1; }
     },
   },
-  ...createContentGenerationConsistencyTools({ agentService, aiService, signal, activity, onActivity, consistency, validateHtml, failTask,
-    validateResult: () => readContentGenerationResult(workspaceDir), protectLedger: () => protectLedger(baseline, workspaceDir) }, { Type, workspaceDir }),
-  ...createContentGenerationTableTools({ agentService, signal, activity, onActivity, tableCleanup, validateHtml, validateResult: () => readContentGenerationResult(workspaceDir) }, { Type, workspaceDir }),
-  ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, validateHtml, wordAdjustmentEnabled }, {
+  ...createContentGenerationConsistencyTools({ agentService, aiService, signal, activity, onActivity, consistency, inspectSection, failTask,
+    protectLedger: () => protectLedger(baseline, workspaceDir) }, { Type, workspaceDir }),
+  ...createContentGenerationTableTools({ agentService, signal, activity, onActivity, tableCleanup, inspectSection }, { Type, workspaceDir }),
+  ...createContentGenerationWordTools({ agentService, signal, activity, onActivity, imageProtection, inspectSection, wordAdjustmentEnabled }, {
     Type, workspaceDir, setActiveTools: names => setActiveTools?.(names.filter(name => wordAdjustmentEnabled || name !== 'adjust-sections')),
   }).filter(tool => wordAdjustmentEnabled || tool.name !== 'adjust-sections'),
   ...createContentGenerationImageTools({ aiService, signal, onActivity, failTask, getSections: () => JSON.parse(read(INPUT_FILES.decisions)).targets, htmlImageOptimization: generationOptions.htmlImageOptimization === true,
     beforeApply: () => imageProtection?.beforeToolCall({ toolCall: { name: 'apply-section-images' } }),
   }, { Type, workspaceDir }),
-  // 去表格完成后，子任务不再保留原表格，提交时同时检查数据表格。
+  // 进入去表格后，提交修复子任务也按当前阶段转换数据表格。
   createSubmissionFixTool({ agentService, signal, activity, onActivity,
-    validateHtml: (root, html) => {
-      validateHtml(root, html);
-      if (submissionOptions().requireNoDataTables && hasDataTables(html)) throw new Error('本节仍有数据表格，请转换为段落或列表并保留全部信息；图片表格应保留');
-    },
+    inspectSection,
     preserveDataTables: () => !submissionOptions().requireNoDataTables,
     readTargets: () => new Map(JSON.parse(read(INPUT_FILES.decisions)).targets.map(section => [section.id, section])),
     checkSection: section => sectionSubmissionIssues(workspaceDir, section, submissionOptions()),
@@ -476,8 +512,8 @@ ${planningHandoff ? '基础编排已由程序处理并保存：字数已校正�
 6. ${resuming ? '本次继续原会话。先检查正文/已完成文件，保留有效正文、图片和源码，复用已存在且符合内容的图片引用；只补齐未完成、失败或明确需要修正的小节及图片。' : '每个小节保存为正文/下的独立HTML文件。'} 工具返回统计和失败小节；对失败小节修正要求后重试，可用read/edit检查和修正已有HTML。不要删除已完成的小节。
 小节 id 是固定身份，number 才是显示编号。任务文件的 section_id、结果清单及文件名均使用 id；不得根据显示编号改写文件路径。
 7. 所有并发生成任务及配图全部完成后，再次调用 list-section-images，依据 summary 核对本轮实际新增布局与名额一致、图注及图片引用完整，并按 image_requirements 核对本轮新增图片的生成方式分布及 AI 图片画面是否分散；AI 占比是规划目标，不因比例偏差新增失败条件或额外加图。原方案图片及布局不占新增名额，也不计入 AI 占比。核对完成后，再调用 check-word-count 统一检查实际字数，不能一边生成一边按部分结果调整；工具返回总字数、上下限和差额，各节字数写入 程序清单/正文字数统计.json。完整检查后进入图片保护阶段：优先用 edit 修改正文文字，也可按需使用 bash 处理工作区文件，不能再调用正文生成或配图工具。已插入的所有图片块（包括原图、新图、图注及提示词）、图片顺序和图片表格布局不可修改；图文表格中的普通说明文字可以调整。提交时程序逐节核对图片块，不一致会退回并附上原始图片块，须原样恢复。${wordAdjustmentEnabled ? `word_control.checkTotalWords=false 时，本次仅统计目标小节字数，不依据全文上下限扩缩写本次小节；两个边界都未设置时不做字数调整。
-检查完整且尚未达标时，以字数检查工具返回的 difference 判断调整方式，该值表示实际字数距离有效上下限的不足量或超出量，不是实际总字数。差额大于10000字时，将各节增减要求写入 ${taskFilePath('adjust')}，格式为 {"sections":[{"section_id":"小节ID","instructions":"本节调整要求"}]}，再调用 adjust-sections；文件内容即本次派发的任务，下一轮按最新差额改写后再提交。差额为1～10000字时由主 Agent调整；差额为0且目标完整时，无须扩缩写。根据各节内容和篇幅分配本轮增减字数，各子任务只承担分配给本节的调整量。等待本轮全部任务结束后重新检查总字数，再依据最新差额安排下一轮。并发编辑期间你不得同时修改这些文件；等本轮所有任务结束后再调用 check-word-count。可以多轮调整，每轮按最新差额重新选择方式，直到进入要求范围，不设固定轮数。不删除原表格、原图、实质信息或承诺来凑字数；无法在保留要求下达标时明确调用 report-failure，不得伪报完成。不要再使用 generate-sections 重写整节进行字数调整。` : '本次只统计字数：统计完成后保持正文不变，不以任何方式（包括脚本批量删改）调整字数，如实提交实际字数和结果清单，进入一致性审计。'}
-8. 检查小节覆盖、字数及所有 img 的 data-yb-asset-ref 对应图片文件已存在，图片占位全部完成后将所有本次目标写入正文生成结果.json，格式为{"sections":[{"section_id":"小节ID","file":"正文/小节ID.html","words":实际正文统计字数}]}，各节字数可取自 程序清单/正文字数统计.json。该 JSON 已预置 Schema，可用 json-validation 自查，内容较多时可分多次写入。正文内容仅保存于各小节 HTML 文件。结果清单只记录小节 ID、文件路径和实际字数。完成当前正文生成阶段的全部目标和检查后，在结果清单最后一次写入或更新操作上设置 task_complete=true。标记完成后程序统一提交校验结果清单、各小节 HTML 结构、图片引用和图片块，并还原被改动的输入资料和非目标小节；不通过时退回问题清单（完整清单在 程序清单/提交校验问题.json），问题涉及的小节超过 ${SUBMISSION_FIX_PARALLEL_THRESHOLD} 个时调用 ${SUBMISSION_FIX_TOOL} 并发修复，${SUBMISSION_FIX_PARALLEL_THRESHOLD} 个及以下直接修改，修复后重新提交；最多退回 3 次。
+检查完整且尚未达标时，以字数检查工具返回的 difference 判断调整方式，该值表示实际字数距离有效上下限的不足量或超出量，不是实际总字数。差额大于10000字时，将各节增减要求写入 ${taskFilePath('adjust')}，格式为 {"sections":[{"section_id":"小节ID","instructions":"本节调整要求"}]}，再调用 adjust-sections；文件内容即本次派发的任务，下一轮按最新差额改写后再提交。差额为1～10000字时由主 Agent调整；差额为0且目标完整时，无须扩缩写。根据各节内容和篇幅分配本轮增减字数，各子任务只承担分配给本节的调整量。等待本轮全部任务结束后重新检查总字数，并提交本轮真实结果，由程序统一判断是否继续修复。并发编辑期间你不得同时修改这些文件；等本轮所有任务结束后再调用 check-word-count。收到修复要求后按最新差额安排下一轮，不自行无限循环。不删除原表格、原图、实质信息或承诺来凑字数；仍未达标时如实提交实际字数和结果清单，不因字数偏差调用 report-failure，也不得伪报达标。不要再使用 generate-sections 重写整节进行字数调整。` : '本次只统计字数：统计完成后保持正文不变，不以任何方式（包括脚本批量删改）调整字数，如实提交实际字数和结果清单，进入一致性审计。'}
+8. 检查小节覆盖、字数及所有 img 的 data-yb-asset-ref 对应图片文件已存在，图片占位全部完成后将所有本次目标写入正文生成结果.json，格式为{"sections":[{"section_id":"小节ID","file":"正文/小节ID.html","words":实际正文统计字数}]}，各节字数可取自 程序清单/正文字数统计.json。该 JSON 已预置 Schema，可用 json-validation 自查，内容较多时可分多次写入。正文内容仅保存于各小节 HTML 文件。结果清单只记录小节 ID、文件路径和实际字数。本轮生成、调整和检查结束后，在结果清单最后一次写入或更新操作上设置 task_complete=true，如实提交当前产物和字数。标记完成后程序统一提交校验结果清单、各小节 HTML 结构、图片引用和图片块，并还原被改动的输入资料和非目标小节；不通过时退回问题清单（完整清单在 程序清单/提交校验问题.json），问题涉及的小节超过 ${SUBMISSION_FIX_PARALLEL_THRESHOLD} 个时调用 ${SUBMISSION_FIX_TOOL} 并发修复，${SUBMISSION_FIX_PARALLEL_THRESHOLD} 个及以下直接修改，按程序要求修复后重新提交；程序根据进展统一决定继续修复、更换方法或接受质量遗留问题，最低目标修复后仍有阻塞问题才停止任务。
 9. 提交本阶段结果后，程序会在同一会话中发出一致性审计任务；等待下一阶段要求，不自行转换 Word。
 以下写作规则仅适用于小节 HTML 文件，不适用于结果清单：\n${writingInstructions(hasKnowledgeBase)}`;
 }
@@ -536,8 +572,9 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     beforeToolCall: context => imageProtection.beforeToolCall(context),
     recorded: file => imageProtection?.recorded(file) || null,
   };
-  // 提交校验条件随阶段变化：图片保护开始后比对图片块，去表格完成后要求没有数据表格。
-  const submissionOptions = () => ({ imageProtection: protection, requireNoDataTables: tableCleanupState?.status === 'completed' });
+  // 修复工具沿用当前阶段规则：图片保护后比对图片块，进入去表格后检查未接受的残表格。
+  const submissionOptions = () => ({ imageProtection: protection, requireNoDataTables: Boolean(tableCleanupState),
+    acceptedTableSectionIds: tableCleanupState?.remaining_section_ids || [] });
   const planningTools = [...NATIVE_AGENT_TOOLS, 'json-validation', 'ask-user', 'report-failure'];
   const generationToolNames = () => [...planningTools, ...generationTools.map(tool => tool.name)];
   const prepareFiles = context => prepareGeneration ? prepareGeneration(context) : buildFiles();
@@ -599,11 +636,39 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     runSummary ||= buildRunSummary(JSON.parse(fs.readFileSync(path.join(currentWorkspaceDir(), INPUT_FILES.decisions), 'utf8')));
     return `${reuseSession && !resuming && !planningHandoff ? '本次为目录变更后的局部生成任务，在原会话中执行。重新读取已更新的输入文件，仅对当前 targets 执行生成和审计修复；本轮完成状态根据当前目标重新确认，不沿用上一轮的完成结论。保留其他小节的 HTML、图片及源码，新增配图源码使用新文件名，不覆盖已有文件。\n' : ''}${buildContentGenerationPrompt(resuming, hasKnowledgeBase, hasOriginalPlan, wordAdjustmentEnabled, runSummary, planningHandoff)}`;
   }
+  // 验收当前阶段：共用一次产物读取，阶段检查只汇总问题，不处理修复次数。
+  function validateContentStageSubmission(workspaceDir) {
+    const inspected = inspectContentArtifacts(workspaceDir, { imageProtection: protection });
+    const issues = [...inspected.issues];
+    let progress;
+    if (stage === 'generating') {
+      const words = checkWordCount(workspaceDir, { sections: inspected.result.sections });
+      if (wordAdjustmentEnabled && words.complete && !words.in_range) {
+        issues.push({ type: 'word-count', severity: 'quality', message: '正文总字数尚未满足要求：' + JSON.stringify(reportWordCount(workspaceDir, words))
+          + '。差额大于10000字时用 adjust-sections 并发调整，其余由主 Agent 直接修改；保留实质内容和图片，不更改输入目标。' });
+        if (!issues.some(item => item.severity === 'blocking')) imageProtection.enter();
+      }
+      if (wordAdjustmentEnabled) progress = words.difference;
+    } else if (stage === 'auditing') {
+      issues.push(...collectConsistencySubmissionIssues(workspaceDir, consistencyState));
+    } else if (stage === 'table-cleaning' && (tableCleanupState.submission || tableCleanupState.status === 'completed')) {
+      issues.push(...collectTableSubmissionIssues(inspected.inspections, tableCleanupState.remaining_section_ids));
+    } else if (stage === 'layout-checking') {
+      issues.push(...collectLayoutSubmissionIssues(layoutState));
+    }
+    if (stage !== 'table-cleaning' && tableCleanupState?.status === 'completed') {
+      issues.push(...collectTableSubmissionIssues(inspected.inspections, tableCleanupState.remaining_section_ids));
+    }
+    return {
+      value: inspected.result, issues, ...(progress === undefined ? {} : { progress }),
+      minimumGoal: '结果清单是有效 JSON，覆盖本轮全部目标小节；正文完整且可转换为 Word，必要图片引用和受保护图片块有效。保留已有正文、原图和任务范围。',
+    };
+  }
+
   // 初检及复查均由程序完成，只有明确的补写任务才继续请求主模型。
-  function finishLayout(context) {
+  function finishLayout(context, result) {
     if (!checkLayout) return { complete: true };
     return (async () => {
-      const result = readContentGenerationResult(context.workspace_dir);
       await checkLayout(result, layout, context);
       context.signal?.throwIfAborted();
       if (layoutState.status === 'supplementing') {
@@ -615,10 +680,10 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     })();
   }
   // 审计结束后按既有配置去表格，随后进入本地格式检测。
-  function finishConsistency(context) {
+  function finishConsistency(context, result) {
     const decisions = JSON.parse(fs.readFileSync(path.join(context.workspace_dir, INPUT_FILES.decisions), 'utf8'));
-    if (decisions.table_requirement !== 'none') return finishLayout(context);
-    tableCleanup.save({ status: 'running', section_ids: [], completed_section_ids: [] });
+    if (decisions.table_requirement !== 'none') return finishLayout(context, result);
+    tableCleanup.save({ status: 'running', section_ids: [], completed_section_ids: [], remaining_section_ids: [], submission: null });
     imageProtection.enter(TABLE_CLEANUP_TOOLS);
     return next('table-cleaning', buildTableCleanupPrompt(tableCleanupState), compactionInstructions('正文去表格'));
   }
@@ -628,10 +693,11 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
   if (!planning && !resuming) prepareRunSummary(files);
   // 格式检测被暂停时先继续程序工作，不为跳过已完成补写再请求一次模型。
   if (stage === 'layout-checking' && layoutState.status !== 'supplementing') {
-    const continuation = await finishLayout(localContext);
+    const restoredResult = readContentGenerationResult(localContext.workspace_dir);
+    const continuation = await finishLayout(localContext, restoredResult);
     if (continuation.complete) {
       agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'success', phase: 'completed', agent_connection: 'idle', error: null });
-      return readContentGenerationResult(localContext.workspace_dir);
+      return restoredResult;
     }
   }
   const runId = crypto.randomUUID();
@@ -660,12 +726,12 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     max_retries: 1, timeout_ms: 30 * 60 * 1000,
     // 提交校验不通过时完整退回问题说明；执行失败（模型或服务中断）直接续接原任务。
     // 基础编排的执行失败沿用原有不自动重试策略，正文仍保留一次续接机会。
-    buildRetryPrompt: (error, meta) => {
-      const validationFailed = error?.agentValidationFailed === true;
-      if (stage === 'content-planning' && !validationFailed) return null;
-      if (!validationFailed) return CONTINUE_PROMPT;
-      const message = String(error?.message || error).slice(0, 6000);
-      return `上一轮提交未通过程序校验：${message}\n本次结果文件：${stage === 'content-planning' ? planning.outputFile : RESULT_FILE}。按当前阶段要求修复后重新标记完成，保留已完成内容，不重新执行已完成阶段。这是第 ${meta.attempt}/${meta.max_retries} 次退回修复。`;
+    buildRetryPrompt: (request, meta) => {
+      if (request.kind === 'execution') return stage === 'content-planning' ? null : CONTINUE_PROMPT;
+      const issues = request.mode === 'minimum' ? request.report.issues.filter(item => item.severity === 'blocking') : request.report.issues;
+      return '本次结果文件：' + (stage === 'content-planning' ? planning.outputFile : RESULT_FILE) + '。'
+        + contentSubmissionInstructions(meta.workspace_dir, issues, protection.active)
+        + ' 保留已完成内容，不重新执行已结束阶段；本轮处理后重新提交，由程序判断是否继续。';
     },
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA, ...taskFileSchemas(), ...(planning ? { [planning.outputFile]: planning.schema } : {}) },
     // 阶段门禁只限制业务工具；文件修改不在写入时拦截，由提交校验检查结果并还原程序文件。
@@ -692,18 +758,21 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
       generationTools = createContentGenerationTools({ aiService, agentService, generationOptions, hasKnowledgeBase, signal, onProgress, onActivity,
         imageProtection: protection, consistency, tableCleanup, submissionOptions, failTask }, context);
       const layoutTools = createContentGenerationLayoutTools({ agentService, signal, layout, activity: layoutActivity, onActivity,
-        validateHtml(root, html) { checkSectionHtml(html); validateContentImageReferences(root, html); assertHtmlStructure(html); },
-        validateResult: () => readContentGenerationResult(context.workspaceDir),
+        inspectSection: (section, options) => inspectSectionArtifact(context.workspaceDir, section, options),
       }, context);
       if (stage !== 'content-planning') initializeContent();
       return [...generationTools, ...layoutTools];
     },
     validateOutput: (_result, context) => {
-      if (stage === 'content-planning') return planning.validate(fs.readFileSync(path.join(context.workspace_dir, planning.outputFile), 'utf8'));
-      onActivity?.({ progress: { step: 'result-check', label: '正在核对正文结果与图片引用' } });
-      const checked = readContentGenerationResult(context.workspace_dir, { checkStructure: true, ...submissionOptions() });
-      onActivity?.({ progress: { step: 'result-check', label: '正文结果与图片引用核对完成', done: true } });
-      return checked;
+      if (stage === 'content-planning') {
+        const file = path.join(context.workspace_dir, planning.outputFile);
+        if (!fs.existsSync(file)) return { value: null, issues: [{ severity: 'blocking', file: planning.outputFile, message: planning.outputFile + ' 尚未生成，请按本阶段要求保存结果。' }] };
+        return planning.validate(fs.readFileSync(file, 'utf8'));
+      }
+      onActivity?.({ progress: { step: 'result-check', label: '正在核对正文结果与当前阶段要求' } });
+      const report = validateContentStageSubmission(context.workspace_dir);
+      onActivity?.({ progress: { step: 'result-check', label: report.issues.length ? '结果核对发现 ' + report.issues.length + ' 处问题' : '正文结果核对完成', done: report.issues.length === 0 } });
+      return report;
     },
     continueTask: (_result, context) => {
       if (stage === 'content-planning') return (async () => {
@@ -715,39 +784,50 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
         initializeContent();
         return next(stage, generationPrompt());
       })();
-      // Agent 未完成当前阶段就结束回合时，阶段要求已在会话中，只续接原任务。
-      if (stage === 'layout-checking') return layoutState.status === 'rechecking' ? finishLayout(context)
-        : next(stage, CONTINUE_PROMPT);
-      if (tableCleanupState) return tableCleanupState.status === 'completed' ? finishLayout(context)
-        : next('table-cleaning', CONTINUE_PROMPT);
-      // 审计只进行一轮：提交结论即结束，缺少依据的问题只记录，不触发重审。
-      if (consistencyState) return consistencyState.status === 'completed' ? finishConsistency(context) : next('auditing', CONTINUE_PROMPT);
-      const words = checkWordCount(context.workspace_dir);
-      if (!words.complete) {
-        const { detail_file: detailFile } = reportWordCount(context.workspace_dir, words);
-        return next('generating', `正文目标尚未完整：缺少 ${words.missing_section_ids.length} 个小节，名单见 ${detailFile} 的 missing_section_ids。补齐缺失小节和配图并更新结果清单，保留已完成内容。`);
+      const accepted = context.accepted_issues;
+      const checked = context.validation_result;
+      // 已结束的去表格阶段仅补记本轮接受的新残留项，不重新报告该阶段进度。
+      const acceptedTableIds = accepted.filter(item => item.type === 'table').map(item => item.section_id);
+      if (tableCleanupState?.status === 'completed' && acceptedTableIds.length) {
+        tableCleanupState = { ...tableCleanupState, remaining_section_ids: [...new Set([...tableCleanupState.remaining_section_ids, ...acceptedTableIds])] };
+        agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { table_cleanup: tableCleanupState });
       }
-      if (words.in_range || !wordAdjustmentEnabled) {
-        readContentGenerationResult(context.workspace_dir);
-        const decisions = JSON.parse(fs.readFileSync(path.join(context.workspace_dir, INPUT_FILES.decisions), 'utf8'));
-        const targetWords = decisions.targets.reduce((sum, section) => sum + (section.content_plan?.target_words || 0), 0);
-        onActivity?.({ message: `首次正文生成：本轮目标 ${targetWords || '未设置'} 字，实际 ${words.total_words} 字；${wordAdjustmentEnabled ? '' : '暂不扩缩写，'}进入一致性审计。` });
-        consistency.save({ status: 'extracting', extract_completed: 0, extract_total: 0, remaining_issues: [], failed_sections: [], summary: '' });
-        imageProtection.enter(CONSISTENCY_TOOLS);
-        // 小节核对与上下文压缩并行，Runtime 在两者都结束后才发送审计提示词。
-        return { ...next('auditing', consistencyPrompt(context.workspace_dir), compactionInstructions('一致性审计')), await_before_prompt: extractLedger(context) };
+      if (stage === 'layout-checking') {
+        if (!layoutState.submission) return next(stage, CONTINUE_PROMPT);
+        layout.save({ ...layoutState, submission: null, remaining_issues: accepted.map(item => item.message), status: 'rechecking' });
+        if (accepted.length) onActivity?.({ message: '格式补写阶段结束，保留 ' + accepted.length + ' 项问题：' + accepted.map(item => item.message).join('；') });
+        return finishLayout(context, checked);
       }
-      imageProtection.enter();
-      return next('generating', `正文尚未满足总字数要求：${JSON.stringify(reportWordCount(context.workspace_dir, words))}。所有并发任务结束后复查；以检查结果 difference（距离有效字数范围的差额，不是实际总字数）决定调整方式：大于10000字时将各节调整要求写入 ${taskFilePath('adjust')} 后调用 adjust-sections，为1～10000字时由主 Agent 用原生 edit 调整。继续调整并更新结果清单；不得改变输入要求或删除实质内容，确实无法满足时调用 report-failure。`);
+      if (tableCleanupState) {
+        if (tableCleanupState.status !== 'completed') {
+          if (!tableCleanupState.submission) return next('table-cleaning', CONTINUE_PROMPT);
+          tableCleanup.save({ ...tableCleanupState, submission: null, status: 'completed', remaining_section_ids: acceptedTableIds });
+        }
+        return finishLayout(context, checked);
+      }
+      if (consistencyState) {
+        if (consistencyState.status !== 'completed') {
+          if (!consistencyState.submission) return next('auditing', CONTINUE_PROMPT);
+          const submitted = consistencyState.submission;
+          consistency.save({ ...consistencyState, ...submitted, submission: null, status: 'completed',
+            remaining_issues: [...submitted.remaining_issues, ...accepted.map(item => item.message)] });
+        }
+        return finishConsistency(context, checked);
+      }
+      const decisions = JSON.parse(fs.readFileSync(path.join(context.workspace_dir, INPUT_FILES.decisions), 'utf8'));
+      const targetWords = decisions.targets.reduce((sum, section) => sum + (section.content_plan?.target_words || 0), 0);
+      const totalWords = checked.sections.reduce((sum, section) => sum + section.words, 0);
+      onActivity?.({ message: '首次正文生成：本轮目标 ' + (targetWords || '未设置') + ' 字，实际 ' + totalWords + ' 字；'
+        + (accepted.length ? '保留字数偏差，' : wordAdjustmentEnabled ? '' : '暂不扩缩写，') + '进入一致性审计。' });
+      consistency.save({ status: 'extracting', extract_completed: 0, extract_total: 0, remaining_issues: [], failed_sections: [], summary: '', submission: null });
+      imageProtection.enter(CONSISTENCY_TOOLS);
+      return { ...next('auditing', consistencyPrompt(context.workspace_dir), compactionInstructions('一致性审计')), await_before_prompt: extractLedger(context) };
     },
     onCheckpoint: checkpoint => onCheckpoint({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: runId }),
     onActivity,
   });
   signal.throwIfAborted();
-  onActivity?.({ progress: { step: 'result-check', label: '正在核对最终结果' } });
-  const output = readContentGenerationResult(result.workspace_dir);
-  onActivity?.({ progress: { step: 'result-check', label: '结果核对完成', done: true } });
-  return output;
+  return result.validation_result;
 }
 
-module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, CONTINUE_PROMPT, wasStagePrompted, BASELINE_GROUPS, listSectionFiles, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult, checkSectionHtml };
+module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, CONTINUE_PROMPT, wasStagePrompted, BASELINE_GROUPS, listSectionFiles, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult, inspectSectionArtifact, inspectContentArtifacts, checkSectionHtml };

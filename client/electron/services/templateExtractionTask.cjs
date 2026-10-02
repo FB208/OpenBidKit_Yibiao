@@ -54,7 +54,7 @@ function buildOpenXmlToolOptions(workspaceStore, openXmlHelperService) {
   };
 }
 
-// 提取模板并检查分类、Word 和字段清单，产物失败时在原会话修复一次。
+// 提取模板并报告分类、Word 和字段清单的提交问题，修复预算由 Runtime 统一管理。
 async function runTemplateExtractionTask({
   agentService,
   workspaceStore,
@@ -94,48 +94,60 @@ async function runTemplateExtractionTask({
     max_retries: 1,
     onActivity,
     onCheckpoint,
-    buildRetryPrompt(error) {
-      if (error?.agentValidationFailed !== true) return null;
-      return `投标模版提取的必需产物尚未全部有效：\n${error.message}\n请保留当前工作区已有结果，只修复上述问题。必须在当前工作目录根目录中将完整分类写入 ${TEMPLATE_CLASSIFICATION_FILE}，不得改名或另存到其他目录；空文件首次用 write 填充，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。已有内容用 edit 或 write 修复。全部分类写完后调用 openxml，参数为 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}，由工具生成 bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE}，不得手工写入最终 Word 或字段清单。分类及全部正式产物有效后才能结束。`;
+    buildRetryPrompt(request) {
+      if (request.kind === 'execution') return null;
+      return `请保留当前工作区已有结果，只修复本次提交报告中的问题。必须在当前工作目录根目录中将完整分类写入 ${TEMPLATE_CLASSIFICATION_FILE}，不得改名或另存到其他目录；空文件首次用 write 填充，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。已有内容用 edit 或 write 修复。全部分类写完后调用 openxml，参数为 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}，由工具生成 bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE}，不得手工写入最终 Word 或字段清单。分类及全部正式产物有效后才能结束。`;
     },
     async validateOutput(candidate, meta) {
       const issues = [];
       const classificationContent = String(await meta.readFile(TEMPLATE_CLASSIFICATION_FILE) || '').trim();
       if (!classificationContent) {
-        issues.push(`${TEMPLATE_CLASSIFICATION_FILE} 未生成或内容为空，请写入完整分类 JSON`);
+        issues.push({ severity: 'blocking', file: TEMPLATE_CLASSIFICATION_FILE,
+          message: `${TEMPLATE_CLASSIFICATION_FILE} 未生成或内容为空，请写入完整分类 JSON` });
       } else {
+        let classification;
         try {
-          const classification = JSON.parse(classificationContent);
-          if (!validateClassification(classification)) {
-            issues.push(`${TEMPLATE_CLASSIFICATION_FILE} 结构无效：${ajv.errorsText(validateClassification.errors, { dataVar: TEMPLATE_CLASSIFICATION_FILE })}`);
-          }
+          classification = JSON.parse(classificationContent);
         } catch (error) {
-          issues.push(`${TEMPLATE_CLASSIFICATION_FILE} 不是合法 JSON：${error?.message || String(error)}`);
+          if (!(error instanceof SyntaxError)) throw error;
+          issues.push({ severity: 'blocking', file: TEMPLATE_CLASSIFICATION_FILE,
+            message: `${TEMPLATE_CLASSIFICATION_FILE} 不是合法 JSON：${error.message}` });
+        }
+        if (classification !== undefined && !validateClassification(classification)) {
+          issues.push(...validateClassification.errors.map(item => ({
+            severity: 'blocking', file: TEMPLATE_CLASSIFICATION_FILE, path: item.instancePath || '/',
+            message: `${TEMPLATE_CLASSIFICATION_FILE} 结构无效：${item.instancePath || '/'} ${item.message}`,
+          })));
         }
       }
       if (!workspaceStore.hasBidTemplate()) {
-        issues.push(`bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE} 尚未同时生成，请通过 openxml 的 apply-template-fields 生成`);
+        issues.push({ severity: 'blocking', file: 'bid-template.docx',
+          message: `bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE} 尚未同时生成，请通过 openxml 的 apply-template-fields 生成` });
       }
       let payload;
       const outputContent = String(candidate.output_content || '').trim();
       if (!outputContent) {
-        issues.push(`${TEMPLATE_FIELDS_OUTPUT_FILE} 未生成或内容为空，请通过 openxml 的 apply-template-fields 生成`);
+        issues.push({ severity: 'blocking', file: TEMPLATE_FIELDS_OUTPUT_FILE,
+          message: `${TEMPLATE_FIELDS_OUTPUT_FILE} 未生成或内容为空，请通过 openxml 的 apply-template-fields 生成` });
       } else {
         try {
           payload = JSON.parse(outputContent);
-          if (payload?.version !== 1 || !Array.isArray(payload?.fields)) {
-            issues.push(`${TEMPLATE_FIELDS_OUTPUT_FILE} 结构无效`);
-          }
         } catch (error) {
-          issues.push(`${TEMPLATE_FIELDS_OUTPUT_FILE} 不是合法 JSON：${error?.message || String(error)}`);
+          if (!(error instanceof SyntaxError)) throw error;
+          issues.push({ severity: 'blocking', file: TEMPLATE_FIELDS_OUTPUT_FILE,
+            message: `${TEMPLATE_FIELDS_OUTPUT_FILE} 不是合法 JSON：${error.message}` });
+        }
+        if (payload !== undefined) {
+          if (payload?.version !== 1) issues.push({ severity: 'blocking', file: TEMPLATE_FIELDS_OUTPUT_FILE,
+            path: '/version', message: `${TEMPLATE_FIELDS_OUTPUT_FILE} 的 version 必须为 1` });
+          if (!Array.isArray(payload?.fields)) issues.push({ severity: 'blocking', file: TEMPLATE_FIELDS_OUTPUT_FILE,
+            path: '/fields', message: `${TEMPLATE_FIELDS_OUTPUT_FILE} 的 fields 必须为数组` });
         }
       }
-      if (issues.length) throw new Error(issues.join('\n'));
-      return { field_count: payload.fields.length };
+      return { value: issues.length ? null : { field_count: payload.fields.length }, issues };
     },
   });
 
-  const payload = JSON.parse(String(result.output_content || '').trim());
   agentService.updatePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY, {
     status: 'success',
     phase: 'completed',
@@ -147,7 +159,7 @@ async function runTemplateExtractionTask({
     status: 'success',
     task_id: result.task_id,
     session_id: result.session_id,
-    field_count: payload.fields.length,
+    field_count: result.validation_result.field_count,
   };
 }
 

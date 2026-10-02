@@ -24,6 +24,7 @@ function createHarness(t, responses) {
   fs.mkdirSync(workspaceDir);
   const prompts = [];
   const sessions = [];
+  const monitorEvents = [];
   // 续跑补压缩发生在首个提示词之前，由场景预先提供压缩实现。
   const hooks = {};
   const layout = { runtimeRoot: root, tasksRoot: path.join(root, 'tasks'), workspaceDir };
@@ -60,14 +61,15 @@ function createHarness(t, responses) {
       },
     },
   });
-  const runtime = createPiRuntimeService({ app: { getPath: () => root }, configStore: { load: () => ({}) }, aiService: {} });
+  const runtime = createPiRuntimeService({ app: { getPath: () => root }, configStore: { load: () => ({}) }, aiService: {},
+    isMonitorActive: () => true, onMonitorEvent: event => monitorEvents.push(event) });
   t.after(async () => {
     await runtime.close();
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     fs.rmSync(root, { recursive: true, force: true });
   });
   return {
-    root, hooks, read, write, exists, prompts, sessions, getStatus: runtime.getStatus,
+    root, hooks, read, write, exists, prompts, sessions, monitorEvents, getStatus: runtime.getStatus,
     run: payload => runtime.runTask({
       workspace_dir: workspaceDir,
       output_file: 'outline.json',
@@ -198,7 +200,7 @@ test('父任务取消传递给程序交接 signal，不再请求下一阶段模�
   assert.equal(harness.sessions.length, 1);
 });
 
-test('非主输出缺失在原 Session 退回修复，重试不预建、不清空现场，交接只接收通过的结果', async t => {
+test('非主输出缺失返回阻塞报告，在原 Session 修复且只交接本轮有效值', async t => {
   const file = '评分规划.json';
   const harness = createHarness(t, [
     ({ read, workspaceDir }) => {
@@ -206,7 +208,7 @@ test('非主输出缺失在原 Session 退回修复，重试不预建、不清�
       fs.unlinkSync(path.join(workspaceDir, file));
     },
     ({ prompt, exists, read, write }) => {
-      assert.equal(prompt, `只补齐 ${file}`);
+      assert.ok(prompt.includes('只补齐 ' + file));
       assert.equal(exists(file), false, '修复前不得再次预建已删除的文件');
       assert.equal(read('outline.json'), '{"保留":true}');
       write(file, '{"通过":true}');
@@ -222,73 +224,328 @@ test('非主输出缺失在原 Session 退回修复，重试不预建、不清�
       assert.equal(candidate.output_content, '{"保留":true}');
       assert.equal(meta.workflow_stage, 'score-planning');
       const source = await meta.readFile(file);
-      if (!source) throw new Error(`${file} 未生成或内容为空`);
+      if (!source) return { value: null, issues: [{ severity: 'blocking', message: file + ' 未生成或内容为空' }] };
       accepted = JSON.parse(source);
-      return accepted;
+      return { value: accepted, issues: [] };
     },
-    buildRetryPrompt(error, meta) {
-      assert.equal(error.agentValidationFailed, true);
+    buildRetryPrompt(request, meta) {
+      assert.equal(request.kind, 'submission');
+      assert.equal(request.mode, 'normal');
+      assert.equal(request.report.issues[0].severity, 'blocking');
       assert.equal(meta.workflow_stage, 'score-planning');
       assert.equal(meta.attempt, 1);
-      assert.equal(meta.max_retries, 3, '提交校验按退回上限计数，不受执行失败的 max_retries 限制');
+      assert.equal(Object.hasOwn(meta, 'max_retries'), false, '提交修复不再有固定上限');
       assert.equal(meta.retry_attempts.length, 0);
       assert.equal(meta.session_id, 'session-1');
-      return `只补齐 ${file}`;
+      return '只补齐 ' + file;
     },
     continueTask(candidate, meta) {
       handoffs += 1;
       assert.equal(Object.hasOwn(candidate, 'validation_result'), false);
       assert.equal(meta.validation_result, accepted);
+      assert.deepEqual(meta.accepted_issues, []);
       return { complete: true };
     },
   });
   assert.equal(result.validation_result, accepted);
+  assert.deepEqual(result.accepted_submission_issues, []);
   assert.equal(result.retry_count, 1);
   assert.equal(result.retry_attempts.length, 1);
   assert.equal(harness.prompts.length, 2);
   assert.equal(harness.sessions.length, 1);
   assert.equal(handoffs, 1);
+  const retries = harness.monitorEvents.filter(event => event.type === 'retry');
+  assert.equal(retries.length, 1);
+  assert.equal(Object.hasOwn(retries[0], 'maximum'), false);
 });
 
-test('提交校验连续两次问题数没有减少时提前停止，不进入阶段交接', async t => {
-  const harness = createHarness(t, [() => {}, () => {}, () => {}]);
-  let repairs = 0;
+test('阻塞问题连续两次无进展后只给一轮最低目标修复，仍有阻塞即停止', async t => {
+  const counts = [2, 2, 2, 1];
+  const harness = createHarness(t, [
+    () => {}, () => {}, () => {},
+    ({ prompt }) => {
+      assert.match(prompt, /最后一轮最低目标修复/);
+      assert.match(prompt, /最低完成目标：生成可读取的审核报告/);
+    },
+  ]);
+  const modes = [];
+  let checks = 0;
   let handoffs = 0;
   await assert.rejects(harness.run({
-    max_retries: 0,
-    validateOutput() { throw new Error('审核报告为空'); },
-    buildRetryPrompt(_error, meta) { repairs += 1; assert.equal(meta.attempt, repairs); return '补齐审核报告'; },
+    max_retries: 5,
+    validateOutput() {
+      return {
+        value: null,
+        issues: Array.from({ length: counts[checks++] }, (_, index) => ({ severity: 'blocking', message: '审核报告缺少字段 ' + (index + 1) })),
+        minimumGoal: '生成可读取的审核报告',
+      };
+    },
+    buildRetryPrompt(request, meta) {
+      assert.equal(request.kind, 'submission', '最终停止不能被当成执行异常再次重试');
+      modes.push(request.mode);
+      assert.equal(meta.attempt, modes.length);
+      return '补齐审核报告';
+    },
     continueTask() { handoffs += 1; },
   }), error => {
-    assert.match(error.message, /^审核报告为空\n提交校验已退回修复 2 次，且连续两次问题数没有减少，停止自动修复。$/);
+    assert.match(error.message, /已按最低完成目标再修复一轮/);
+    assert.match(error.message, /审核报告缺少字段 1/);
+    assert.equal(error.agentValidationFailed, true);
+    assert.equal(error.issues.length, 1, '最后一轮即使有所改善，仍有阻塞就停止');
+    assert.equal(error.agentRetryAttempts.length, 3);
+    return true;
+  });
+  assert.deepEqual(modes, ['normal', 'change-strategy', 'minimum']);
+  assert.equal(harness.prompts.length, 4);
+  assert.equal(handoffs, 0);
+  assert.equal(harness.monitorEvents.filter(event => event.type === 'task_error').length, 1);
+});
+
+test('问题持续减少时可超过三次提交修复，执行错误预算不受影响', async t => {
+  const counts = [6, 5, 4, 3, 2, 1, 0];
+  const harness = createHarness(t, counts.map(() => () => {}));
+  const repairs = [];
+  let checks = 0;
+  const result = await harness.run({
+    max_retries: 0,
+    validateOutput() {
+      const count = counts[checks++];
+      return {
+        value: { count },
+        issues: Array.from({ length: count }, (_, index) => ({ severity: 'blocking', message: '缺少字段 ' + index })),
+      };
+    },
+    buildRetryPrompt(request, meta) {
+      repairs.push([meta.attempt, request.mode, request.report.issues.length]);
+      return '继续修复';
+    },
+  });
+  assert.deepEqual(repairs, counts.slice(0, -1).map((count, index) => [index + 1, 'normal', count]));
+  assert.equal(result.retry_count, 6);
+  assert.deepEqual(result.validation_result, { count: 0 });
+  assert.equal(harness.prompts.length, 7);
+});
+
+test('质量问题连续两次无进展后以本轮真实结果继续，未解决项随交接和最终结果返回', async t => {
+  const harness = createHarness(t, [1, 2, 3].map(round => ({ write }) => write('outline.json', JSON.stringify({ round }))));
+  const issue = { severity: 'quality', message: '仍有一处术语不一致', section_id: 'section-1' };
+  const activity = [];
+  let lastValue;
+  let handoffs = 0;
+  const result = await harness.run({
+    max_retries: 0,
+    onActivity: event => activity.push(event),
+    validateOutput(candidate) {
+      lastValue = JSON.parse(candidate.output_content);
+      return { value: lastValue, issues: [issue] };
+    },
+    continueTask(candidate, meta) {
+      handoffs += 1;
+      assert.deepEqual(JSON.parse(candidate.output_content), { round: 3 });
+      assert.equal(meta.validation_result, lastValue);
+      assert.deepEqual(meta.accepted_issues, [issue]);
+      return { complete: true };
+    },
+  });
+  assert.deepEqual(result.validation_result, { round: 3 });
+  assert.deepEqual(result.accepted_submission_issues, [{ stage: 'score-planning', issues: [issue] }]);
+  assert.equal(result.retry_count, 2);
+  assert.equal(handoffs, 1);
+  assert.equal(harness.prompts.length, 3);
+  assert.ok(activity.some(event => event.source === 'pi.submission.accepted' && event.message.includes('保留当前结果')));
+});
+
+test('最低目标轮阻塞已解决时直接接受质量问题，不再增加质量修复轮', async t => {
+  const harness = createHarness(t, [() => {}, () => {}, () => {}, () => {}]);
+  const blocking = { severity: 'blocking', message: '结果清单不是合法 JSON' };
+  const quality = { severity: 'quality', message: '字数仍偏少' };
+  let checks = 0;
+  const result = await harness.run({
+    max_retries: 0,
+    validateOutput() {
+      checks += 1;
+      return { value: { readable: checks === 4 }, issues: checks < 4 ? [blocking, quality] : [quality] };
+    },
+  });
+  assert.match(harness.prompts[3], /结果清单不是合法 JSON/);
+  assert.doesNotMatch(harness.prompts[3], /字数仍偏少/, '最低目标提示不再列出具体质量问题');
+  assert.equal(result.retry_count, 3);
+  assert.deepEqual(result.validation_result, { readable: true });
+  assert.deepEqual(result.accepted_submission_issues[0].issues, [quality]);
+});
+
+test('字数问题按剩余差额判断进展，条数不变但差额减少时继续修复', async t => {
+  const gaps = [5000, 3000, 1000, 1000, 1000];
+  const harness = createHarness(t, gaps.map(() => () => {}));
+  const modes = [];
+  let checks = 0;
+  const result = await harness.run({
+    max_retries: 0,
+    validateOutput() {
+      const gap = gaps[checks++];
+      return { value: { gap }, issues: [{ severity: 'quality', message: '还差 ' + gap + ' 字' }], progress: gap };
+    },
+    buildRetryPrompt(request) { modes.push(request.mode); return '调整现有正文'; },
+  });
+  assert.deepEqual(modes, ['normal', 'normal', 'normal', 'change-strategy']);
+  assert.deepEqual(result.validation_result, { gap: 1000 });
+  assert.equal(result.retry_count, 4);
+  assert.equal(result.accepted_submission_issues.length, 1);
+});
+
+test('混合问题优先比较阻塞数量，阻塞清零后按质量剩余量继续', async t => {
+  const counts = [[2, 1], [1, 10], [1, 3], [0, 10], [0, 9], [0, 9], [0, 9]];
+  const harness = createHarness(t, counts.map(() => () => {}));
+  const modes = [];
+  let checks = 0;
+  const result = await harness.run({
+    max_retries: 0,
+    validateOutput() {
+      const [blocking, quality] = counts[checks++];
+      return {
+        value: { blocking, quality },
+        issues: [
+          ...Array.from({ length: blocking }, (_, index) => ({ severity: 'blocking', message: '阻塞问题 ' + index })),
+          ...Array.from({ length: quality }, (_, index) => ({ severity: 'quality', message: '质量问题 ' + index })),
+        ],
+      };
+    },
+    buildRetryPrompt(request) { modes.push(request.mode); return '修复当前问题'; },
+  });
+  assert.deepEqual(modes, ['normal', 'normal', 'change-strategy', 'normal', 'normal', 'change-strategy']);
+  assert.deepEqual(result.validation_result, { blocking: 0, quality: 9 });
+});
+
+test('同阶段续接不重置提交策略，短暂无问题也不重新给予已有问题的修复预算', async t => {
+  const harness = createHarness(t, [() => {}, () => {}, () => {}, () => {}]);
+  const issue = { severity: 'quality', message: '仍有表格' };
+  const repairs = [];
+  let checks = 0;
+  let handoffs = 0;
+  const result = await harness.run({
+    max_retries: 0,
+    validateOutput() {
+      checks += 1;
+      return { value: { round: checks }, issues: checks === 3 ? [] : [issue] };
+    },
+    buildRetryPrompt(request, meta) { repairs.push([meta.attempt, request.mode]); return '处理表格'; },
+    continueTask(_candidate, meta) {
+      handoffs += 1;
+      return handoffs === 1
+        ? { stage: meta.workflow_stage, prompt: '提交阶段结论' }
+        : { complete: true };
+    },
+  });
+  assert.deepEqual(repairs, [[1, 'normal'], [2, 'change-strategy']]);
+  assert.equal(harness.prompts.length, 4);
+  assert.deepEqual(result.validation_result, { round: 4 });
+  assert.deepEqual(result.accepted_submission_issues[0].issues, [issue]);
+});
+
+test('真正切换业务阶段后重新计数，各阶段放行问题都保留在最终结果', async t => {
+  const harness = createHarness(t, Array.from({ length: 6 }, () => () => {}));
+  const repairs = [];
+  const result = await harness.run({
+    max_retries: 0,
+    validateOutput(_candidate, meta) {
+      return { value: { stage: meta.workflow_stage }, issues: [{ severity: 'quality', message: meta.workflow_stage + ' 的质量问题' }] };
+    },
+    buildRetryPrompt(request, meta) { repairs.push([meta.workflow_stage, meta.attempt, request.mode]); return '修复当前问题'; },
+    continueTask(_candidate, meta) {
+      return meta.workflow_stage === 'score-planning'
+        ? { stage: 'outline_review', prompt: '审核目录' }
+        : { complete: true };
+    },
+  });
+  assert.deepEqual(repairs, [
+    ['score-planning', 1, 'normal'], ['score-planning', 2, 'change-strategy'],
+    ['outline_review', 1, 'normal'], ['outline_review', 2, 'change-strategy'],
+  ]);
+  assert.deepEqual(result.accepted_submission_issues.map(item => item.stage), ['score-planning', 'outline_review']);
+  assert.equal(result.retry_count, 4);
+});
+
+test('执行失败穿插于提交修复时不重置停滞计数，两类修复各自计数并共用遥测', async t => {
+  const harness = createHarness(t, [() => {}, () => { throw new Error('模型执行失败'); }, () => {}, () => {}]);
+  const requests = [];
+  const result = await harness.run({
+    max_retries: 1,
+    validateOutput() {
+      return { value: { ready: true }, issues: [{ severity: 'quality', message: '仍有表格' }] };
+    },
+    buildRetryPrompt(request, meta) {
+      requests.push([request.kind, meta.attempt, request.mode]);
+      if (request.kind === 'execution') {
+        assert.equal(request.error.message, '模型执行失败');
+        assert.equal(meta.max_retries, 1);
+        return '继续之前的任务';
+      }
+      return '处理剩余表格';
+    },
+  });
+  assert.deepEqual(requests, [
+    ['submission', 1, 'normal'], ['execution', 1, undefined], ['submission', 2, 'change-strategy'],
+  ]);
+  assert.equal(result.retry_count, 3);
+  const retries = harness.monitorEvents.filter(event => event.type === 'retry');
+  assert.deepEqual(retries.map(event => event.maximum), [undefined, 1, undefined]);
+  assert.equal(result.retry_attempts[1].error, '模型执行失败');
+});
+
+test('校验函数抛出的程序异常仍按执行预算重试，不自动转为产物问题', async t => {
+  const harness = createHarness(t, [() => {}, () => {}]);
+  const failure = new Error('程序读取失败');
+  let checks = 0;
+  const result = await harness.run({
+    max_retries: 1,
+    validateOutput() {
+      checks += 1;
+      if (checks === 1) throw failure;
+      return { value: { ready: true }, issues: [] };
+    },
+    buildRetryPrompt(request, meta) {
+      assert.equal(request.kind, 'execution');
+      assert.equal(request.error, failure);
+      assert.equal(request.error.agentValidationFailed, undefined);
+      assert.equal(meta.attempt, 1);
+      return '继续之前的任务';
+    },
+  });
+  assert.deepEqual(result.validation_result, { ready: true });
+  assert.equal(result.retry_count, 1);
+});
+
+test('提交修复过程中执行预算耗尽时保留原执行错误，不执行最低目标修复', async t => {
+  const failure = new Error('模型连续失败');
+  const harness = createHarness(t, [() => {}, () => { throw failure; }, () => { throw failure; }]);
+  const kinds = [];
+  await assert.rejects(harness.run({
+    max_retries: 1,
+    validateOutput() { return { value: null, issues: [{ severity: 'blocking', message: '结果为空' }] }; },
+    buildRetryPrompt(request) { kinds.push(request.kind); return '继续'; },
+  }), error => {
+    assert.equal(error, failure);
+    assert.equal(error.agentValidationFailed, undefined);
     assert.equal(error.agentRetryAttempts.length, 2);
     return true;
   });
-  assert.equal(harness.prompts.length, 3);
-  assert.equal(repairs, 2);
-  assert.equal(handoffs, 0);
+  assert.deepEqual(kinds, ['submission', 'execution']);
 });
 
-test('问题持续减少时最多退回 3 次，执行失败另按 max_retries 计数', async t => {
-  const harness = createHarness(t, [() => {}, () => {}, () => {}, () => {}]);
-  const counts = [5, 4, 3, 2];
+test('业务回调不能用 null 否决提交修复，换方案与最低目标仍由公共策略控制', async t => {
+  const harness = createHarness(t, [() => {}, () => {}, () => {}]);
   let checks = 0;
-  const repairs = [];
-  await assert.rejects(harness.run({
+  const result = await harness.run({
     max_retries: 0,
     validateOutput() {
-      const error = new Error(`还有 ${counts[checks]} 处问题`);
-      error.issues = Array.from({ length: counts[checks] }, (_item, index) => `问题 ${index + 1}`);
       checks += 1;
-      throw error;
+      return { value: checks, issues: [{ severity: 'quality', message: '一处表格未转换' }] };
     },
-    buildRetryPrompt(error, meta) { repairs.push([meta.attempt, meta.max_retries, error.issues.length]); return '继续修复'; },
-  }), error => {
-    assert.match(error.message, /^还有 2 处问题\n提交校验已退回修复 3 次，停止自动修复。$/);
-    return true;
+    buildRetryPrompt(request) { assert.equal(request.kind, 'submission'); return null; },
   });
-  assert.deepEqual(repairs, [[1, 3, 5], [2, 3, 4], [3, 3, 3]]);
-  assert.equal(harness.prompts.length, 4);
+  assert.match(harness.prompts[1], /本轮待修复问题/);
+  assert.match(harness.prompts[2], /更换具体处理方法/);
+  assert.equal(result.validation_result, 3);
 });
 
 test('提交校验前还原被改动的输入文件，Agent 结果文件不登记保护', async t => {
@@ -314,16 +571,18 @@ test('提交校验前还原被改动的输入文件，Agent 结果文件不登�
     json_validation_schemas: { '结果.json': { type: 'object' } },
     async validateOutput(candidate, meta) {
       checked.push(await meta.readFile('资料/项目概述.md'));
-      if (checked.length === 1) throw new Error('需要再确认一次');
-      return JSON.parse(candidate.output_content);
+      return {
+        value: JSON.parse(candidate.output_content),
+        issues: checked.length === 1 ? [{ severity: 'blocking', message: '需要再确认一次' }] : [],
+      };
     },
-    buildRetryPrompt: error => error.message,
+    buildRetryPrompt: request => request.report.issues.map(issue => issue.message).join('\n'),
   });
   assert.deepEqual(checked, ['原始概述', '原始概述'], '还原发生在业务校验之前');
   assert.deepEqual(result.validation_result, { 目录: true });
 });
 
-test('每个阶段独立拥有一次修复机会，保持同一 Session 和正确的阶段结果', async t => {
+test('每个阶段分别修复必需产物，保持同一 Session 和正确的阶段结果', async t => {
   const harness = createHarness(t, [
     () => {},
     ({ write }) => write('第一阶段.json', '{"阶段":"score-planning"}'),
@@ -338,12 +597,13 @@ test('每个阶段独立拥有一次修复机会，保持同一 Session 和正�
     async validateOutput(_candidate, meta) {
       const file = meta.workflow_stage === 'score-planning' ? '第一阶段.json' : '第二阶段.json';
       const source = await meta.readFile(file);
-      if (!source) throw new Error(`${file} 为空`);
-      return JSON.parse(source);
+      return source
+        ? { value: JSON.parse(source), issues: [] }
+        : { value: null, issues: [{ severity: 'blocking', message: file + ' 为空' }] };
     },
-    buildRetryPrompt(_error, meta) {
+    buildRetryPrompt(_request, meta) {
       repairs.push([meta.workflow_stage, meta.attempt]);
-      return `修复 ${meta.workflow_stage}`;
+      return '修复 ' + meta.workflow_stage;
     },
     continueTask(_candidate, meta) {
       assert.equal(meta.validation_result.阶段, meta.workflow_stage);
@@ -366,7 +626,7 @@ test('阶段交接失败不进入修复循环，不重放写回或发布等副�
   let repairs = 0;
   await assert.rejects(harness.run({
     max_retries: 1,
-    validateOutput() { return { ready: true }; },
+    validateOutput() { return { value: { ready: true }, issues: [] }; },
     buildRetryPrompt() { repairs += 1; return '不应修复'; },
     continueTask(_candidate, meta) {
       assert.deepEqual(meta.validation_result, { ready: true });
@@ -388,9 +648,10 @@ test('定制回调返回 null 时普通执行错误立即失败且不登记修�
   let decisions = 0;
   await assert.rejects(harness.run({
     max_retries: 1,
-    buildRetryPrompt(error, meta) {
+    buildRetryPrompt(request, meta) {
       decisions += 1;
-      assert.equal(error.agentValidationFailed, undefined);
+      assert.equal(request.kind, 'execution');
+      assert.equal(request.error.message, '模型执行失败');
       assert.equal(meta.retry_attempts.length, 0);
       return null;
     },
@@ -403,7 +664,7 @@ test('定制回调返回 null 时普通执行错误立即失败且不登记修�
   assert.equal(harness.prompts.length, 1);
 });
 
-test('未启用新选项的调用保留默认一次重试和原修复提示，不主动预建文件', async t => {
+test('没有提交校验的任务保留默认一次执行重试，不主动预建文件', async t => {
   const harness = createHarness(t, [
     ({ exists }) => {
       assert.equal(exists('outline.json'), false);
@@ -417,6 +678,8 @@ test('未启用新选项的调用保留默认一次重试和原修复提示，�
   ]);
   const result = await harness.run({});
   assert.equal(result.output_content, '{"完成":true}');
+  assert.equal(result.validation_result, null);
+  assert.deepEqual(result.accepted_submission_issues, []);
   assert.equal(result.retry_count, 1);
   assert.equal(harness.prompts.length, 2);
 });

@@ -545,7 +545,9 @@ function readContentPlanningJson(content) {
 // 校验模型输出，只按稳定 ID 提取本轮目标编排，不接受目录结构或非目标结果。
 function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds, targetItemIds) {
   if (!validateContentPlanningResult(value)) {
-    throw new Error(`正文编排结果格式错误：${contentPlanningAjv.errorsText(validateContentPlanningResult.errors)}`);
+    const error = new Error('正文编排结果格式错误：' + contentPlanningAjv.errorsText(validateContentPlanningResult.errors));
+    error.issues = validateContentPlanningResult.errors.map(item => (item.instancePath || '/') + ' ' + item.message);
+    throw error;
   }
   const aiLeafIds = new Set(collectLeafContexts(sourceItems).filter(({ item }) => item.content_mode === 'ai-generate').map(({ item }) => item.id));
   const expectedIds = targetItemIds || aiLeafIds;
@@ -1817,10 +1819,16 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       outputFile: CONTENT_PLANNING_OUTPUT_FILE,
       schema: CONTENT_PLANNING_JSON_SCHEMA,
       validate(content) {
-        const plans = extractContentPlanningPlans(readContentPlanningJson(content), outlineData.outline,
-          allowedKnowledgeItemIds, new Set(targetItemIds));
-        allocateContentWordTargets(plans, wordControl, leaves.length, isIncremental);
-        return plans;
+        try {
+          const plans = extractContentPlanningPlans(readContentPlanningJson(content), outlineData.outline,
+            allowedKnowledgeItemIds, new Set(targetItemIds));
+          allocateContentWordTargets(plans, wordControl, leaves.length, isIncremental);
+          return { value: plans, issues: [] };
+        } catch (error) {
+          if (error.code || error.constructor !== Error) throw error;
+          return { value: null, issues: (error.issues || [error.message]).map(message => ({ severity: 'blocking', file: CONTENT_PLANNING_OUTPUT_FILE, message })),
+            minimumGoal: '编排结果是完整有效的 JSON，覆盖本轮目标小节，保留稳定 ID，并提供生成正文所需的写作重点、字数、知识引用及表格安排。' };
+        }
       },
     };
   }
@@ -2293,7 +2301,16 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         initial_stage: 'restoring',
         json_validation_schemas: { 'original-restore-result.json': ORIGINAL_RESTORATION_JSON_SCHEMA },
         max_retries: 1,
-        validateOutput: result => validateOriginalRestoration(assertOriginalRestorationSchema(parseAgentJsonContent(result?.output_content)), validationContext),
+        validateOutput: result => {
+          try {
+            const restored = validateOriginalRestoration(assertOriginalRestorationSchema(parseAgentJsonContent(result.output_content)), validationContext);
+            return { value: restored, issues: [] };
+          } catch (error) {
+            if (error.code || error.constructor !== Error) throw error;
+            return { value: null, issues: (error.issues || [error.message]).map(message => ({ severity: 'blocking', file: 'original-restore-result.json', message })),
+              minimumGoal: '还原结果是有效 JSON，原文各行都有明确去向，目标小节 ID 有效，原表格和图片完整且归属正确。' };
+          }
+        },
         onActivity: context.onActivity,
 
       });
@@ -2315,8 +2332,8 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
     reportWorkflowProgress({ step: 'restoration-save', label: '正在校验并保存原方案还原结果' });
     const outputContent = String(agentResult.output_content || '');
-    // 持久会话返回的结果也须通过现有原文完整性检查后才能写入业务正文。
-    const result = validateOriginalRestoration(parseAgentJsonContent(outputContent), validationContext);
+    // 运行时只在提交通过后返回，直接使用本轮已经验收的原文分配。
+    const result = agentResult.validation_result;
     writeDeveloperLog('original_restore.agent.validated', {
       assignment_count: result.assignments.length,
       unassigned: result.unassigned,
@@ -2448,12 +2465,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             contentStats.consistency_extract_total = state.extract_total || 0;
             // 核对阶段的逐节进度由 consistency-extract 事件记录，这里只在进入比对修复和完成时切换步骤。
             if (changedStatus && state.status !== 'extracting') recordContentWorkflowProgress(contentStats, { step: 'audit',
-              label: state.status === 'completed' ? '一致性审计及修复完成' : '主 Agent 跨节比对并统一修复', done: state.status === 'completed' });
+              label: state.status === 'completed' ? (state.remaining_issues.length ? '一致性审计结束，保留遗留问题' : '一致性审计及修复完成') : '主 Agent 跨节比对并统一修复', done: state.status === 'completed' });
             contentStats.consistency_summary = state.summary || '';
             contentStats.consistency_remaining_issues = state.remaining_issues;
             if (state.status === 'completed') {
               logs = [...logs, state.remaining_issues.length
-                ? `一致性审计完成，${state.remaining_issues.length} 项缺少依据需人工确认：${state.remaining_issues.join('；')}`
+                ? `一致性审计结束，保留 ${state.remaining_issues.length} 项未解决问题：${state.remaining_issues.join('；')}`
                 : '本次目标小节一致性审计及修复完成，未发现尚未解决的矛盾。'];
             }
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'auditing' }) });
@@ -2462,7 +2479,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             contentStats.phase = 'table-cleaning';
             contentStats.table_cleanup_total = state.section_ids.length;
             contentStats.table_cleanup_completed = state.completed_section_ids.length;
-            if (state.status === 'completed') logs = [...logs, `去表格完成，已处理 ${state.completed_section_ids.length} 个小节，图片表格保留。`];
+            if (state.status === 'completed') logs = [...logs, state.remaining_section_ids.length
+              ? `去表格阶段结束，${state.remaining_section_ids.length} 个小节仍有数据表格，已记录并继续后续流程。`
+              : `去表格完成，已处理 ${state.completed_section_ids.length} 个小节，图片表格保留。`];
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
           },
           onLayoutProgress(state) {

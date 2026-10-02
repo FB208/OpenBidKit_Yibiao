@@ -10,15 +10,17 @@ function countHtmlWords(html) {
   return countReadableWords(String(html).replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, ''));
 }
 
-// 每轮所有任务结束后读取文件；单节重生只报告字数，不承担全文目标。
-function checkWordCount(workspaceDir) {
+// 每轮按真实小节结果统计字数；提交检查可传入本次已读取的 sections，避免再次扫描正文。
+function checkWordCount(workspaceDir, { sections: inspectedSections } = {}) {
   const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+  const inspected = inspectedSections === undefined ? null : new Map(inspectedSections.map(section => [section.section_id, section]));
   const sections = [];
   const missing = [];
   for (const section of decisions.targets) {
     try {
-      const words = countHtmlWords(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
-      if (!words) missing.push(section.id);
+      const words = inspected ? inspected.get(section.id)?.words || 0
+        : countHtmlWords(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
+      if (words <= 0) missing.push(section.id);
       else sections.push({ section_id: section.id, number: section.number, file: section.file, words });
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
@@ -50,22 +52,20 @@ function reportWordCount(workspaceDir, words) {
 const WORD_COUNT_ONLY_NOTE = '本次只统计实际字数：保持正文不变，不以任何方式（包括脚本批量删改）调整字数，直接提交结果清单。';
 
 // 主 Agent 负责分配调整要求；每个子任务直接用 Pi 原生工具修改自己的文件。
-function createContentGenerationWordTools({ agentService, signal, activity, validateHtml, onActivity, imageProtection, wordAdjustmentEnabled = true }, { Type, workspaceDir, setActiveTools }) {
+function createContentGenerationWordTools({ agentService, signal, activity, inspectSection, onActivity, imageProtection, wordAdjustmentEnabled = true }, { Type, workspaceDir, setActiveTools }) {
   // 基础编排时先注册工具，执行字数检查时再读取程序保存的生效决策。
   const readDecisions = () => JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
   let protection = imageProtection;
   // 正文和配图全部就绪才切换权限，避免把未完成配图锁在扩缩写阶段。
   function enterAdjustment() {
-    const words = checkWordCount(workspaceDir);
+    const decisions = readDecisions();
+    const inspections = decisions.targets.map(section => inspectSection(section, { checkStructure: true }));
+    const words = checkWordCount(workspaceDir, { sections: inspections.map(item => item.section).filter(Boolean) });
     if (words.complete) {
-      const decisions = readDecisions();
-      // 进入图片保护前逐节校验，错误注明文件，便于 Agent 定位修正。
-      for (const section of decisions.targets) {
-        try {
-          validateHtml(workspaceDir, fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
-        } catch (error) {
-          throw new Error(`${section.file}：${error.message}`, { cause: error });
-        }
+      // 图片保护记录只建立在结构和引用有效的正文上，复用同一次检查得到的字数。
+      for (let index = 0; index < inspections.length; index += 1) {
+        const issues = inspections[index].issues;
+        if (issues.length) throw new Error(`${decisions.targets[index].file}：${issues.map(issue => issue.message).join('；')}`);
       }
       protection ||= createContentImageProtection({ workspaceDir, files: decisions.targets.map(section => section.file), setActiveTools });
       protection.enter();
@@ -95,7 +95,7 @@ function createContentGenerationWordTools({ agentService, signal, activity, vali
       const targets = new Map(readDecisions().targets.map(section => [section.id, section]));
       const { sections: jobs } = readTaskFile(workspaceDir, 'adjust');
       const { results, restored } = await editContentSections({
-        jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, validateHtml, onActivity,
+        jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, inspectSection, onActivity,
         title: '正文扩缩写', instructions: '缩写时优先删除重复表述、冗余修饰和可合并的说明；扩写时补充与本节主题相关的实施细节。两种调整均须保留实质信息、事实参数和承诺，禁止通过删除必要信息或重复表达满足字数要求。',
       });
       return result({ results, restored }, batchResponse(results, restored));

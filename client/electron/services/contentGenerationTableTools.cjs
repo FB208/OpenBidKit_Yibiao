@@ -21,12 +21,12 @@ function buildTableCleanupPrompt(state) {
 将需要转换的小节写入 ${taskFilePath('tables')}，格式为 {"sections":[{"section_id":"小节 ID","instructions":"本节表格的补充说明，没有时填空字符串"}]}，再调用 remove-section-tables，程序按小节并发分配转换任务；同一小节中的多个表格交给同一个子任务，不同时编辑同一个文件。${TASK_FILE_WRITING}
 将每个数据表格转换为受限 HTML 段落或列表。转换后的文字应明确表达原表中各项数据与行、列表头的对应关系，并保留表题含义、数值、单位、条件、备注及承诺。仅改变表达形式，不删减信息或进行无关改写。
 data-yb-preset 为 imageText、threeImages 或 fourImages 的表格属于图片布局，不参与去表格处理，保留其完整结构和内容；其他图片、图注、提示词和引用也不修改。此阶段允许改变原方案数据表格的表达形式，保留其全部信息，不受之前“保留原表格形式”的要求限制。
-等待全部并发任务结束，失败或中断的子任务需要重读文件并重新安排。目前已提交 ${state.section_ids.length} 个小节，已完成 ${state.completed_section_ids.length} 个，尚未成功 ${state.section_ids.filter(id => !state.completed_section_ids.includes(id)).length} 个，小节 ID 见 程序清单/去表格进度.json；已完成的小节再次提交时自动跳过。
-重读修改结果，确认数据表格全部转换且信息完整，然后调用 complete-table-cleanup，并在该调用上标记 task_complete=true。没有数据表格也调用该工具结束。不要重新生成正文、配图、审计或检查字数范围，不自行转换 Word。`;
+等待全部并发任务结束，根据当前文件和返回结果处理未完成项，本轮结束后提交真实结果。目前已提交 ${state.section_ids.length} 个小节，已完成 ${state.completed_section_ids.length} 个，尚未成功 ${state.section_ids.filter(id => !state.completed_section_ids.includes(id)).length} 个，小节 ID 见 程序清单/去表格进度.json；已完成的小节再次提交时自动跳过。
+重读修改结果，核实表格转换情况和信息是否保留，然后调用 complete-table-cleanup，并在该调用上标记 task_complete=true；仍有表格时如实提交，由程序统一决定继续修复或接受遗留问题。没有数据表格也调用该工具结束。不要重新生成正文、配图、审计或检查字数范围，不自行转换 Word。`;
 }
 
-// 复用并发编辑与持久状态，完成时检查遗漏，不把失败小节当作成功。
-function createContentGenerationTableTools({ agentService, signal, activity, validateHtml, validateResult, onActivity, tableCleanup }, { Type, workspaceDir }) {
+// 复用并发编辑与真实进度，完成工具仅提交请求，去表格质量由主流程统一验收。
+function createContentGenerationTableTools({ agentService, signal, activity, inspectSection, onActivity, tableCleanup }, { Type, workspaceDir }) {
   // 工具提前注册，去表格阶段才读取程序保存的生效决策。
   const readDecisions = () => JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
   const result = (details, text = details) => ({ content: [{ type: 'text', text: JSON.stringify(text) }], details });
@@ -38,7 +38,7 @@ function createContentGenerationTableTools({ agentService, signal, activity, val
   }
   return [{
     name: 'remove-section-tables', label: '并发去除数据表格', executionMode: 'sequential',
-    description: `读取 ${taskFilePath('tables')} 中的小节，将各节全部数据表格转换为普通段落或列表，格式为 {"sections":[{"section_id":"本次目标小节 ID","instructions":"本节表格的补充说明，没有时填空字符串"}]}，保留原始信息和所有图片表格。已完成去表格的小节自动跳过，确需重新处理时该项加 "regenerate": true。${TASK_FILE_WRITING}各子任务用 Pi 原生 edit 修改自己的 HTML，失败返回主 Agent 重试。返回 total、success、skipped 和 unresolved（失败小节及原因）。`,
+    description: `读取 ${taskFilePath('tables')} 中的小节，将各节全部数据表格转换为普通段落或列表，格式为 {"sections":[{"section_id":"本次目标小节 ID","instructions":"本节表格的补充说明，没有时填空字符串"}]}，保留原始信息和所有图片表格。已完成去表格的小节自动跳过，确需重新处理时该项加 "regenerate": true。${TASK_FILE_WRITING}各子任务用 Pi 原生 edit 修改自己的 HTML，未成功项返回主 Agent 统一处理。返回 total、success、skipped 和 unresolved（失败小节及原因）。`,
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_callId, _params, toolSignal) {
       const state = requireCleanup();
@@ -54,12 +54,10 @@ function createContentGenerationTableTools({ agentService, signal, activity, val
         jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, onActivity,
         title: '正文去表格', preserveDataTables: false,
         instructions: '把本节全部数据表格转换为受限 HTML 段落或列表，包括原方案表格。转换后的文字应明确表达各项数据与行、列表头的对应关系，保留表题含义、数值、单位、条件、备注及承诺。data-yb-preset 为 imageText、threeImages 或 fourImages 的图片表格保留完整结构和内容。仅改变表达形式，不删减信息、不作无关改写、不调整总字数。若重试时数据表格已经全部转换，核实信息完整后可在 read 上标记完成。',
-        validateHtml(root, html) {
-          validateHtml(root, html);
-          if (hasDataTables(html)) throw new Error('本节仍有数据表格，请继续转换；图片表格应保留');
-        },
+        inspectSection,
         onResult(item) {
-          if (item.status !== 'success') return;
+          // 产物有效且确实没有数据表格，才计入已完成去表格的小节。
+          if (item.status !== 'success' || item.facts.has_data_tables) return;
           const current = tableCleanup.get();
           tableCleanup.save({ ...current, completed_section_ids: [...new Set([...current.completed_section_ids, item.section_id])] });
         },
@@ -70,19 +68,13 @@ function createContentGenerationTableTools({ agentService, signal, activity, val
     },
   }, {
     name: 'complete-table-cleanup', label: '完成去表格检查', executionMode: 'sequential',
-    description: '全部转换完成并核实信息保留后调用。检查本次目标中是否遗漏数据表格，不调整字数；图片表格允许保留。',
+    description: '本轮处理并核实信息保留后提交真实结果，由程序统一检查残留数据表格并决定下一步；不调整字数，图片表格允许保留。',
     parameters: Type.Object({}),
     async execute() {
       const state = requireCleanup();
-      const pending = state.section_ids.filter(id => !state.completed_section_ids.includes(id));
-      if (pending.length) throw new Error(`以下小节尚未成功，请重新安排：${pending.join('、')}`);
-      const decisions = readDecisions();
-      const remaining = decisions.targets.filter(section => hasDataTables(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8')));
-      if (remaining.length) throw new Error(`以下小节仍有数据表格：${remaining.map(section => section.id).join('、')}`);
-      validateResult();
-      const next = { ...state, status: 'completed' };
-      tableCleanup.save(next);
-      return result(next);
+      // 本轮先提交真实结果，质量验收接受后由主流程推进阶段。
+      tableCleanup.save({ ...state, submission: {} });
+      return result({ submitted: true });
     },
   }];
 }
