@@ -1392,7 +1392,7 @@ function createAgentOpenAiProxy({
       }
 
       if (!selected) {
-        const error = new Error('本地 AI Proxy 已依次尝试 IPv4、IPv6 和 localhost，但均未形成可用回连；可能被本机安全软件、企业终端管控、VPN/网络过滤驱动或 Windows TCP/IP loopback 异常阻断');
+        const error = new Error(`本地 AI Proxy 已依次尝试 IPv4、IPv6 和 localhost，均未在 ${DEFAULT_LOOPBACK_PROBE_TIMEOUT_MS / 1000} 秒内完成回连；可能是主进程繁忙（如同时启动大量 Agent），也可能被本机安全软件、企业终端管控、VPN/网络过滤驱动或 Windows TCP/IP loopback 异常阻断`);
         error.code = 'AGENT_PROXY_LOOPBACK_BLOCKED';
         error.loopbackAttempts = attempts;
         appendProxyDiagnostic(diagnostics, 'proxy.loopback.blocked', { attempts });

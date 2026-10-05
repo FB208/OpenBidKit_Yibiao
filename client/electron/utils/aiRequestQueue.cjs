@@ -1,4 +1,6 @@
 const AI_QUEUE_SCOPE_PAUSED = 'AI_QUEUE_SCOPE_PAUSED';
+// 并发上限来自配置文件；短时缓存避免出队和状态查询反复同步读取，改配置后最迟 1 秒生效。
+const LIMIT_CACHE_MS = 1000;
 const {
   AI_REQUEST_MAX_ATTEMPTS,
   getAiRetryDelayMs,
@@ -25,13 +27,19 @@ function createAiRequestQueue(options = {}) {
     ? options.getLimit
     : () => options.limit || 10;
   const fallbackLimit = normalizeLimit(options.defaultLimit, 10);
+  let cachedLimit = 0;
+  let cachedLimitAt = 0;
 
   function currentLimit() {
+    const now = Date.now();
+    if (cachedLimit && now - cachedLimitAt < LIMIT_CACHE_MS) return cachedLimit;
     try {
-      return normalizeLimit(getLimit(), fallbackLimit);
+      cachedLimit = normalizeLimit(getLimit(), fallbackLimit);
     } catch {
-      return fallbackLimit;
+      cachedLimit = fallbackLimit;
     }
+    cachedLimitAt = now;
+    return cachedLimit;
   }
 
   function rejectIfPaused(job) {

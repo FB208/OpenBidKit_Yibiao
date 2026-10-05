@@ -42,6 +42,8 @@ const MAX_RETRIES = 3;
 // Runtime 写入的输入文件所在的受保护分组。
 const INPUT_BASELINE_GROUP = 'inputs';
 const STATUS_TICK_MS = 1000;
+// 达到 max_turns_per_prompt 时的错误码；该错误不进入执行重试续跑。
+const AGENT_TURN_LIMIT_CODE = 'AGENT_TURN_LIMIT';
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
 const SELF_CHECK_OUTPUT_SCHEMA = {
   type: 'object',
@@ -333,8 +335,9 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     };
   }
 
+  // 推送只通知状态变化；共享 AI 队列状态由 agentService 汇总时统一读取一次。
   function emitStatus() {
-    const status = getStatus();
+    const status = getStatus({ includeProxyStatus: false });
     listeners.forEach((listener) => {
       try { listener(status); } catch {}
     });
@@ -731,6 +734,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     const outputFile = payload.output_file || 'agent-result.md';
     const timeoutMs = normalizeTimeoutMs(payload.timeout_ms);
     const maxRetries = normalizeMaxRetries(payload.max_retries);
+    // 每条提示词之后最多执行的轮数，0 表示不限制；目前由 agentService 为子代理统一设置。
+    const maxTurnsPerPrompt = Math.max(0, Math.floor(Number(payload.max_turns_per_prompt) || 0));
     const summaryEnabled = payload.summary_enabled !== false;
     const retryAttempts = [];
     const modelRetryStats = { count: 0 };
@@ -803,6 +808,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     let session = null;
     let sessionSnapshot = null;
     let unsubscribe = null;
+    let unsubscribeTurnLimit = null;
     let archivedWorkspace = '';
     let retainTransientWorkspace = false;
     const diffEntries = [];
@@ -878,6 +884,19 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         });
       }
       unsubscribe = subscribeSession(session, taskToken, diffEntries, modelRetryStats);
+      // 发送提示词前清零，压缩不清零；第 maxTurnsPerPrompt + 1 轮开始时中止本次任务。
+      let turnsInPrompt = 0;
+      if (maxTurnsPerPrompt) {
+        unsubscribeTurnLimit = session.subscribe((event) => {
+          if (event.type !== 'turn_start' || activeController.signal.aborted) return;
+          turnsInPrompt += 1;
+          if (turnsInPrompt <= maxTurnsPerPrompt) return;
+          const error = new Error(`子代理在一次任务提示后已连续执行 ${maxTurnsPerPrompt} 轮仍未结束，已停止本次子任务`);
+          error.code = AGENT_TURN_LIMIT_CODE;
+          touchActivity({ task_token: taskToken, stage: 'turn_limit', message: error.message, source: 'pi.turn-limit', visible: true, activity: false });
+          activeController.abort(error);
+        });
+      }
       let assistantText = '';
       let validationResult = null;
       let retryCount = 0;
@@ -1066,6 +1085,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
               prompted_stage: activeTask.workflow_stage,
               ...(clearsPendingCompaction ? { compaction_pending: null } : {}),
             });
+            turnsInPrompt = 0;
             await session.prompt(stagePrompt, { expandPromptTemplates: false });
             if (activeController.signal.aborted) throw activeController.signal.reason;
             const assistantError = getAssistantError(session.messages);
@@ -1307,6 +1327,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       throw error;
     } finally {
       unsubscribe?.();
+      unsubscribeTurnLimit?.();
       session?.dispose?.();
       cleanupAbort();
       clearInterval(watchdog);
