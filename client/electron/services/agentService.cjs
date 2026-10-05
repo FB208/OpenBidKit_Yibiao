@@ -464,7 +464,8 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   }
 
   function getEntryActiveTask(entry) {
-    const runtimeStatus = entry.runtime ? normalizeRuntimeStatus(entry.runtime.getStatus()) : null;
+    // 这里只汇总各子任务运行状态；共享 AI 队列在服务级 getStatus 中统一读取。
+    const runtimeStatus = entry.runtime ? normalizeRuntimeStatus(entry.runtime.getStatus({ includeProxyStatus: false })) : null;
     const source = runtimeStatus?.active_task;
     const startedAt = entry.startedAt || entry.createdAt;
     const activeTask = source || {

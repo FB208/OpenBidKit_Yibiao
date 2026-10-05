@@ -310,7 +310,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     };
   }
 
-  function getStatus() {
+  // 聚合子任务时跳过共享队列查询，避免每个子任务重复同步读取模型配置。
+  function getStatus({ includeProxyStatus = true } = {}) {
     return {
       phase,
       healthy,
@@ -323,7 +324,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       active_task: getActiveTaskSummary(),
       queued_count: 0,
       queued_tasks: [],
-      proxy: proxy?.getStatus?.() || { active: 0, queued: 0, limit: 0 },
+      proxy: (includeProxyStatus ? proxy?.getStatus?.() : null) || { active: 0, queued: 0, limit: 0 },
       runtime_details: {
         sdk_version: sdkVersion,
         runtime_root: layout.runtimeRoot,
