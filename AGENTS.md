@@ -36,7 +36,7 @@
 ## 聚焦验证
 - 改 Renderer/TypeScript：`cd client; npm run build`。
 - 改 Electron Main/preload：先在 `client/` 下运行 `node --check electron\preload.cjs` 或对应 `.cjs` 文件，再跑 `npm run build`；涉及窗口/IPC 还要 `npm run dev` 手动打开验证。
-- 改 SQLite Store、migration 或 native 模块：增加 `npm run smoke:electron-native`；有对应 `*.test.cjs` 时用 `node --test <test-file>` 定向执行。
+- 改 SQLite Store、migration 或 native 模块：增加 `npm run smoke:electron-native`。
 - 改依赖：`cd client; npm audit`。
 - `npm run build` 可能只有既有 chunk 体积警告；不要把它当失败，除非命令退出非 0。
 

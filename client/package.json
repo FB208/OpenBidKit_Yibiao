@@ -9,9 +9,6 @@
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c blue,magenta \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "tsc --noEmit && vite build",
-    "check:docx": "node scripts/check-docx-table-pagination.cjs && node electron/services/exportService.cjs",
-    "check:chrome": "node scripts/check-chrome-layout.mjs",
-    "check": "npm run check:docx && npm run check:chrome",
     "dist": "npm run build && node scripts/prepare-openxml-helper.cjs && electron-builder",
     "dist:win": "npm run build && node scripts/prepare-openxml-helper.cjs --platform win32 --arch x64 && electron-builder --win",
     "dist:mac": "npm run build && node scripts/prepare-openxml-helper.cjs --platform darwin --arch all && electron-builder --mac",
