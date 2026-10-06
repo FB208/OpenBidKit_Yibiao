@@ -6,6 +6,7 @@ const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 const { AI_UPSTREAM_UNAVAILABLE } = require('../utils/aiBatchGuard.cjs');
 const { runAiBatch, requestWithFollowUp, topLevelNodes, spliceHtml, collectIds, uniqueId, writeHtml } = require('./contentGenerationAiBatch.cjs');
+const { sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 
 const TABLE_CLEANUP_TOOL = 'remove-section-tables';
 // 去表格阶段主 Agent 只调用去表格工具。
@@ -129,10 +130,8 @@ async function removeDataTables({ aiService, workspaceDir, signal, onActivity, s
       report([{ id: job.section.id, status: 'running' }]);
       const blocks = await requestWithFollowUp({
         aiService, guard, logTitle: `去表格-${job.section.number}-${job.section.title}`,
-        messages: [
-          { role: 'system', content: CONVERT_SYSTEM },
-          { role: 'user', content: `本节：${job.section.number} ${job.section.title}\n表格前文：${job.table.preceding || '无'}\n\n待转换的表格：\n${job.table.source}` },
-        ],
+        // 消息拼装与其他批处理一致；本工具没有公共材料，不预热。
+        messages: sharedPrefixMessages(CONVERT_SYSTEM, '', `本节：${job.section.number} ${job.section.title}\n表格前文：${job.table.preceding || '无'}\n\n待转换的表格：\n${job.table.source}`),
         evaluate: reply => parseConversion(reply, numbersOf(job.table.source)),
       });
       guard.signal.throwIfAborted();

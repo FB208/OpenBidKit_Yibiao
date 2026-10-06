@@ -3,7 +3,7 @@ const path = require('node:path');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 const { AI_UPSTREAM_UNAVAILABLE } = require('../utils/aiBatchGuard.cjs');
-const { warmSharedPrefix } = require('./contentGenerationPrefixWarmup.cjs');
+const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 const { runAiBatch, requestWithFollowUp, topLevelNodes, spliceHtml, writeHtml } = require('./contentGenerationAiBatch.cjs');
 
 const LAYOUT_TOOL = 'supplement-layout-sections';
@@ -82,7 +82,7 @@ async function supplementLayoutGaps({ aiService, workspaceDir, signal, onActivit
     report([{ id: item.job.section_id, status: failed ? 'error' : 'success' }]);
   };
   const sharedInput = `全局事实设定（完整内容）：\n${fs.readFileSync(path.join(workspaceDir, '全局事实设定.md'), 'utf8')}\n\n本项目事实缺失处理要求：\n${decisions.global_facts_requirements}`;
-  if (items.length > 1) await warmSharedPrefix({ aiService, system: SUPPLEMENT_SYSTEM, sharedInput, signal, onActivity, logTitle: '格式补写-公共前缀预热', label: '格式补写公共材料' });
+  if (items.length > 1) await warmPromptPrefix({ aiService, messages: sharedPrefixMessages(SUPPLEMENT_SYSTEM, sharedInput), signal, onActivity, logTitle: '格式补写-公共前缀预热', label: '格式补写公共材料' });
   await runAiBatch({
     items, signal,
     async run(item, guard) {
@@ -93,10 +93,7 @@ async function supplementLayoutGaps({ aiService, workspaceDir, signal, onActivit
       const minimum = Math.ceil(maximum * LAYOUT_MIN_RATIO);
       const text = await requestWithFollowUp({
         aiService, guard, logTitle: `格式补写-${item.section.number}-${item.section.title}`,
-        messages: [
-          { role: 'system', content: SUPPLEMENT_SYSTEM },
-          { role: 'user', content: `${sharedInput}\n\n本节：${item.section.number} ${item.section.title}（${item.section.chapter_path || item.section.title}）\n本节写作重点：${item.section.content_plan?.writing_focus || '未提供'}\n补写位置前文：\n${located.preceding || '无'}\n其后图片的图注：${located.caption || '无'}\n补写字数：${minimum}～${maximum} 字。` },
-        ],
+        messages: sharedPrefixMessages(SUPPLEMENT_SYSTEM, sharedInput, `本节：${item.section.number} ${item.section.title}（${item.section.chapter_path || item.section.title}）\n本节写作重点：${item.section.content_plan?.writing_focus || '未提供'}\n补写位置前文：\n${located.preceding || '无'}\n其后图片的图注：${located.caption || '无'}\n补写字数：${minimum}～${maximum} 字。`),
         evaluate(reply) {
           const content = extractAiSource(reply, 'text').replace(/\s*\n\s*/g, '').trim();
           if (!content) throw new Error('没有输出文字');

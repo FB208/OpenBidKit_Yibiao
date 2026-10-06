@@ -5,7 +5,7 @@ const { countReadableWords } = require('../utils/wordCount.cjs');
 const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 const { AI_UPSTREAM_UNAVAILABLE } = require('../utils/aiBatchGuard.cjs');
 const { createContentImageProtection, imageStructure } = require('./contentGenerationEditTools.cjs');
-const { warmSharedPrefix } = require('./contentGenerationPrefixWarmup.cjs');
+const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 const { writeListFile } = require('./contentGenerationTaskFiles.cjs');
 const { runAiBatch, requestWithFollowUp, writeHtml } = require('./contentGenerationAiBatch.cjs');
 
@@ -204,7 +204,7 @@ async function adjustContentWordCount({ aiService, workspaceDir, signal, onActiv
     if (pending.length) {
       const system = buildAdjustSystem(current.direction);
       const sharedInput = `项目概述：\n${read('项目概述.md')}\n\n全局事实设定（完整内容）：\n${read('全局事实设定.md')}\n\n本项目事实缺失处理要求：\n${decisions.global_facts_requirements}\n\n用户额外要求：\n${decisions.user_requirement || '无'}`;
-      if (pending.length > 1) await warmSharedPrefix({ aiService, system, sharedInput, signal, onActivity, logTitle: '字数校正-公共前缀预热', label: '字数校正公共材料' });
+      if (pending.length > 1) await warmPromptPrefix({ aiService, messages: sharedPrefixMessages(system, sharedInput), signal, onActivity, logTitle: '字数校正-公共前缀预热', label: '字数校正公共材料' });
       await runAiBatch({
         items: pending, signal,
         async run(job, guard) {
@@ -221,10 +221,7 @@ async function adjustContentWordCount({ aiService, workspaceDir, signal, onActiv
           const structure = imageStructure(original);
           const best = await requestWithFollowUp({
             aiService, guard, logTitle: `字数校正-${section.number}-${section.title}`,
-            messages: [
-              { role: 'system', content: system },
-              { role: 'user', content: `${sharedInput}\n\n本节：${section.number} ${section.title}（${section.chapter_path || section.title}）\n本节写作重点：${section.content_plan?.writing_focus || '未提供'}\n本节文字当前 ${countHtmlWords(text)} 字（不含占位注释代表的图片和表格），目标约 ${target} 字，需要${current.direction === 'shrink' ? '删减' : '补充'}约 ${amount} 字。\n\n本节当前 HTML：\n${text}` },
-            ],
+            messages: sharedPrefixMessages(system, sharedInput, `本节：${section.number} ${section.title}（${section.chapter_path || section.title}）\n本节写作重点：${section.content_plan?.writing_focus || '未提供'}\n本节文字当前 ${countHtmlWords(text)} 字（不含占位注释代表的图片和表格），目标约 ${target} 字，需要${current.direction === 'shrink' ? '删减' : '补充'}约 ${amount} 字。\n\n本节当前 HTML：\n${text}`),
             evaluate(reply) {
               const html = restoreBlocks(extractAiSource(reply, 'html').trim(), blocks);
               validateHtml(html);

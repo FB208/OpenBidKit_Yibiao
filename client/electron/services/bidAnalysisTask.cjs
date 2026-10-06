@@ -1,13 +1,9 @@
 const { buildBidSectionContextHint } = require('../utils/bidSectionContext.cjs');
 const { mergeSegmentedAiResults } = require('../utils/segmentedAiResultMerger.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const { warmPromptPrefix } = require('../utils/promptPrefixCache.cjs');
 
-const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 const MARKDOWN_MISSING_RESULT = '未提取到';
-
-function waitForPromptCacheWarmup() {
-  return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
-}
 
 const stableSystemPrompt = `你是专业的投标资料分析助手。请严格基于用户提供的上下文完成提取和总结。
 
@@ -434,20 +430,17 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, check
     }
   }
 
-  const projectOverviewTask = tasksToRun.find((task) => task.id === 'projectOverview');
-  const remainingTasks = tasksToRun.filter((task) => task.id !== 'projectOverview');
-  if (projectOverviewTask) {
-    const warmupSucceeded = await runOneSafely(projectOverviewTask);
-    if (warmupSucceeded && remainingTasks.length) {
-      updateTask({
-        status: 'running',
-        progress: doneProgress(currentTasks),
-        logs: ['提示词缓存预热完成，等待 5 秒后开始并发解析剩余项。'],
-      });
-      await waitForPromptCacheWarmup();
-    }
+  // 各解析项共用 system 与招标文件消息，先按段预热这一前缀，再并发全部解析项。
+  if (tasksToRun.length > 1) {
+    await Promise.all(fileSegments.map((segment, index) => warmPromptPrefix({
+      aiService,
+      messages: buildTenderContextMessages(segment, sectionHint),
+      logTitle: fileSegments.length > 1 ? `招标解析-公共前缀预热-第${index + 1}段` : '招标解析-公共前缀预热',
+      label: '招标文件',
+      onActivity: ({ message }) => updateTask({ status: 'running', progress: doneProgress(currentTasks), logs: [message] }),
+    })));
   }
-  await Promise.all(remainingTasks.map(runOneSafely));
+  await Promise.all(tasksToRun.map(runOneSafely));
 
   const missingRequiredTasks = getMissingRequiredTasks(currentTasks);
   if (missingRequiredTasks.length) {

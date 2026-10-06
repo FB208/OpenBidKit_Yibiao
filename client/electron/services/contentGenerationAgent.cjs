@@ -12,7 +12,7 @@ const { AI_IMAGE_STYLES } = require('./aiImageStyles.cjs');
 const { WORD_ADJUST_TOOL, WORD_ADJUST_TOOLS, countHtmlWords, planWordAdjustment, createWordAdjustState, buildWordAdjustPrompt, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
 const { TASK_FILE_WRITING, taskFilePath, taskFileSchemas, readTaskFile, writeListFile, clearTaskArtifacts, compactResults } = require('./contentGenerationTaskFiles.cjs');
 const { SUBMISSION_FIX_TOOL, SUBMISSION_FIX_PARALLEL_THRESHOLD, imageStructure, createContentImageProtection, createSubmissionFixTool } = require('./contentGenerationEditTools.cjs');
-const { warmSharedPrefix } = require('./contentGenerationPrefixWarmup.cjs');
+const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
 const { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
 const { TABLE_CLEANUP_TOOL, TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
@@ -393,7 +393,7 @@ function createContentGenerationTools({ aiService, agentService, generationOptio
       for (const id of skipped.keys()) savedIds.add(id);
       onActivity?.({ progress: { step: 'writing', label: '正在生成小节正文', unit: '节', total: targets.size, items: ids.map(id => ({ id, status: skipped.has(id) ? 'success' : 'running' })) } });
       activity.pending += 1;
-      // 全轮相同的规则和材料排在本节内容之前，便于模型服务复用请求前缀缓存。
+      // 全轮相同的规则放 system、公共材料单独作为一条 user 消息，排在本节内容之前，便于模型服务复用请求前缀缓存。
       const system = `${writingInstructions(decisions.has_knowledge_base)}\n\n本次事实处理要求：\n${decisions.global_facts_requirements}\n\n${rules}\n\n配图类型对照表（据此确定新增图片的生成类型）：\n${imageTypes}\n\n本次配图要求：\n${decisions.image_requirements}\n\n写作执行要求：\n按本节 content_plan.target_words 的目标字数生成正文，0 表示不设目标；不能用全文上下限或其他小节字数代替本节目标。按本节 content_plan 执行：table.needed=false 时不新增数据表格；仅按本节配图安排与补充要求中主 Agent 分配的布局、组数、表达目的和生成方式新增图片，不自行改变生成方式；AI 图片的 template 按分配的画面类型、主体、视角景别正向描述画面，并注明画面形式名称，不自行分配全局名额或独立承担 AI 图片占比目标；未分配布局时不新增配图；无图、无允许类型或 image_needed=false 时不留新增配图块，并发正文写作阶段只生成新增图片的受限 HTML 结构，填写生成类型、用途说明、替代文本及必要图注，暂不填写图片资源引用。主 Agent 生成图片后补入工具返回的 asset_ref；已有原图直接使用提供的资源引用。你没有文件检索或图片生成工具，仅核对本次请求提供的材料；规范中要求主 Agent 读取文件、生成图片及提交结果清单的操作不由你执行，只返回本节 HTML，不虚构图片路径。`;
       const sharedInput = `项目概述：
 ${overview}
@@ -415,7 +415,7 @@ ${config}`;
       // 服务端连续失败时停止派发剩余小节并结束任务，已保存的小节保留。
       const guard = createAiBatchGuard({ signal: combinedSignal });
       try {
-        if (pending.length > 1) await warmSharedPrefix({ aiService, system, sharedInput, signal: guard.signal, onActivity, logTitle: 'Agent HTML正文-公共前缀预热', label: '正文公共材料' });
+        if (pending.length > 1) await warmPromptPrefix({ aiService, messages: sharedPrefixMessages(system, sharedInput), signal: guard.signal, onActivity, logTitle: 'Agent HTML正文-公共前缀预热', label: '正文公共材料' });
         const generatedResults = new Map((await Promise.all(pending.map(async job => {
           const section = targets.get(job.section_id);
           try {
@@ -426,19 +426,14 @@ ${config}`;
             // 截断的回复直接失败；提示词结束标签被写成异常标记时程序无损补齐，其余结构问题不落盘，均作为本节失败交回主 Agent 重试。
             const html = closeOpenTemplates(checkSectionHtml(extractAiSource(await aiService.chat({
               signal: guard.signal, logTitle: `Agent HTML正文-${section.number}-${section.title}`, reject_truncated_output: true,
-              messages: [
-                { role: 'system', content: system },
-                { role: 'user', content: `${sharedInput}
-
-本节编排决策：
+              messages: sharedPrefixMessages(system, sharedInput, `本节编排决策：
 ${JSON.stringify(section, null, 2)}${restoredContext}
 
 本节配图安排与补充要求：
 ${job.instructions.trim() || '无补充要求，未分配新增配图；已有原图按本节底稿要求保留。'}
 
 补充参考资料摘录：
-${job.references || '未提供'}` },
-              ],
+${job.references || '未提供'}`),
             }), 'html'))).html;
             assertHtmlStructure(html);
             guard.signal.throwIfAborted();

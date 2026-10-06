@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const cheerio = require('cheerio');
 const { SUBMISSION_FIX_TOOL, editContentSections, batchResponse } = require('./contentGenerationEditTools.cjs');
 const { TASK_FILE_WRITING, taskFilePath, readTaskFile, writeListFile, readListFile } = require('./contentGenerationTaskFiles.cjs');
-const { warmSharedPrefix } = require('./contentGenerationPrefixWarmup.cjs');
+const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { AI_UPSTREAM_UNAVAILABLE, createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
 
@@ -188,7 +188,7 @@ async function checkLedgerSections({ aiService, workspaceDir, ledger, pending, t
   const system = buildExtractionSystem();
   const sharedInput = `全局事实设定（完整内容）：\n${read('全局事实设定.md')}`;
   ledger.failures ||= {};
-  if (pending.length > 1) await warmSharedPrefix({ aiService, system, sharedInput, signal: guard.signal, onActivity, logTitle: '一致性核对-公共前缀预热', label: '一致性核对公共材料' });
+  if (pending.length > 1) await warmPromptPrefix({ aiService, messages: sharedPrefixMessages(system, sharedInput), signal: guard.signal, onActivity, logTitle: '一致性核对-公共前缀预热', label: '一致性核对公共材料' });
   const results = await Promise.allSettled(pending.map(async section => {
     try {
       guard.signal.throwIfAborted();
@@ -205,10 +205,7 @@ async function checkLedgerSections({ aiService, workspaceDir, ledger, pending, t
       const result = await aiService.requestJson({
         signal: guard.signal, logTitle: `一致性核对-${section.number}-${section.title}`, progressLabel: `一致性核对 ${section.number}`,
         failureMessage: `小节 ${section.number} ${section.title} 的一致性核对结果无效`,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: `${sharedInput}\n\n本节：${section.number} ${section.title}（小节 ID：${section.id}）\n${section.reference ? '本节为已完成的参考小节：issues 返回空数组，只抽取 facts。\n' : ''}本节正文（方括号内为段落编号）：\n${blocks.map((block, index) => `[B${index + 1}] ${block.text}`).join('\n')}` },
-        ],
+        messages: sharedPrefixMessages(system, sharedInput, `本节：${section.number} ${section.title}（小节 ID：${section.id}）\n${section.reference ? '本节为已完成的参考小节：issues 返回空数组，只抽取 facts。\n' : ''}本节正文（方括号内为段落编号）：\n${blocks.map((block, index) => `[B${index + 1}] ${block.text}`).join('\n')}`),
         normalizer: output => ({
           issues: section.reference ? [] : (output?.issues || []).map(issue => ({ ...issue, block_id: blockId(issue?.block_id) })),
           facts: (output?.facts || []).map(fact => ({ ...fact, block_id: blockId(fact?.block_id) })),

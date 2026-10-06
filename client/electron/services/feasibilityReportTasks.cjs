@@ -1,4 +1,5 @@
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const { warmPromptPrefix } = require('../utils/promptPrefixCache.cjs');
 const {
   analysisToMarkdown,
   buildAnalysisMergeSystemPrompt,
@@ -209,13 +210,30 @@ async function runFeasibilityParametersTask({ aiService, workspaceStore, knowled
   });
 }
 
-async function generateLeafContent({ aiService, state, leaf, knowledge, targetWords }) {
-  const chapterPath = (leaf.trail || []).join(' > ');
-  const messages = [
+// 全文相同的材料和写作规则在前、本节内容在后，公共部分以消息边界结束，供预热和各节请求复用前缀缓存。
+function buildContentPrefixMessages(state) {
+  return [
     { role: 'system', content: buildContentSystemPrompt() },
     { role: 'user', content: `项目基础参数：\n${formatProjectInfo(state.projectInfo)}` },
     { role: 'user', content: `项目资料分析：\n${state.analysisMarkdown}` },
     { role: 'user', content: `全文关键参数与编制口径：\n${state.keyParametersMarkdown}` },
+    { role: 'user', content: buildContentWritingRules() },
+  ];
+}
+
+// 审校各节共用的前缀，用法同 buildContentPrefixMessages。
+function buildReviewPrefixMessages(state) {
+  return [
+    { role: 'system', content: buildHumanWritingSystemPrompt() },
+    { role: 'user', content: `项目基础参数：\n${formatProjectInfo(state.projectInfo)}` },
+    { role: 'user', content: `全文关键参数与编制口径：\n${state.keyParametersMarkdown}` },
+  ];
+}
+
+async function generateLeafContent({ aiService, state, leaf, knowledge, targetWords }) {
+  const chapterPath = (leaf.trail || []).join(' > ');
+  const messages = [
+    ...buildContentPrefixMessages(state),
     {
       role: 'user',
       content: `当前章节路径：${chapterPath}\n章节写作重点：${leaf.description || '围绕章节标题展开充分论证。'}\n参考目标字数：约 ${targetWords} 字。`,
@@ -227,7 +245,6 @@ async function generateLeafContent({ aiService, state, leaf, knowledge, targetWo
       content: `可吸收的知识库素材如下。请改写到本项目语境，不要提及“知识库”“历史文档”或资料来源：\n\n${knowledge}`,
     });
   }
-  messages.push({ role: 'user', content: buildContentWritingRules() });
   const response = await aiService.chat({
     messages,
     logTitle: `可研正文-${leaf.title}`,
@@ -270,9 +287,7 @@ async function rewriteLeafContent({ aiService, state, leaf }) {
   const chapterPath = (leaf.trail || []).join(' > ');
   const rewritten = await aiService.chat({
     messages: [
-      { role: 'system', content: buildHumanWritingSystemPrompt() },
-      { role: 'user', content: `项目基础参数：\n${formatProjectInfo(state.projectInfo)}` },
-      { role: 'user', content: `全文关键参数与编制口径：\n${state.keyParametersMarkdown}` },
+      ...buildReviewPrefixMessages(state),
       {
         role: 'user',
         content: `当前章节路径：${chapterPath}\n\n请只审校下面的已有正文。不得输出章节标题，不得补写资料中不存在的事实。\n\n${leaf.content}`,
@@ -345,6 +360,9 @@ async function runFeasibilityContentTask({
         persistPaused('正文生成已暂停，可稍后继续。');
         return;
       }
+      if (targets.length > 1) {
+        await warmPromptPrefix({ aiService, messages: buildContentPrefixMessages(state), signal: taskControl?.signal, logTitle: '可研正文-公共前缀预热', label: '可研正文公共材料' });
+      }
 
       for (let index = 0; index < targets.length; index += 1) {
         throwIfAborted();
@@ -402,6 +420,9 @@ async function runFeasibilityContentTask({
     if (shouldPause()) {
       persistPaused('自然化审校已暂停，可稍后继续。');
       return;
+    }
+    if (reviewTargets.length > 1) {
+      await warmPromptPrefix({ aiService, messages: buildReviewPrefixMessages(state), signal: taskControl?.signal, logTitle: '可研审校-公共前缀预热', label: '可研审校公共材料' });
     }
 
     const reviewTotal = reviewTargets.length + reviewedNodeIds.length;
