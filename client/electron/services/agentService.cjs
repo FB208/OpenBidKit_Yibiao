@@ -357,7 +357,10 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       };
       pendingQuestions.set(questionId, entry);
       signal?.addEventListener?.('abort', entry.onAbort, { once: true });
-      const recommendedOption = question.options.find((option) => option.recommended && !option.custom);
+      // 调用方声明 auto_answer=false 时仍展示推荐项，但必须由用户手动选择。
+      const recommendedOption = request.auto_answer === false
+        ? null
+        : question.options.find((option) => option.recommended && !option.custom);
       if (recommendedOption) {
         autoConfirmationService.register({
           id: entry.autoConfirmationId,

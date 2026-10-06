@@ -618,8 +618,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
     }, 2000);
   }
 
-  // 暂停当前工具调用并等待 Renderer 返回用户答案。
-  async function waitForUserQuestion(request, signal, taskToken) {
+  // 暂停当前工具调用并等待 Renderer 返回用户答案；终止确认不进入业务可读的提问记录。
+  async function waitForUserQuestion(request, signal, taskToken, { recordAnswer = true } = {}) {
     if (!activeTask || activeTask.task_token !== taskToken) {
       throw new Error('当前 Agent 任务已结束，无法继续提问');
     }
@@ -633,7 +633,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       visible: true,
       activity: true,
     });
-    let answered = false;
+    let settledMessage = '';
     try {
       const result = await requestUserQuestion({
         ...request,
@@ -641,7 +641,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         session_id: activeTask.session_id || '',
         task_title: activeTask.title,
       }, signal);
-      if (activeTask?.task_token === taskToken) {
+      if (recordAnswer && activeTask?.task_token === taskToken) {
         activeTask.user_question_answers.push({
           workflow_stage: workflowStage,
           question: String(request.question || ''),
@@ -651,17 +651,19 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           answered_at: nowIso(),
         });
       }
-      answered = true;
+      settledMessage = recordAnswer
+        ? '已收到回答，Agent 正在继续执行'
+        : `终止确认：用户选择“${String(result.selected_option || '')}”`;
       return result;
     } finally {
       if (activeTask?.task_token === taskToken) {
         activeTask.waiting_for_user = false;
         touchActivity({
           task_token: taskToken,
-          stage: answered ? 'running' : activeTask.stage,
-          message: answered ? '已收到回答，Agent 正在继续执行' : '',
+          stage: settledMessage ? 'running' : activeTask.stage,
+          message: settledMessage,
           source: 'pi.user-question.settled',
-          visible: answered,
+          visible: Boolean(settledMessage),
           activity: true,
         });
       }
@@ -845,6 +847,10 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         summaryEnabled,
         isFinalToolCall: payload.is_final_tool_call,
         requestUserQuestion: (request, signal) => waitForUserQuestion(request, signal, taskToken),
+        // 失败交回父 Agent 的子会话直接报告失败；其余 Agent 请求终止须经用户确认。
+        requestTerminationDecision: payload.failure_handled_by_parent === true
+          ? null
+          : (request, signal) => waitForUserQuestion(request, signal, taskToken, { recordAnswer: false }),
         reportTaskFailure: (reason) => {
           const error = new Error(String(reason || '').trim() || 'Agent 无法继续当前任务');
           error.code = AGENT_REPORTED_FAILURE_CODE;
@@ -1199,6 +1205,10 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
             throw error;
           }
           if (activeController.signal.aborted) throw activeController.signal.reason;
+          // 与程序步骤并行的压缩可能被其批量请求挤占而失败（如排队后被限流），程序步骤结束后在发出阶段要求前补做一次；仍失败按原上下文继续。
+          if (continuation.compact_before_prompt === true && pendingCompactionStage === continuationStage) {
+            await runStageCompaction(continuationStage, { ...continuation, compaction_message: '上下文压缩未完成，正在重新压缩' });
+          }
         }
         emitMonitorEvent({
           type: 'task_input',

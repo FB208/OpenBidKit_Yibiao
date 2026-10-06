@@ -49,7 +49,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, requestTerminationDecision, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -137,6 +137,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
   const taskFailureTool = codingAgent.defineTool(createPiTaskFailureTool({
     Type: typebox.Type,
     reportTaskFailure,
+    requestTerminationDecision,
   }));
   const openXmlCustomTool = openXmlTool
     ? codingAgent.defineTool(createPiOpenXmlTool({
