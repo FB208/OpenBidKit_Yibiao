@@ -1666,10 +1666,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   function handleContentActivity(event = {}) {
     if (event.progress) { reportWorkflowProgress(event.progress); return; }
     if (event.visible === false || !event.message) return;
-    if (event.operation === 'edit' && contentStats.phase === 'generating' && storedPlan.contentGenerationOptions?.wordCountRepair
-      && contentStats.workflow_progress?.steps['generating/0/word-check']?.done) {
-      recordContentWorkflowProgress(contentStats, { step: 'word-adjust', label: '正在按字数差额修复正文' });
-    }
     if (contentStats.workflow_progress?.phase !== contentStats.phase) {
       recordContentWorkflowProgress(contentStats, { step: 'agent', label: CONTENT_PHASE_LABELS[contentStats.phase] });
     }
@@ -2475,12 +2471,21 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             }
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'auditing' }) });
           },
+          // 字数校正完成时记录总字数变化及失败小节原因，供用户定位需要手工处理的小节。
+          onWordAdjustProgress(state) {
+            if (state.status !== 'completed') return;
+            const failures = Object.values(state.failures);
+            logs = [...logs, `字数校正：${state.initial_words} → ${state.final_words} 字（要求 ${state.minimum_words || '不限'}～${state.maximum_words || '不限'}），改写 ${state.rewritten_section_ids.length} 节`
+              + (failures.length ? `，失败 ${failures.length} 节——${failures.map(item => `${item.number} ${item.title}（${item.reason}）`).join('；')}` : '')
+              + (state.in_range ? '。' : '；仍未达标，保留字数偏差。')];
+            checkpointTask({ status: 'running', logs, stats: statsSnapshot() });
+          },
           onTableCleanupProgress(state) {
             contentStats.phase = 'table-cleaning';
             contentStats.table_cleanup_total = state.section_ids.length;
             contentStats.table_cleanup_completed = state.completed_section_ids.length;
-            if (state.status === 'completed') logs = [...logs, state.remaining_section_ids.length
-              ? `去表格阶段结束，${state.remaining_section_ids.length} 个小节仍有数据表格，已记录并继续后续流程。`
+            if (state.status === 'completed') logs = [...logs, state.remaining.length
+              ? `去表格结束：转换 ${state.completed_section_ids.length} 节，${state.remaining.length} 节保留表格——${state.remaining.map(item => `${item.number} ${item.title}（${item.reason}）`).join('；')}。`
               : `去表格完成，已处理 ${state.completed_section_ids.length} 个小节，图片表格保留。`];
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'table-cleaning' }) });
           },
@@ -2489,9 +2494,15 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             contentStats.layout_status = state.status;
             contentStats.layout_total = state.jobs.length;
             contentStats.layout_completed = state.completed_section_ids.length;
-            if (state.status === 'completed') logs = [...logs, state.remaining_gaps.length
-              ? `格式自检补写后仍有 ${state.remaining_gaps.length} 处明显留白，本轮不再补写：${state.remaining_gaps.map(gap => `第${gap.page}页第${gap.column}栏约${gap.gap_cm}cm`).join('；')}`
-              : '格式自检完成，未发现本次目标小节中需要补写的明显页栏留白。'];
+            if (state.status === 'completed') {
+              const gaps = state.jobs.reduce((sum, job) => sum + job.gaps.length, 0);
+              // 先列补写失败的位置，再列复查后仍有的留白。
+              const supplement = gaps ? `格式补写：补写 ${gaps - state.failed_gaps.length} 处`
+                + (state.failed_gaps.length ? `，${state.failed_gaps.length} 处未补写——${state.failed_gaps.map(item => `${item.number} ${item.title} 图 ${item.figure_id || '未定位'} 前（${item.reason}）`).join('；')}` : '') + '。' : '';
+              logs = [...logs, supplement + (state.remaining_gaps.length
+                ? `格式自检补写后仍有 ${state.remaining_gaps.length} 处明显留白，本轮不再补写：${state.remaining_gaps.map(gap => `第${gap.page}页第${gap.column}栏约${gap.gap_cm}cm`).join('；')}`
+                : gaps ? '复查未发现需要补写的明显页栏留白。' : '格式自检完成，未发现本次目标小节中需要补写的明显页栏留白。')];
+            }
             checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime({ phase: 'layout-checking' }) });
           },
           onCheckpoint: checkpoint => updateContentAgentState(checkpoint),

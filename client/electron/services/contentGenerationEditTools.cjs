@@ -9,7 +9,7 @@ const SUBMISSION_FIX_TOOL = 'fix-submission-issues';
 // 问题涉及的小节超过该数时并发修复，否则由主 Agent 直接修改。
 const SUBMISSION_FIX_PARALLEL_THRESHOLD = 5;
 const SUBMISSION_ISSUES_FILE = `${LIST_DIR}/${LIST_FILES.submission}`;
-const WORD_ADJUSTMENT_TOOLS = [...NATIVE_AGENT_TOOLS, 'json-validation', 'ask-user', 'check-word-count', 'adjust-sections', SUBMISSION_FIX_TOOL, 'report-failure'];
+const WORD_ADJUSTMENT_TOOLS = [...NATIVE_AGENT_TOOLS, 'json-validation', 'ask-user', 'check-word-count', SUBMISSION_FIX_TOOL, 'report-failure'];
 const SECTION_EDIT_CHILD_TOOLS = [...NATIVE_AGENT_TOOLS, 'report-failure'];
 // 图片保护开始时各目标小节的图片结构及原始图片块，保存在任务目录，暂停恢复后继续使用。
 const IMAGE_RECORD = 'content-images';
@@ -105,7 +105,7 @@ function createContentImageProtection({ workspaceDir, files = [], active = false
   };
 }
 
-// 扩缩写、一致性修复、去表格、格式补写及提交问题修复共用并发执行、原生文件工具和错误回传。
+// 一致性修复及提交问题修复共用并发执行、原生文件工具和错误回传。
 // expectedImages 指定本节应保持的图片记录；检查只报告可用性，修复轮数由父阶段统一管理。
 async function editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, inspectSection, onActivity, title, instructions, preserveDataTables = true, preloadInput = false, expectedImages, onResult = () => {} }) {
   const ids = jobs.map(section => section.section_id);
@@ -116,7 +116,7 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
   if (busy.length) throw new Error(`以下小节正在其他批次中编辑，请等待结束后再提交：${busy.join('、')}`);
   const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
   const { global_facts_requirements: factsRequirements } = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
-  const step = ({ '正文扩缩写': 'word-adjust', '一致性修复': 'consistency-repair', '正文去表格': 'table-repair', '格式自检补写': 'layout-supplement', '提交问题修复': 'submission-fix' })[title];
+  const step = ({ '一致性修复': 'consistency-repair', '提交问题修复': 'submission-fix' })[title];
   // 编辑类任务由 Agent 分批派发，程序不知道总数：按累计完成数展示，不以已派发数作分母。
   const report = items => onActivity?.({ progress: { step, label: `正在${title}`, unit: '节', items, cumulative: true } });
   const readFile = file => {
@@ -155,7 +155,7 @@ async function editContentSections({ jobs, targets, workspaceDir, agentService, 
           },
           output_file: section.file, summary_enabled: false, signal: combinedSignal,
           max_retries: 1, timeout_ms: 30 * 60 * 1000,
-          prompt: `你负责编辑投标正文中的一个小节，执行${title}。具体小节、文件和本次要求见末尾“本次任务”。\n本项目事实缺失处理要求（仅适用于本任务允许补充的内容，不扩大本次编辑范围）：${factsRequirements}\n优先使用原生 edit 修改本次任务指定的小节文件，可按需使用 bash 处理工作区文件；不要改其他小节、输入资料或结果清单，程序会还原这些文件。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局不得删除、替换、复制、调序或修改；可以调整图文表格中的普通说明文字。编辑结束后程序检查本节结构、图片引用和图片块，问题交由主 Agent 统一处理。保留受限 HTML 结构并保持所有元素完整闭合，保留原有图片及引用、${preserveDataTables ? '原表格、' : '表格中的全部数据和含义、'}实质信息、事实参数和承诺。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。${instructions} 事实冲突以全局事实设定.md为准，按需读取。字数、去表格、一致性或补写要求尚未完全达成时，保留真实正文并提交，由主 Agent 统一验收；只有无法继续执行的实际阻断才调用 report-failure。edit 返回文本未匹配等错误时，重新读取最新文件，依据实际原文修正编辑参数并重试。修改由当前子任务直接写入目标 HTML，不以返回补丁文本代替文件修改。完成本次编辑并核实真实结果后，在最后一次成功的 edit、bash 或 read 上标记 task_complete=true，不承担全文达标或修改其他小节的任务。${sharedInput}\n\n本次任务：\n你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。${readingInstructions}再按以下要求${title}：\n${job.instructions}${sectionInput}`,
+          prompt: `你负责编辑投标正文中的一个小节，执行${title}。具体小节、文件和本次要求见末尾“本次任务”。\n本项目事实缺失处理要求（仅适用于本任务允许补充的内容，不扩大本次编辑范围）：${factsRequirements}\n优先使用原生 edit 修改本次任务指定的小节文件，可按需使用 bash 处理工作区文件；不要改其他小节、输入资料或结果清单，程序会还原这些文件。已有图片块（含图注与提示词）、图片引用和顺序、图片表格布局不得删除、替换、复制、调序或修改；可以调整图文表格中的普通说明文字。编辑结束后程序检查本节结构、图片引用和图片块，问题交由主 Agent 统一处理。保留受限 HTML 结构并保持所有元素完整闭合，保留原有图片及引用、${preserveDataTables ? '原表格、' : '表格中的全部数据和含义、'}实质信息、事实参数和承诺。本次新增或改写的正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。${instructions} 事实冲突以全局事实设定.md为准，按需读取。本次要求尚未完全达成时，保留真实正文并提交，由主 Agent 统一验收；只有无法继续执行的实际阻断才调用 report-failure。edit 返回文本未匹配等错误时，重新读取最新文件，依据实际原文修正编辑参数并重试。修改由当前子任务直接写入目标 HTML，不以返回补丁文本代替文件修改。完成本次编辑并核实真实结果后，在最后一次成功的 edit、bash 或 read 上标记 task_complete=true，不承担全文达标或修改其他小节的任务。${sharedInput}\n\n本次任务：\n你负责编辑小节 ${section.number} ${section.title}，文件为 ${section.file}。${readingInstructions}再按以下要求${title}：\n${job.instructions}${sectionInput}`,
           // 子任务只续接执行异常；产物检查与修复决策交由父阶段处理。
           buildRetryPrompt: (request, meta) => `上一轮小节编辑执行中断：${String(request.error?.message || request.error).slice(0, 12000)}\n在当前会话中继续处理 ${section.file}，保留已经完成的修改；完成本次编辑后标记 task_complete=true。这是第 ${meta.attempt}/${meta.max_retries} 次执行续接。`,
           onActivity,

@@ -11,10 +11,10 @@ const LIST_DIR = '程序清单';
 const SECTION_MODIFICATION_SUBDIR = '单节修改';
 const TASK_FILES = {
   sections: '正文生成.json', images: '配图生成.json', renderHtml: 'HTML转图.json', renderMermaid: 'Mermaid转图.json',
-  applyImages: '图片回填.json', adjust: '扩缩写.json', repair: '一致性修复.json', tables: '去表格.json', layout: '格式补写.json',
+  applyImages: '图片回填.json', repair: '一致性修复.json',
 };
 const LIST_FILES = {
-  images: '正文图片清单.json', words: '正文字数统计.json', repair: '一致性修复结果.json', tables: '去表格进度.json', layout: '格式补写任务.json',
+  images: '正文图片清单.json', words: '正文字数统计.json', repair: '一致性修复结果.json',
   submission: '提交校验问题.json',
 };
 const TASK_FILE_WRITING = '写完再调用对应工具提交。';
@@ -45,10 +45,7 @@ const TASK_FILE_SCHEMAS = {
   renderHtml: list('images', object({ image_id: id, source_file: id, frame_size: frameSize }, { regenerate })),
   renderMermaid: list('images', object({ image_id: id, source_file: id }, { regenerate })),
   applyImages: list('images', object({ image_id: id, asset_ref: id, previous_asset_ref: text })),
-  adjust: list('sections', object({ section_id: id, instructions: text })),
   repair: object({ sections: list('sections', object({ section_id: id, instructions: text })).properties.sections }, { rules: text }),
-  tables: list('sections', object({ section_id: id, instructions: text }, { regenerate })),
-  layout: list('section_ids', id),
 };
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validators = Object.fromEntries(Object.entries(TASK_FILE_SCHEMAS).map(([key, schema]) => [key, ajv.compile(schema)]));

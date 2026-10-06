@@ -1,79 +1,176 @@
 const fs = require('node:fs');
-const { NATIVE_AGENT_TOOLS } = require('./agent/agentToolEnvironment.cjs');
 const path = require('node:path');
-const { SUBMISSION_FIX_TOOL, editContentSections, batchResponse } = require('./contentGenerationEditTools.cjs');
-const { TASK_FILE_WRITING, taskFilePath, readTaskFile } = require('./contentGenerationTaskFiles.cjs');
+const { countReadableWords } = require('../utils/wordCount.cjs');
+const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
+const { AI_UPSTREAM_UNAVAILABLE } = require('../utils/aiBatchGuard.cjs');
+const { warmSharedPrefix } = require('./contentGenerationPrefixWarmup.cjs');
+const { runAiBatch, requestWithFollowUp, topLevelNodes, spliceHtml, writeHtml } = require('./contentGenerationAiBatch.cjs');
 
-// 补写由子任务完成；主 Agent 在本轮处理后收尾纠错，结果由统一提交检查验收。
-const LAYOUT_TOOLS = [...NATIVE_AGENT_TOOLS, 'supplement-layout-sections', 'complete-layout-supplement', SUBMISSION_FIX_TOOL, 'report-failure'];
+const LAYOUT_TOOL = 'supplement-layout-sections';
+// 格式补写阶段主 Agent 只调用补写工具。
+const LAYOUT_TOOLS = [LAYOUT_TOOL, 'report-failure'];
+// 补写字数下限占建议字数的比例；超过建议字数会把内容挤到下一页，宁少勿多。
+const LAYOUT_MIN_RATIO = 0.7;
 
-// 页码仅供理解问题，编辑位置以小节文件和图片/图组标识为准。
+// 阶段提示词只交代调用工具；定位、补写、核对和写回都由工具完成。
 function buildLayoutPrompt(state) {
-  return `正文生成、字数调整、一致性审计及可选的去表格阶段已结束，现在执行格式自检补写。
-程序已按当前模板导出 Word，使用 docx-editor 实测页/栏留白，并排除了章节末尾与小段正常留白。本次共 ${state.jobs.length} 个小节、${state.jobs.reduce((sum, job) => sum + job.gaps.length, 0)} 处需要补写，完整任务见 程序清单/格式补写任务.json，按需读取；只处理其中的明确任务，不自行导出或分析 Word，不修改其他位置。
-任务中每项 gaps 给出待插入文字的图片或图组（figure_ids、block_index、target_text），以及 preceding_text、页码、栏号、留白厘米数和建议新增字数。block_index 为检测时该小节顶层元素从零开始的下标，修改后会变化，优先按图片标识定位；页码和栏号不可作为 HTML 定位依据。
-将尚未成功的小节 ID 写入 ${taskFilePath('layout')}，格式为 {"section_ids":["小节 ID"]}，再调用 supplement-layout-sections，工具会向子任务提供该节完整任务集合。${TASK_FILE_WRITING}各小节并发编辑，同一小节的全部位置由一个子任务处理。已完成 ${state.completed_section_ids.length} 个小节，再次提交时自动跳过。
-补写紧接在目标图片或整个图片表格之前，使用连贯的普通段落，不把文字写进图片、图注或表格单元格，不修改图片、图组结构或布局。建议字数为排版估算值，尽量用一段连贯文字，避免拆成许多短段引入额外段间距。内容必须承接上下文，有实际信息，不用重复套话填空，不新增无依据的事实或承诺。
-失败或中断任务先重读文件；若相应位置已有本次补写，核对后只补不足部分，禁止重复追加整份字数。等待全部并发任务结束，根据真实结果处理未完成项。本轮编辑后，如发现新增内容存在具体错误，读取对应小节，使用 edit 作必要修正，保留既有正文和图片。无需为收尾重新通读全部小节或进行新一轮审计。中断后保留已写入的修正，继续处理未解决的问题，不重复补写成功小节。本轮处理后，调用 complete-layout-supplement 并标记 task_complete=true，未完成项交由程序统一决定继续修复或接受遗留问题；纠错 edit 不标记任务完成。只执行这一轮补写，不再调整全文字数、不再审计、不重新配图；程序将重新导出复查。`;
+  if (state.submission) return `格式补写已经完成。调用 ${LAYOUT_TOOL} 读取结果，并在该调用上设置 task_complete=true；不要读取或修改正文，也不要调用其他工具。`;
+  const gaps = state.jobs.reduce((sum, job) => sum + job.gaps.length, 0);
+  return `正文生成、字数校正、一致性审计及可选的去表格已结束。程序已按当前模板导出 Word 并检测页栏留白：共 ${state.jobs.length} 个小节、${gaps} 处需要在图片前补写文字。调用 ${LAYOUT_TOOL}，并在该调用上设置 task_complete=true。工具由程序按图片定位、生成补写段落、核对字数并写回；不要读取或修改正文，也不要调用其他工具。工具返回后本阶段结束，程序随后重新导出复查。工具报错时按错误说明重新调用。`;
 }
 
-// 汇总本轮尚未完成的补写目标，不重新判断程序复查已允许保留的留白。
-function collectLayoutSubmissionIssues(state) {
-  if (!state.submission) return [];
-  const completed = new Set(state.completed_section_ids);
-  return state.jobs.filter(job => !completed.has(job.section_id)).map(job => ({
-    severity: 'quality', type: 'layout-supplement', section_id: job.section_id,
-    file: job.file, fixable: false,
-    message: `小节 ${job.section_id} 的指定格式补写尚未完成，请按已保存的补写任务处理并提交真实结果。`,
-  }));
+const gapKey = (sectionId, gap) => `${sectionId}:${gap.figure_ids?.[0] || `block-${gap.block_index}`}`;
+const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// 按图片标识定位留白后的图片块，标识缺失时退回检测时的顶层下标；补写段落 id 由图片块 id 确定，存在即已补写。
+function locateGap(html, gap) {
+  const { $, nodes } = topLevelNodes(html);
+  const elements = nodes.filter(item => item.kind === 'element');
+  const figureId = gap.figure_ids?.[0];
+  const hasImage = item => $(item.node).find('figure').addBack('figure').length > 0;
+  let index = figureId ? elements.findIndex(item => $(item.node).find('figure').addBack('figure').toArray().some(figure => $(figure).attr('id') === figureId)) : -1;
+  if (index < 0 && !figureId && elements[gap.block_index] && hasImage(elements[gap.block_index])) index = gap.block_index;
+  if (index < 0) return null;
+  const element = elements[index];
+  const leadId = `${String($(element.node).attr('id') || figureId).slice(0, 59)}_lead`;
+  const position = nodes.indexOf(element);
+  const marker = nodes[position - 1]?.kind === 'marker' ? nodes[position - 1] : null;
+  const preceding = elements.slice(0, index).filter(item => ['p', 'ul', 'ol'].includes(item.node.name)).slice(-2)
+    .map(item => $(item.node).text().replace(/\s+/g, ' ').trim()).join('\n');
+  return {
+    leadId, inserted: $('[id]').toArray().some(node => $(node).attr('id') === leadId),
+    insertAt: marker ? marker.start : element.start, preceding,
+    caption: $(element.node).find('figcaption').map((_index, node) => $(node).text().trim()).get().join('；'),
+  };
 }
 
-// 并发编辑只报告本节可用性，补写目标由主流程统一验收。
-function createContentGenerationLayoutTools({ agentService, signal, layout, activity, inspectSection, onActivity }, { Type, workspaceDir }) {
-  const response = (details, text = details) => ({ content: [{ type: 'text', text: JSON.stringify(text) }], details });
+// 全轮相同的补写规则放在 system，便于并发请求复用前缀缓存。
+const SUPPLEMENT_SYSTEM = `你负责为投标正文补写一段过渡文字，插在指定图片之前，用于填补排版留白。
+要求：写一段连贯的纯文本，承接前文并自然引出后面的图片；内容与本节标题和写作重点直接相关，有实际信息，不用重复套话填空；不新增无依据的事实、数值或承诺，全局事实未明确的信息按本项目事实缺失处理要求执行；不用标题、列表、Markdown、HTML 或 LaTeX。
+字数口径：每个汉字计 1 字，连续的英文字母或数字计 1 字，标点和空白不计。字数必须在要求范围内，宁少勿多。
+只输出这一段文字。`;
+
+// 逐处补写并写回工作区；state 提供 get/save，继续时已插入补写段落的位置跳过。
+async function supplementLayoutGaps({ aiService, workspaceDir, signal, onActivity, state }) {
+  let current = state.get();
+  const save = next => {
+    current = next;
+    state.save(current);
+  };
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+  const targets = new Map(decisions.targets.map(section => [section.id, section]));
+  const read = section => fs.readFileSync(path.join(workspaceDir, section.file), 'utf8');
+  // 结果不可用的位置不再重试；服务端请求失败的位置在继续时重试。
+  const failures = { ...current.failures };
+  for (const [key, failure] of Object.entries(failures)) if (failure.retry) delete failures[key];
+  save({ ...current, failures });
+  const items = current.jobs.flatMap(job => job.gaps.map(gap => ({ job, gap, section: targets.get(job.section_id), key: gapKey(job.section_id, gap) })))
+    .filter(item => !current.failures[item.key] && !locateGap(read(item.section), item.gap)?.inserted);
+  const pendingBySection = new Map();
+  for (const item of items) pendingBySection.set(item.job.section_id, (pendingBySection.get(item.job.section_id) || 0) + 1);
+  const report = (entries, extra = {}) => onActivity?.({ progress: { step: 'layout-supplement', label: '正在补写排版留白', unit: '节', total: current.jobs.length, items: entries, ...extra } });
+  report(current.jobs.map(job => ({ id: job.section_id, status: pendingBySection.has(job.section_id) ? 'pending' : 'success' })));
+  const failedSections = new Set();
+  // 一节的位置全部处理完才更新该节进度；全部补写成功的小节计入完成。
+  const settle = (item, status) => {
+    if (status === 'error') failedSections.add(item.job.section_id);
+    const left = pendingBySection.get(item.job.section_id) - 1;
+    pendingBySection.set(item.job.section_id, left);
+    if (left) return;
+    const failed = failedSections.has(item.job.section_id);
+    if (!failed) save({ ...current, completed_section_ids: [...new Set([...current.completed_section_ids, item.job.section_id])] });
+    report([{ id: item.job.section_id, status: failed ? 'error' : 'success' }]);
+  };
+  const sharedInput = `全局事实设定（完整内容）：\n${fs.readFileSync(path.join(workspaceDir, '全局事实设定.md'), 'utf8')}\n\n本项目事实缺失处理要求：\n${decisions.global_facts_requirements}`;
+  if (items.length > 1) await warmSharedPrefix({ aiService, system: SUPPLEMENT_SYSTEM, sharedInput, signal, onActivity, logTitle: '格式补写-公共前缀预热', label: '格式补写公共材料' });
+  await runAiBatch({
+    items, signal,
+    async run(item, guard) {
+      report([{ id: item.job.section_id, status: 'running' }]);
+      const located = locateGap(read(item.section), item.gap);
+      if (!located) throw new Error('未找到对应的图片块');
+      const maximum = item.gap.suggested_words;
+      const minimum = Math.ceil(maximum * LAYOUT_MIN_RATIO);
+      const text = await requestWithFollowUp({
+        aiService, guard, logTitle: `格式补写-${item.section.number}-${item.section.title}`,
+        messages: [
+          { role: 'system', content: SUPPLEMENT_SYSTEM },
+          { role: 'user', content: `${sharedInput}\n\n本节：${item.section.number} ${item.section.title}（${item.section.chapter_path || item.section.title}）\n本节写作重点：${item.section.content_plan?.writing_focus || '未提供'}\n补写位置前文：\n${located.preceding || '无'}\n其后图片的图注：${located.caption || '无'}\n补写字数：${minimum}～${maximum} 字。` },
+        ],
+        evaluate(reply) {
+          const content = extractAiSource(reply, 'text').replace(/\s*\n\s*/g, '').trim();
+          if (!content) throw new Error('没有输出文字');
+          if (/[<>]/.test(content)) throw new Error('只输出一段纯文本，不使用 HTML 标签');
+          const words = countReadableWords(content);
+          if (words > maximum) return { feedback: `本次补写 ${words} 字，超过上限 ${maximum} 字。请删减到 ${minimum}～${maximum} 字，只输出一段纯文本。`, reason: `补写 ${words} 字，超过上限 ${maximum} 字` };
+          if (words < minimum) return { value: content, distance: maximum - words, feedback: `本次补写 ${words} 字，少于 ${minimum} 字。请补充到 ${minimum}～${maximum} 字，只输出一段纯文本。`, reason: `补写 ${words} 字，少于 ${minimum} 字` };
+          return { accept: true, value: content };
+        },
+      });
+      guard.signal.throwIfAborted();
+      // 写回前重读本节：同节其他位置可能已先插入，重新定位后插在图片块的分隔注释之前，其余内容不变。
+      const file = path.join(workspaceDir, item.section.file);
+      const html = fs.readFileSync(file, 'utf8');
+      const target = locateGap(html, item.gap);
+      if (!target) throw new Error('图片块在补写期间已变化，未写回');
+      if (!target.inserted) writeHtml(file, spliceHtml(html, [{ start: target.insertAt, end: target.insertAt, text: `<!-- yibiao:block -->\n<p id="${target.leadId}">${escapeHtml(text)}</p>\n\n` }]));
+      settle(item, 'success');
+    },
+    onError(item, error, { cancelled }) {
+      if (cancelled) {
+        report([{ id: item.job.section_id, status: 'cancelled' }]);
+        return;
+      }
+      save({ ...current, failures: { ...current.failures, [item.key]: { reason: `${error?.message || error}`, retry: error?.isAiRequestError === true } } });
+      settle(item, 'error');
+    },
+  });
+  // 本轮结束按文件复查：全部位置已插入补写的小节完成，其余位置连同原因记入 failed_gaps。
+  const completed = [];
+  const failedGaps = [];
+  for (const job of current.jobs) {
+    const section = targets.get(job.section_id);
+    const html = read(section);
+    const missing = job.gaps.filter(gap => !locateGap(html, gap)?.inserted);
+    if (!missing.length) completed.push(job.section_id);
+    for (const gap of missing) {
+      failedGaps.push({ section_id: job.section_id, number: section.number, title: section.title, figure_id: gap.figure_ids?.[0] || '',
+        reason: current.failures[gapKey(job.section_id, gap)]?.reason || '补写未完成' });
+    }
+  }
+  save({ ...current, completed_section_ids: completed, failed_gaps: failedGaps, submission: {} });
+  report([], { label: `格式补写：完成 ${completed.length} 节${failedGaps.length ? `，${failedGaps.length} 处未补写` : ''}`, done: true });
+  return current;
+}
+
+// 工具结果：补写完成的小节数和未补写位置原因。
+function layoutSupplementResult(state) {
+  return { sections: state.jobs.length, completed: state.completed_section_ids.length,
+    failed: state.failed_gaps.map(({ number, title, figure_id, reason }) => ({ number, title, figure_id, reason })) };
+}
+
+// 格式补写阶段的唯一工具；完成后提交结果，由主流程重新导出复查。
+function createContentGenerationLayoutTools({ aiService, signal, onActivity, layout, failTask = () => {} }, { Type, workspaceDir }) {
   return [{
-    name: 'supplement-layout-sections', label: '并发补写排版留白', executionMode: 'sequential',
-    description: `读取 ${taskFilePath('layout')} 中的小节 ID，格式为 {"section_ids":["小节 ID"]}，按程序检测的任务集合并发补写这些小节，保留所有图片和既有内容。已完成补写的小节自动跳过，不重复补写；小节不在本次格式补写任务中时报错。${TASK_FILE_WRITING}返回 total、success、skipped 和 unresolved（失败小节及原因）。`,
+    name: LAYOUT_TOOL, label: '补写排版留白', executionMode: 'sequential',
+    description: '仅在格式补写阶段调用：程序按检测到的留白逐处定位图片块，生成补写段落、核对字数后插在图片前，返回完成情况和未补写位置原因。本阶段只调用本工具，并在本次调用上设置 task_complete=true。',
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_callId, _params, toolSignal) {
       const state = layout.get();
-      // 补写任务在程序自检后才确定，执行时读取最终正文目标。
-      const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
-      const targets = new Map(decisions.targets.map(section => [section.id, section]));
-      const { section_ids: ids } = readTaskFile(workspaceDir, 'layout');
-      if (new Set(ids).size !== ids.length) throw new Error('任务文件中不能重复出现同一小节');
-      // 已完成补写的小节跳过，避免重复追加文字。
-      const jobs = ids.filter(id => !state.completed_section_ids.includes(id)).map(id => {
-        const job = state.jobs.find(item => item.section_id === id);
-        if (!job) throw new Error(`小节不在本次格式补写任务中：${id}`);
-        return { section_id: id, instructions: `检测任务：${JSON.stringify(job)}。逐一定位 gaps 的图片/图组，在整个块之前补写 suggested_words 左右的连贯正文。block_index 是检测时下标，定位以 figure_ids 及邻近文字为准。若此前中断时已补写，保留已有补写，仅补不足部分，不重复追加。` };
-      });
-      const { results: edited, restored } = jobs.length ? await editContentSections({ jobs, targets, workspaceDir, agentService, signal, toolSignal, activity, inspectSection, onActivity,
-        title: '格式自检补写',
-        instructions: '只在指定位置新增普通文字段落，承接前后语义，不新增无依据事实或承诺，不改图片、图注、图组、表格及其单元格，不删除或改写已有正文。不重新审计、不调整全文字数、不生成图片。优先一段连贯正文，不用标题、列表或大量短段填空。',
-        onResult(item) {
-          if (item.status !== 'success') return;
-          const current = layout.get();
-          layout.save({ ...current, completed_section_ids: [...current.completed_section_ids, item.section_id] });
-        },
-      }) : { results: [], restored: [] };
-      const byId = new Map(edited.map(item => [item.section_id, item]));
-      const results = ids.map(id => byId.get(id) || { section_id: id, status: 'skipped' });
-      return response({ results, restored }, batchResponse(results, restored));
-    },
-  }, {
-    name: 'complete-layout-supplement', label: '完成格式补写', executionMode: 'sequential',
-    description: '本轮处理后提交真实补写结果，由程序统一验收；接受后重新导出复查，不因复查留白再次补写。',
-    parameters: Type.Object({}),
-    execute() {
-      const state = layout.get();
       if (state?.status !== 'supplementing') throw new Error('当前不在格式补写阶段');
-      if (activity.pending) throw new Error('请等待全部并发任务结束');
-      // 保持补写阶段可编辑，统一提交检查接受后才进入导出复查。
-      layout.save({ ...state, submission: {} });
-      return response({ submitted: true });
+      if (!state.submission) {
+        try {
+          await supplementLayoutGaps({ aiService, workspaceDir, signal: AbortSignal.any([signal, toolSignal].filter(Boolean)), onActivity, state: layout });
+        } catch (error) {
+          // 服务端连续失败时结束整个任务，避免交回 Agent 反复重试；继续任务后接着补写剩余位置。
+          if (error?.code === AI_UPSTREAM_UNAVAILABLE) failTask(error);
+          throw error;
+        }
+      }
+      const details = layoutSupplementResult(layout.get());
+      return { content: [{ type: 'text', text: JSON.stringify(details) }], details };
     },
   }];
 }
 
-module.exports = { LAYOUT_TOOLS, buildLayoutPrompt, collectLayoutSubmissionIssues, createContentGenerationLayoutTools };
+module.exports = { LAYOUT_TOOL, LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools, supplementLayoutGaps, locateGap };
