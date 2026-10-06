@@ -6,6 +6,7 @@ const { createPiRuntimeService } = require('./pi/piRuntimeService.cjs');
 const { buildPiSelfCheckReportMarkdown } = require('./pi/piSelfCheckService.cjs');
 const { createAgentErrorReporter } = require('./agent/agentErrorReporter.cjs');
 const { resolveAgentAbortReason } = require('./agent/agentInterruption.cjs');
+const { getAiRequestActivity } = require('../utils/aiRequestActivity.cjs');
 const {
   createPersistentAgentTask,
   deletePersistentAgentTask,
@@ -22,6 +23,12 @@ const {
 
 const PI_RUNTIME_ID = 'pi';
 const PI_RUNTIME_NAME = 'Pi Agent';
+// 在 Agent 执行过程中发起的 runTask 视为子代理：同一父 Agent 同时运行的子代理不超过文本并发上限的倍数，
+// 超出部分在创建 Runtime 前排队；每条提示词之后最多执行的轮数。主任务不受这两项限制。
+const CHILD_AGENT_CONCURRENCY_MULTIPLIER = 2;
+const CHILD_AGENT_MAX_TURNS_PER_PROMPT = 100;
+// 各 Runtime 的状态变化合并后再汇总推送，避免活动 Session 较多时每次变化都全量构建状态。
+const STATUS_EMIT_INTERVAL_MS = 250;
 
 function nowIso() {
   return new Date().toISOString();
@@ -154,6 +161,10 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   const questionListeners = new Set();
   const primarySessionListeners = new Set();
   const activeEntries = new Map();
+  // 子代理名额池按父 Agent 的 AI 请求上下文区分；排队项不创建 Runtime。
+  const childPools = new WeakMap();
+  const childWaiters = new Set();
+  let statusTimer = null;
   let serviceRuntime = null;
   let serviceRuntimeUnsubscribe = null;
   let closing = false;
@@ -247,11 +258,17 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     dispatchMonitorEvent(event);
   }
 
-  function emitStatus() {
+  function flushStatus() {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = null;
     const status = getStatus();
     listeners.forEach((listener) => {
       try { listener(status); } catch {}
     });
+  }
+
+  function emitStatus() {
+    if (!statusTimer) statusTimer = setTimeout(flushStatus, STATUS_EMIT_INTERVAL_MS);
   }
 
   function getVisibleQuestionEntry() {
@@ -340,7 +357,10 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       };
       pendingQuestions.set(questionId, entry);
       signal?.addEventListener?.('abort', entry.onAbort, { once: true });
-      const recommendedOption = question.options.find((option) => option.recommended && !option.custom);
+      // 调用方声明 auto_answer=false 时仍展示推荐项，但必须由用户手动选择。
+      const recommendedOption = request.auto_answer === false
+        ? null
+        : question.options.find((option) => option.recommended && !option.custom);
       if (recommendedOption) {
         autoConfirmationService.register({
           id: entry.autoConfirmationId,
@@ -464,7 +484,8 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
   }
 
   function getEntryActiveTask(entry) {
-    const runtimeStatus = entry.runtime ? normalizeRuntimeStatus(entry.runtime.getStatus()) : null;
+    // 这里只汇总各子任务运行状态；共享 AI 队列在服务级 getStatus 中统一读取。
+    const runtimeStatus = entry.runtime ? normalizeRuntimeStatus(entry.runtime.getStatus({ includeProxyStatus: false })) : null;
     const source = runtimeStatus?.active_task;
     const startedAt = entry.startedAt || entry.createdAt;
     const activeTask = source || {
@@ -512,7 +533,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       message: running ? `${activeTasks.length} 个 Agent Session 正在运行` : serviceStatus.message,
       active_tasks: activeTasks,
       primary_session_id: primarySession?.session_id || '',
-      queued_count: 0,
+      queued_count: childWaiters.size,
       queued_tasks: [],
       proxy: aiService?.getTextQueueStatus?.() || serviceStatus.proxy || { active: 0, queued: 0, limit: 0 },
     };
@@ -522,7 +543,69 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     return resolveAgentAbortReason(signal);
   }
 
+  function getChildAgentLimit() {
+    return Math.max(1, Number(aiService?.getTextQueueStatus?.()?.limit || 0) * CHILD_AGENT_CONCURRENCY_MULTIPLIER);
+  }
+
+  // 名额已满或已有排队项时按先后顺序等待；排队期间中止则移出队列。
+  function acquireChildSlot(pool, signal) {
+    if (!pool.waiters.length && pool.active < getChildAgentLimit()) {
+      pool.active += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => waiter.reject(createAbortError(signal));
+      const cleanup = () => {
+        signal?.removeEventListener?.('abort', onAbort);
+        childWaiters.delete(waiter);
+        const index = pool.waiters.indexOf(waiter);
+        if (index >= 0) pool.waiters.splice(index, 1);
+      };
+      const waiter = {
+        grant() {
+          cleanup();
+          pool.active += 1;
+          resolve();
+        },
+        reject(error) {
+          cleanup();
+          reject(error);
+        },
+      };
+      pool.waiters.push(waiter);
+      childWaiters.add(waiter);
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+      emitStatus();
+    });
+  }
+
+  function releaseChildSlot(pool) {
+    pool.active -= 1;
+    while (pool.waiters.length && pool.active < getChildAgentLimit()) pool.waiters[0].grant();
+    emitStatus();
+  }
+
+  // 子代理统一限制同时运行数量和每条提示词后的轮数，调用方无需单独配置；主任务直接启动。
   function startTask(payload = {}, userTaskContextProvider) {
+    if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
+    if (payload.signal?.aborted) return Promise.reject(createAbortError(payload.signal));
+    const parentActivity = getAiRequestActivity();
+    if (!parentActivity) return launchTask(payload, userTaskContextProvider);
+    if (!childPools.has(parentActivity)) childPools.set(parentActivity, { active: 0, waiters: [] });
+    const pool = childPools.get(parentActivity);
+    return acquireChildSlot(pool, payload.signal).then(() => {
+      let launched;
+      try {
+        launched = launchTask({ ...payload, max_turns_per_prompt: CHILD_AGENT_MAX_TURNS_PER_PROMPT }, userTaskContextProvider);
+      } catch (error) {
+        releaseChildSlot(pool);
+        throw error;
+      }
+      return launched.finally(() => releaseChildSlot(pool));
+    });
+  }
+
+  function launchTask(payload, userTaskContextProvider) {
     if (closing) return Promise.reject(new Error('Agent 服务正在关闭'));
     if (payload.signal?.aborted) return Promise.reject(createAbortError(payload.signal));
     const taskId = payload.task_id || crypto.randomUUID();
@@ -774,6 +857,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     monitorListeners.clear();
     clearPendingMonitorEvents();
     agentErrorReporter.close();
+    for (const waiter of [...childWaiters]) waiter.reject(new Error('Agent 服务正在关闭'));
 
     const entries = [...activeEntries.values()];
     await Promise.all(entries.map((entry) => entry.runtime?.close?.().catch(() => undefined)));
@@ -784,7 +868,7 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
     try { serviceRuntimeUnsubscribe?.(); } catch {}
     serviceRuntimeUnsubscribe = null;
     serviceRuntime = null;
-    emitStatus();
+    flushStatus();
   }
 
   return {

@@ -16,14 +16,34 @@ function encodePathSegment(value) {
   return encodeURIComponent(String(value));
 }
 
-/** 读取 GitHub Release 元数据。 */
-async function readGithubRelease(releaseJsonPath, tagName) {
-  const raw = await fs.readFile(releaseJsonPath, 'utf-8');
-  const release = JSON.parse(raw);
-  if (!release.tagName && !release.tag_name) {
-    release.tagName = tagName;
+/** 按本次 tag 读取 GitHub Release 和附件，供两个本地入口共用。 */
+async function fetchGithubRelease(tagName) {
+  const repoPath = requireEnv('GITHUB_REPOSITORY').split('/').map(encodePathSegment).join('/');
+  const response = await fetch(`https://api.github.com/repos/${repoPath}/releases/tags/${encodePathSegment(tagName)}`, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${requireEnv('GITHUB_TOKEN')}`,
+      'User-Agent': 'yibiao-release-sync',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub Release ${tagName} request failed: HTTP ${response.status}`);
   }
-  return release;
+  const release = await response.json();
+  if (release.tag_name !== tagName || release.draft || !release.assets?.length) {
+    throw new Error(`GitHub Release ${tagName} must be published and contain assets.`);
+  }
+  return {
+    tagName,
+    name: release.name || tagName,
+    body: release.body || '',
+    isPrerelease: release.prerelease,
+    assets: release.assets.map((asset) => ({
+      name: asset.name,
+      size: asset.size,
+      url: asset.browser_download_url,
+    })),
+  };
 }
 
 /** 调用 AtomGit Release API 并统一处理响应。 */
@@ -149,44 +169,83 @@ async function updateAtomGitRelease({ owner, repo, token, tagName, name, body, r
   console.log(`Updated AtomGit Release: ${tagName}`);
 }
 
-/** 创建或更新 AtomGit Release 元数据。 */
-async function publishAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus }) {
-  const existingRelease = await getAtomGitReleaseByTag({ owner, repo, token, tagName });
-  if (existingRelease) {
-    await updateAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus });
-    return;
-  }
-  await createAtomGitRelease({ owner, repo, token, tagName, name, body, releaseStatus });
+/** 读取已上传的附件名，排除 AtomGit 自动生成的源码压缩包。 */
+function getExistingAssetNames(release) {
+  return new Set((release?.assets || [])
+    .filter((asset) => asset.type !== 'source')
+    .map((asset) => asset.name));
 }
 
-/** 同步 AtomGit Release 元数据，不处理附件。 */
-async function main() {
-  const token = requireEnv('ATOMGIT_ACCESS_TOKEN');
-  const owner = requireEnv('ATOMGIT_OWNER');
-  const repo = requireEnv('ATOMGIT_REPO');
-  const tagName = requireEnv('TAG_NAME');
-  const releaseJsonPath = requireEnv('GITHUB_RELEASE_JSON');
-
-  const githubRelease = await readGithubRelease(releaseJsonPath, tagName);
-  const releaseName = String(githubRelease.name || githubRelease.tagName || tagName);
-  const releaseBody = String(githubRelease.body || '');
-  const releaseStatus = githubRelease.isPrerelease ? 'pre' : 'latest';
-
-  if (!await hasAtomGitTag({ owner, repo, token, tagName })) {
-    throw new Error(`AtomGit tag ${tagName} was not found.`);
+/** 准备 Release 和本次待传清单；重跑只补齐同一 tag 的缺失附件。 */
+async function prepareRelease(atomGit, releaseJsonPath) {
+  const [githubRelease, tagExists, existingRelease] = await Promise.all([
+    fetchGithubRelease(atomGit.tagName),
+    hasAtomGitTag(atomGit),
+    getAtomGitReleaseByTag(atomGit),
+  ]);
+  if (!tagExists) {
+    throw new Error(`AtomGit tag ${atomGit.tagName} was not found. Complete code mirror sync first.`);
   }
-  console.log(`AtomGit tag is ready: ${tagName}`);
-  await publishAtomGitRelease({
-    owner,
-    repo,
-    token,
-    tagName,
-    name: releaseName,
-    body: releaseBody,
-    releaseStatus,
-  });
+  if (!existingRelease) {
+    // 新版本在附件齐全前保持预发布；已有版本准备阶段不改变状态。
+    await createAtomGitRelease({
+      ...atomGit,
+      name: githubRelease.name,
+      body: githubRelease.body,
+      releaseStatus: 'pre',
+    });
+  }
+  const existingNames = getExistingAssetNames(existingRelease);
+  const pendingAssets = githubRelease.assets.filter((asset) => !existingNames.has(asset.name));
+  await fs.writeFile(releaseJsonPath, JSON.stringify({ ...githubRelease, pendingAssets }, null, 2), 'utf-8');
+  console.log(`AtomGit Release prepared: ${atomGit.tagName}; pending=${pendingAssets.length}, skipped=${githubRelease.assets.length - pendingAssets.length}`);
+}
 
-  console.log(`AtomGit Release metadata published: ${owner}/${repo}@${tagName}`);
+/** 确认完整附件已经到账后，同步发布状态与 Actions 摘要。 */
+async function finalizeRelease(atomGit, releaseJsonPath) {
+  const githubRelease = JSON.parse(await fs.readFile(releaseJsonPath, 'utf-8'));
+  if (githubRelease.tagName !== atomGit.tagName) {
+    throw new Error(`Release manifest does not match tag ${atomGit.tagName}.`);
+  }
+  const release = await getAtomGitReleaseByTag(atomGit);
+  const existingNames = getExistingAssetNames(release);
+  const missing = githubRelease.assets.filter((asset) => !existingNames.has(asset.name));
+  if (missing.length > 0) {
+    throw new Error(`AtomGit Release is missing assets: ${missing.map((asset) => asset.name).join(', ')}`);
+  }
+  await updateAtomGitRelease({
+    ...atomGit,
+    name: githubRelease.name,
+    body: githubRelease.body,
+    releaseStatus: githubRelease.isPrerelease ? 'pre' : 'latest',
+  });
+  const releaseUrl = `https://atomgit.com/${encodePathSegment(atomGit.owner)}/${encodePathSegment(atomGit.repo)}/releases/${encodePathSegment(atomGit.tagName)}`;
+  const summary = `AtomGit Release published: ${atomGit.tagName}; assets=${githubRelease.assets.length}`;
+  console.log(summary);
+  console.log(`AtomGit Release: ${releaseUrl}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, `${summary}\n\n[AtomGit Release](${releaseUrl})\n`, 'utf-8');
+  }
+}
+
+/** 本地脚本在传输前后分别调用准备和完成阶段。 */
+async function main() {
+  const mode = process.argv[2];
+  if (mode !== '--prepare' && mode !== '--finalize') {
+    throw new Error('Expected --prepare or --finalize.');
+  }
+  const atomGit = {
+    token: requireEnv('ATOMGIT_ACCESS_TOKEN'),
+    owner: requireEnv('ATOMGIT_OWNER'),
+    repo: requireEnv('ATOMGIT_REPO'),
+    tagName: requireEnv('TAG_NAME'),
+  };
+  const releaseJsonPath = requireEnv('GITHUB_RELEASE_JSON');
+  if (mode === '--prepare') {
+    await prepareRelease(atomGit, releaseJsonPath);
+  } else {
+    await finalizeRelease(atomGit, releaseJsonPath);
+  }
 }
 
 main().catch((error) => {

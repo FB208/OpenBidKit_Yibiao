@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { compactLogError, createNoopDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const { warmPromptPrefix } = require('../utils/promptPrefixCache.cjs');
 const { runInvalidBidAndRejectionItemsExtraction } = require('./bidAnalysisTask.cjs');
 
 const checkRunStatus = ['idle', 'running', 'success', 'error'];
@@ -70,8 +71,21 @@ function normalizeSeverity(value) {
   return 'medium';
 }
 
+// 废标、错别字、逻辑三项检查共用的投标文件原文消息：逐字一致且排在最前，模型服务只在消息边界复用缓存，
+// 并发检查和废标多轮请求由此共享前缀；各项检查对原文的使用要求放在各自后续消息中。
+function buildBidDocumentsMessage(input) {
+  return {
+    role: 'user',
+    content: `【投标文件原文】
+以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。
+
+${formatBidDocumentsForPrompt(input)}`,
+  };
+}
+
 function buildCommonRejectionCheckMessages(input) {
   const messages = [
+    buildBidDocumentsMessage(input),
     {
       role: 'user',
       content: `【废标项检查输入 v1｜检查项】
@@ -93,12 +107,10 @@ ${input.customCheckItems.trim()}`,
 
   messages.push({
     role: 'user',
-    content: `【废标项检查输入 v2｜投标文件原文】
-以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。后续每条风险必须明确返回所属 bidDocumentId，只能引用对应投标文件中可见的内容作为证据。
+    content: `【废标项检查输入 v2｜原文使用要求】
+后续每条风险必须明确返回所属 bidDocumentId，只能引用对应投标文件中可见的内容作为证据。
 
-重要限制：当前原文由文本解析得到，图片、扫描件、截图、附件页等非文本内容可能已被过滤或无法完整呈现。检查材料缺失时，不得要求必须看到图片内容、扫描件正文或附件正文；如果投标文件中已经出现某项材料的章节标题、目录项、附件标题、材料清单项、表格条目、页码线索、图片占位线索或其他可表明该材料已插入/已提交的结构性文本线索，应视为该材料至少存在提交线索。
-
-${formatBidDocumentsForPrompt(input)}`,
+重要限制：当前原文由文本解析得到，图片、扫描件、截图、附件页等非文本内容可能已被过滤或无法完整呈现。检查材料缺失时，不得要求必须看到图片内容、扫描件正文或附件正文；如果投标文件中已经出现某项材料的章节标题、目录项、附件标题、材料清单项、表格条目、页码线索、图片占位线索或其他可表明该材料已插入/已提交的结构性文本线索，应视为该材料至少存在提交线索。`,
   });
 
   return messages;
@@ -190,11 +202,9 @@ JSON 格式：
 
 function buildTypoCheckMessages(input) {
   return [
-    { role: 'user', content: `【错别字检查输入 v2｜投标文件原文】
-以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。后续只能检查这些原文中真实存在的文字，每条结果必须返回所属 bidDocumentId。
-
-${formatBidDocumentsForPrompt(input)}` },
+    buildBidDocumentsMessage(input),
     { role: 'user', content: `【错别字检查任务 v1】
+后续只能检查这些原文中真实存在的文字，每条结果必须返回所属 bidDocumentId。
 请检查投标文件中的错别字、明显别字、同音错字、形近错字和明显录入错误，并输出 JSON。
 
 检查要求：
@@ -212,11 +222,9 @@ JSON 格式：{"findings":[{"bidDocumentId":"对应投标文件的 bidDocumentId
 
 function buildLogicCheckMessages(input) {
   return [
-    { role: 'user', content: `【逻辑谬误检查输入 v2｜投标文件原文】
-以下是本次需要一起检查的多份投标文件 Markdown 原文。每份文件都有唯一 bidDocumentId。后续只能基于这些投标文件内容进行逻辑一致性检查，每条结果必须返回所属 bidDocumentId。
-
-${formatBidDocumentsForPrompt(input)}` },
+    buildBidDocumentsMessage(input),
     { role: 'user', content: `【逻辑谬误检查任务 v1】
+后续只能基于这些投标文件内容进行逻辑一致性检查，每条结果必须返回所属 bidDocumentId。
 请检查投标文件中的逻辑谬误和前后不一致问题，并输出 JSON。
 
 检查范围：
@@ -1695,9 +1703,18 @@ async function runRejectionCheckTask({ aiService, workspaceStore, updateTask, ch
     }
   }
 
+  // 不分段的检查请求都以同一条投标文件原文消息开头（废标三轮、错别字和逻辑各一次），合计两次及以上时先预热。
+  const rejectionInput = { invalidBidAndRejectionItems, customCheckItems, bidDocuments: currentBidDocuments };
+  const bidDocumentsSegmented = shouldUseSegmentedBidDocuments(aiService, currentBidDocuments);
+  const sharedDocumentRequests = (runOptions.rejectionCheck && !shouldUseSegmentedRejectionFlow(aiService, rejectionInput) ? 3 : 0)
+    + (bidDocumentsSegmented ? 0 : (runOptions.typoCheck ? 1 : 0) + (runOptions.logicCheck ? 1 : 0));
+  if (sharedDocumentRequests > 1) {
+    await warmPromptPrefix({ aiService, messages: [buildBidDocumentsMessage(rejectionInput)], logTitle: '废标检查-公共前缀预热', label: '投标文件原文' });
+  }
+
   const tasks = [];
   if (runOptions.rejectionCheck) {
-    tasks.push(runOne('rejection', '废标项检查', (onProgress) => runRejectionItemCheck(aiService, { invalidBidAndRejectionItems, customCheckItems, bidDocuments: currentBidDocuments }, onProgress), 'rejectionCheckResult', rejectionInputSignature));
+    tasks.push(runOne('rejection', '废标项检查', (onProgress) => runRejectionItemCheck(aiService, rejectionInput, onProgress), 'rejectionCheckResult', rejectionInputSignature));
   }
   if (runOptions.typoCheck) {
     tasks.push(runOne('typo', '错别字检查', (onProgress) => runTypoCheck(aiService, { bidDocuments: currentBidDocuments }, onProgress), 'typoCheckResult', bidSignature));

@@ -675,14 +675,14 @@ function diagnosePiSelfCheck({ modelCheck, loopbackCheck, toolCheck, agentCheck,
     evidence.push(modelCheck.probes.tools.message || '工具调用检测失败');
   } else if (loopbackCheck?.blocked_by_system || loopbackCheck?.error?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED' || error?.code === 'AGENT_PROXY_LOOPBACK_BLOCKED') {
     category = 'loopback-blocked';
-    summary = '本机系统层阻断了应用对自身 AI Proxy 的 loopback 回连。';
+    summary = '应用回连自身 AI Proxy 失败，可能被本机系统层阻断，也可能是主进程繁忙。';
     confidence = 'high';
     const attempts = loopbackCheck?.startup_attempts || loopbackCheck?.error?.loopback_attempts || error?.loopback_attempts || [];
     attempts.forEach((attempt) => {
       const probe = attempt?.probe;
       evidence.push(`${attempt?.host || '未知地址'}：${probe?.message || attempt?.error?.message || '监听或回连失败'}`);
     });
-    evidence.push('可能来源：本机安全软件、企业终端管控、VPN/网络过滤驱动或 Windows TCP/IP loopback 异常');
+    evidence.push('可能来源：主进程繁忙（如同时运行大量 Agent）、本机安全软件、企业终端管控、VPN/网络过滤驱动或 Windows TCP/IP loopback 异常');
   } else if (loopbackCheck?.success === false) {
     category = 'loopback';
     summary = '应用内部 AI Proxy 已启动，但本机 loopback 访问存在异常。';

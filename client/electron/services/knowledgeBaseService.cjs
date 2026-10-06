@@ -7,6 +7,7 @@ const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
 const { enqueueJsonLine, enqueueLogRemoval } = require('../utils/silentFileLog.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
+const { warmPromptPrefix } = require('../utils/promptPrefixCache.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
 
 const supportedExtensions = new Set(['.doc', '.docx', '.wps', '.pdf', '.md', '.markdown', '.xls', '.xlsx']);
@@ -17,15 +18,9 @@ const DEFAULT_CONTEXT_LENGTH_LIMIT = 400000;
 const KNOWLEDGE_CONTEXT_LIMIT_RATIO = 0.8;
 /** 统一 block 分段时预留给任务说明+条目等 L2 后缀的预算比例（策略 B） */
 const TASK_AND_ITEMS_RESERVE_RATIO = 0.2;
-const PROMPT_CACHE_WARMUP_DELAY_MS = 5000;
 
 function now() {
   return new Date().toISOString();
-}
-
-/** 等待服务商写入提示词前缀缓存后再 fan-out */
-function waitForPromptCacheWarmup() {
-  return new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_WARMUP_DELAY_MS));
 }
 
 /** 并发执行任务，全部结束后若有失败则抛出首个错误 */
@@ -1273,6 +1268,21 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
         reserve: unifiedPack.reserve,
         reserve_ratio: TASK_AND_ITEMS_RESERVE_RATIO,
       });
+      // 模型服务只在消息边界复用缓存：L1 前缀由首轮提取、补充和匹配共用，在本次第一个实际执行的阶段按段预热一次。
+      let blockPrefixWarmed = false;
+      const warmBlockPrefixes = async (stage) => {
+        if (blockPrefixWarmed) return;
+        blockPrefixWarmed = true;
+        debugLog(documentId, 'ai:prefix-warmup', { stage, segment_total: unifiedSegments.length });
+        await Promise.all(unifiedSegments.map((segment) => warmPromptPrefix({
+          aiService,
+          messages: [buildDocumentBlocksPrefixMessage(segment.text, segment)],
+          logTitle: unifiedSegments.length > 1
+            ? `知识库-公共前缀预热-${document.file_name}-第${segment.index}段`
+            : `知识库-公共前缀预热-${document.file_name}`,
+          label: '知识库文档内容',
+        })));
+      };
 
       if (candidateItems.length > 0
         && !getStep(documentId, 'extract_first_items')
@@ -1308,7 +1318,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             segment_total: segments.length,
             segment_limit: unifiedPack.blockSegmentLimit,
             block_count: blocks.length,
-            execution_mode: segments.length > 1 ? 'warmup_parallel' : 'serial',
+            execution_mode: segments.length > 1 ? 'parallel' : 'serial',
             layout: 'block_prefix',
           });
 
@@ -1354,20 +1364,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             return items;
           };
 
-          const firstSegmentItems = await runSegment(segments[0]);
-          if (segments.length > 1) {
-            debugLog(documentId, 'ai:first-items:warmup-wait', { delay_ms: PROMPT_CACHE_WARMUP_DELAY_MS });
-            updateDocument(documentId, {
-              status: 'extracting',
-              progress: Math.min(54, 35 + Math.round((1 / segments.length) * 18)),
-              message: `提示词缓存预热完成，等待后并发提取剩余 ${segments.length - 1} 段`,
-            }, webContents);
-            await waitForPromptCacheWarmup();
-          }
-          const remainingItems = segments.length > 1
-            ? await runParallelAndThrowAfterSettled(segments.slice(1).map((segment) => () => runSegment(segment)))
-            : [];
-          const items = mergeTitleSummaryItems([firstSegmentItems, ...remainingItems]);
+          await warmBlockPrefixes('extract_first_items');
+          const items = mergeTitleSummaryItems(await runParallelAndThrowAfterSettled(segments.map((segment) => () => runSegment(segment))));
           debugLog(documentId, 'ai:first-items:done', {
             item_count: items.length,
             segment_total: segments.length,
@@ -1393,7 +1391,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             first_item_count: firstItems.length,
             segment_total: segments.length,
             segment_limit: unifiedPack.blockSegmentLimit,
-            execution_mode: segments.length > 1 ? 'warmup_parallel' : 'serial',
+            execution_mode: segments.length > 1 ? 'parallel' : 'serial',
             layout: 'block_prefix',
           });
 
@@ -1438,20 +1436,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
             return items;
           };
 
-          const firstSegmentItems = await runSegment(segments[0]);
-          if (segments.length > 1) {
-            debugLog(documentId, 'ai:supplement-items:warmup-wait', { delay_ms: PROMPT_CACHE_WARMUP_DELAY_MS });
-            updateDocument(documentId, {
-              status: 'extracting',
-              progress: Math.min(64, 55 + Math.round((1 / segments.length) * 8)),
-              message: `提示词缓存预热完成，等待后并发补充剩余 ${segments.length - 1} 段`,
-            }, webContents);
-            await waitForPromptCacheWarmup();
-          }
-          const remainingItems = segments.length > 1
-            ? await runParallelAndThrowAfterSettled(segments.slice(1).map((segment) => () => runSegment(segment)))
-            : [];
-          const items = mergeTitleSummaryItems([firstSegmentItems, ...remainingItems]);
+          await warmBlockPrefixes('extract_supplement_items');
+          const items = mergeTitleSummaryItems(await runParallelAndThrowAfterSettled(segments.map((segment) => () => runSegment(segment))));
           debugLog(documentId, 'ai:supplement-items:done', {
             item_count: items.length,
             segment_total: segments.length,
@@ -1680,6 +1666,15 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               item_segment_total: itemSegments.length,
               item_segment_limit: itemSegmentLimit,
             });
+            // 各条目批次共用本段 L1 前缀，多批时先预热。
+            if (itemSegments.length > 1) {
+              await warmPromptPrefix({
+                aiService,
+                messages: [blockPrefixMessage],
+                logTitle: `知识库-公共前缀预热-${document.file_name}-匹配第${segmentIndex}段`,
+                label: '知识库文档内容',
+              });
+            }
             const subMatchLists = [];
             for (const itemSegment of itemSegments) {
               const itemIds = new Set(itemSegment.itemIds);
@@ -1813,7 +1808,7 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               segment_total: missingSegments.length,
               segment_limit: missingSegmentLimit,
               item_count: items.length,
-              execution_mode: missingSegments.length > 1 ? 'warmup_parallel' : 'serial',
+              execution_mode: missingSegments.length > 1 ? 'parallel' : 'serial',
               layout: 'missing_prefix',
             });
 
@@ -1861,6 +1856,15 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
                   item_segment_total: itemSegments.length,
                   item_segment_limit: itemSegmentLimit,
                 });
+                // 各条目批次共用本段遗漏 block 前缀，多批时先预热。
+                if (itemSegments.length > 1) {
+                  await warmPromptPrefix({
+                    aiService,
+                    messages: [missingPrefixMessage],
+                    logTitle: `知识库-公共前缀预热-${document.file_name}-补漏第${attempt + 1}轮第${missingSegment.index}段`,
+                    label: '知识库遗漏内容',
+                  });
+                }
                 for (const itemSegment of itemSegments) {
                   const itemIds = new Set(itemSegment.itemIds);
                   const recoveryMessages = buildRecoveryMessages(
@@ -1904,28 +1908,14 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
               return segmentParsed;
             };
 
-            const firstSegmentParsed = await runMissingSegment(missingSegments[0]);
-            if (missingSegments.length > 1) {
-              debugLog(documentId, 'ai:recovery:warmup-wait', {
-                attempt: attempt + 1,
-                delay_ms: PROMPT_CACHE_WARMUP_DELAY_MS,
-              });
-              updateDocument(documentId, {
-                status: 'recovering',
-                progress: Math.min(96, 90 + attempt * 3),
-                message: `补漏预热完成，等待后并发处理剩余 ${missingSegments.length - 1} 段遗漏 block`,
-              }, webContents);
-              await waitForPromptCacheWarmup();
-            }
-            const remainingParsed = missingSegments.length > 1
-              ? await runParallelAndThrowAfterSettled(
-                missingSegments.slice(1).map((segment) => () => runMissingSegment(segment)),
-              )
-              : [];
+            // 各段遗漏 block 互不相同，没有可共用的前缀，直接并发。
+            const segmentParsedList = await runParallelAndThrowAfterSettled(
+              missingSegments.map((segment) => () => runMissingSegment(segment)),
+            );
             const attemptMatchLists = [];
             const attemptNewItems = [];
             const attemptDiscarded = [];
-            for (const segmentParsed of [firstSegmentParsed, ...remainingParsed]) {
+            for (const segmentParsed of segmentParsedList) {
               attemptMatchLists.push(segmentParsed.matches);
               attemptNewItems.push(...segmentParsed.new_items);
               attemptDiscarded.push(...segmentParsed.discarded);

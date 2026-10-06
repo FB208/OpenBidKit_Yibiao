@@ -116,7 +116,7 @@ function analyzeLayout(layout, sources, targetIds, twoColumn = false) {
 // 只执行当前程序检查；补写提示词由正文主会话续接，提交后再调用一次复查。
 async function runContentLayoutCheck({ exporter, snapshot, result, signal, layout, onActivity,
   layoutDocument = readWordLayout }) {
-  if (!layout.get()) layout.save({ status: 'checking', jobs: [], completed_section_ids: [], remaining_gaps: [] });
+  if (!layout.get()) layout.save({ status: 'checking', jobs: [], completed_section_ids: [], failures: {}, failed_gaps: [], remaining_gaps: [] });
   const state = layout.get();
   if (state.status === 'completed' || state.status === 'supplementing') return state;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yibiao-content-layout-'));

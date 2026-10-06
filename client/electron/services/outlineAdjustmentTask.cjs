@@ -3,8 +3,7 @@ const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs
 const {
   OUTLINE_OUTPUT_FILE,
   OUTLINE_JSON_SCHEMA,
-  buildFinalOutline,
-  readJson,
+  validateOutlineOutput,
   formatProgressTitle,
 } = require('./outlineGenerationTaskV2.cjs');
 
@@ -87,7 +86,6 @@ async function runOutlineAdjustmentTask({ agentService, workspaceStore, updateTa
     error: null,
   });
 
-  let adjustedOutline;
   const agentResult = await agentService.runTask({
     task_id: task.task_id,
     title: '技术方案目录 AI 调整',
@@ -107,11 +105,10 @@ async function runOutlineAdjustmentTask({ agentService, workspaceStore, updateTa
     max_retries: 0,
     onActivity: publishAgentActivity,
     validateOutput(candidate) {
-      adjustedOutline = buildFinalOutline(readJson(candidate.output_content, OUTLINE_OUTPUT_FILE), collectOutlineIds(storedPlan.outlineData.outline));
-      return adjustedOutline;
+      return validateOutlineOutput(candidate.output_content, collectOutlineIds(storedPlan.outlineData.outline), { checkSchema: false });
     },
     async continueTask(_candidate, meta) {
-      await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(adjustedOutline, null, 2) }]);
+      await meta.writeFiles([{ path: OUTLINE_OUTPUT_FILE, content: JSON.stringify(meta.validation_result, null, 2) }]);
       return { complete: true };
     },
   });
@@ -121,7 +118,7 @@ async function runOutlineAdjustmentTask({ agentService, workspaceStore, updateTa
   // 目录调整属于目录变更，saveOutline(replace) 会按既有规则清空旧正文与生成缓存。
   const saved = workspaceStore.saveOutline({
     outlineData: {
-      ...adjustedOutline,
+      ...agentResult.validation_result,
       project_name: storedPlan.outlineData.project_name,
       project_overview: storedPlan.outlineData.project_overview,
     },
