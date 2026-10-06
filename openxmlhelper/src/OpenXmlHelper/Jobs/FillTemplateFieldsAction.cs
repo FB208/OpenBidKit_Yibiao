@@ -90,7 +90,7 @@ static class FillTemplateFieldsAction
         }
     }
 
-    /// <summary>每个字段只能出现一次，文字值非空，勾选项至少选中一项。</summary>
+    /// <summary>每个字段只能出现一次，文字、勾选项、留空恰好给出一种；文字值非空，勾选项至少选中一项。</summary>
     static List<TemplateFieldFillValue> NormalizeValues(IEnumerable<TemplateFieldFillValue>? source)
     {
         var values = (source ?? []).Select(item => new TemplateFieldFillValue
@@ -98,16 +98,18 @@ static class FillTemplateFieldsAction
             Id = (item.Id ?? "").Trim(),
             Value = item.Value,
             Selected = item.Selected?.Select(option => (option ?? "").Trim()).Where(option => option.Length > 0).Distinct(StringComparer.Ordinal).ToList(),
+            Blank = item.Blank,
         }).ToList();
         var problems = new List<string>();
         var duplicates = values.GroupBy(item => item.Id, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key).ToList();
         if (duplicates.Count > 0) problems.Add($"字段重复：{string.Join('、', duplicates)}");
         if (values.Any(item => item.Id.Length == 0)) problems.Add("存在缺少 id 的字段");
         var invalid = values
-            .Where(item => item.Selected is null ? string.IsNullOrWhiteSpace(item.Value) : item.Value is not null || item.Selected.Count == 0)
+            .Where(item => (item.Value is not null ? 1 : 0) + (item.Selected is not null ? 1 : 0) + (item.Blank == true ? 1 : 0) != 1
+                || (item.Selected is not null ? item.Selected.Count == 0 : item.Value is not null && string.IsNullOrWhiteSpace(item.Value)))
             .Select(item => item.Id)
             .ToList();
-        if (invalid.Count > 0) problems.Add($"字段值为空或同时给出文字与勾选项：{string.Join('、', invalid)}");
+        if (invalid.Count > 0) problems.Add($"字段值为空，或未恰好给出文字、勾选项、留空之一：{string.Join('、', invalid)}");
         if (problems.Count > 0) throw new InvalidOperationException($"回填字段无效：{string.Join("；", problems)}");
         return values;
     }

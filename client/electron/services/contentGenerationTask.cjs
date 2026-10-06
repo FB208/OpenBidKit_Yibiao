@@ -2023,7 +2023,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       isPauseError: isPaused,
       onState(next) {
         setBusinessFill({ ...next, status: next.phase === 'completed' ? 'success' : 'running' });
-        if (next.phase === 'rendering') logs = [...logs, `商务模版字段值已保存（已填 ${next.filled_count} 项，无法确定 ${next.unresolved.length} 项），正在回填 Word。`];
+        if (next.phase === 'rendering') {
+          logs = [...logs, `商务模版字段值已保存（已填 ${next.filled_count} 项，无法确定 ${next.unresolved.length} 项${next.blank_row_count ? `，未使用的 ${next.blank_row_count} 行已留空` : ''}），正在回填 Word。`
+            + (next.accepted_issues?.length ? `以下问题多次修复未改善，按原样保留：${next.accepted_issues.join('；')}` : '')];
+        }
         // 不改任务状态；暂停或收尾后由最终 checkpoint 一并写入，避免覆盖已提交的状态。
         if (businessSettled || isPauseRequested()) return;
         try {

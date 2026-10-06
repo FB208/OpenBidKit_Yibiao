@@ -183,12 +183,13 @@ sealed class ScanTemplateFieldsRequest
     public string Input { get; set; } = "";
 }
 
-/// <summary>回填一个字段：文字字段给 value，勾选项给 selected。</summary>
+/// <summary>回填一个字段：文字字段给 value，勾选项给 selected，逐行清单表未使用的单元格给 blank。</summary>
 sealed class TemplateFieldFillValue
 {
     public string Id { get; set; } = "";
     public string? Value { get; set; }
     public List<string>? Selected { get; set; }
+    public bool? Blank { get; set; }
 }
 
 sealed class FillTemplateFieldsRequest

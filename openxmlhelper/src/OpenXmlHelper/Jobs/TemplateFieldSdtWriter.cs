@@ -70,7 +70,10 @@ static class TemplateFieldSdtWriter
             return written;
         }
 
-        var lines = (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var blank = value.Blank == true;
+        // 留空只清除待填写占位；勾选项等原有内容保持原样。
+        if (blank && !control.InnerText.Contains($"【待填写：{name}】", StringComparison.Ordinal)) return written;
+        var lines = blank ? [""] : (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         switch (control)
         {
             case Wp.SdtRun run:

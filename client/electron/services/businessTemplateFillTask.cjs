@@ -12,7 +12,6 @@ const GLOBAL_FACTS_INPUT_FILE = '全局事实设定.md';
 const FILL_OUTPUT_FILE = '商务模版填写结果.json';
 const FILL_AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 const FILL_RENDER_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_REPORTED_ISSUES = 60;
 const PROJECT_TYPE_LABELS = { service: '服务', goods: '货物', construction: '工程' };
 
 const nonEmptyString = { type: 'string', minLength: 1 };
@@ -232,7 +231,7 @@ function createBusinessTemplateFillPrompt({ resume = false } = {}) {
 任务：为投标文件商务模版的待填字段取值，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
 
 输入文件：
-- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的表格，每个表格给出列（columns）和行号（rows），每一行代表一条记录。kind=text 为文字字段，kind=choice 为勾选项并给出 options。
+- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options。
 - ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料。
 - ${TENDER_INPUT_FILE}：当前标段的招标文件全文。
 - ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。
@@ -241,15 +240,15 @@ function createBusinessTemplateFillPrompt({ resume = false } = {}) {
 取值规则：
 1. 企业信息（名称、统一社会信用代码、法定代表人、地址、电话、开户行、账号等）只取资信库，原样使用，不改写。
 2. 人员、证书、业绩只能选资信库中的真实记录，按招标文件的资格和评分要求选最匹配的。全局事实已指定的人员在资信库中存在时必须选同一人；不在资信库中时，相关字段列入 unresolved 并说明原因。
-3. tables 中同一行各列取自同一条记录，不同行取不同记录；记录不足时，多出的行整行列入 unresolved（只写 table_id、row 和 reason）。序号类列按行顺序填写。
+3. tables 中同一行各列取自同一条记录，不同行取不同记录。只把有真实记录的行写入 rows，从该表格 rows 列出的第一行起按顺序连续使用；记录用完后剩余的行不要写入 rows 或 unresolved，程序会把它们留空。已使用的行中个别列没有依据时，按单元格列入 unresolved（写 table_id、row、name 和 reason）。一条可用记录都没有时，只把该表格的第一行整行列入 unresolved（只写 table_id、row 和 reason）。序号类列按行顺序填写。
 4. 项目信息（项目名称、项目编号、招标人、工期或服务期、质量标准、投标有效期等）以全局事实为准，全局事实未提及时取招标文件原文。
 5. 勾选项只能从 options 中原样选择，可以多选；没有依据时列入 unresolved。
 6. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。
 7. 每个值为一段纯文本，需要多行时用换行符；有 instruction 时按其格式要求填写。
 
 结果格式（${FILL_OUTPUT_FILE}）：
-{"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"table_id":"表格ID","row":3,"name":"列名","reason":"原因"},{"table_id":"表格ID","row":4,"reason":"整行无法确定的原因"}]}
-- 每个普通字段必须且只能出现在 values 或 unresolved 中一次；每个表格单元格必须且只能出现在 rows 或 unresolved 中一次，整行 unresolved 覆盖该行全部列。
+{"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"table_id":"表格ID","row":2,"name":"列名","reason":"该列无依据的原因"}]}
+- 每个普通字段必须且只能出现在 values 或 unresolved 中一次；写入 rows 的行，每一列都必须给出取值或按单元格列入 unresolved；未使用的行不要写。
 - 文字字段用 value，勾选项用 selected；没有表格时 rows 写空数组。
 - 程序已预建空的结果文件，首次填充使用 write，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。可用 json-validation 自查结构。
 - 提交后程序会逐项校验，不通过会把问题退回给你，届时修改同一文件。完成后直接结束，不输出总结。`;
@@ -259,28 +258,33 @@ function unitLabel(unit) {
   return unit.table_id ? `${unit.name}（表格第${unit.row}行）` : unit.name;
 }
 
-function createValidationError(issues) {
-  const shown = issues.slice(0, MAX_REPORTED_ISSUES);
-  const more = issues.length > shown.length ? `\n- 另有 ${issues.length - shown.length} 个问题未列出，修正以上问题后会继续提示。` : '';
-  const error = new Error(`${FILL_OUTPUT_FILE} 未通过校验：\n${shown.map(item => `- ${item}`).join('\n')}${more}`);
-  error.issues = issues;
-  return error;
+function blockingIssue(message, extra = {}) {
+  return { severity: 'blocking', file: FILL_OUTPUT_FILE, message, ...extra };
 }
 
+function qualityIssue(message, extra = {}) {
+  return { severity: 'quality', file: FILL_OUTPUT_FILE, message, ...extra };
+}
+
+// JSON 与结构错误转为阻塞问题，交由提交修复；文件读取等程序异常照常抛出。
 function parseFillResult(content) {
   let payload;
   try {
     payload = JSON.parse(String(content || '').replace(/^﻿/, '').trim());
   } catch (error) {
-    throw createValidationError([`不是合法 JSON：${error?.message || String(error)}`]);
+    if (!(error instanceof SyntaxError)) throw error;
+    return { payload: null, issues: [blockingIssue(`${FILL_OUTPUT_FILE} 不是合法 JSON：${error.message}`)] };
   }
   if (!validateFillSchema(payload)) {
-    throw createValidationError([`结构无效：${ajv.errorsText(validateFillSchema.errors, { dataVar: FILL_OUTPUT_FILE })}`]);
+    return {
+      payload: null,
+      issues: validateFillSchema.errors.map(item => blockingIssue(`${FILL_OUTPUT_FILE} 结构无效：${item.instancePath || '/'} ${item.message}`, { path: item.instancePath || '/' })),
+    };
   }
-  return payload;
+  return { payload, issues: [] };
 }
 
-// 逐项核对覆盖范围、字段类型和选项，通过后把结果展开到字段 id。
+// 逐项核对覆盖范围、字段类型和选项，返回统一提交报告；未使用的表格行展开为留空。
 function validateBusinessTemplateFillResult(payload, units) {
   const issues = [];
   const scalars = new Map(units.filter(unit => !unit.table_id).map(unit => [unit.name, unit]));
@@ -288,11 +292,15 @@ function validateBusinessTemplateFillResult(payload, units) {
   const decided = new Map();
   const entries = {};
   const unresolved = [];
+  const usedRows = new Map([...tables.keys()].map(id => [id, new Set()]));
+  const wholeRows = new Map([...tables.keys()].map(id => [id, new Set()]));
+  const cellUnresolved = [];
   let filledCount = 0;
+  let blankRowCount = 0;
 
   function decide(unit, label, decision) {
     if (decided.has(unit.key)) {
-      issues.push(`${label} 重复出现`);
+      issues.push(blockingIssue(`${label} 重复出现`));
       return;
     }
     decided.set(unit.key, decision);
@@ -309,24 +317,24 @@ function validateBusinessTemplateFillResult(payload, units) {
     const hasValue = Object.hasOwn(item, 'value');
     const hasSelected = Object.hasOwn(item, 'selected');
     if (hasValue === hasSelected) {
-      issues.push(`${label} 必须且只能填写 value 或 selected 之一`);
+      issues.push(blockingIssue(`${label} 必须且只能填写 value 或 selected 之一`));
       return null;
     }
     if (unit.kind === 'choice') {
       if (!hasSelected) {
-        issues.push(`${label} 是勾选项，必须用 selected 从 options 中选择`);
+        issues.push(blockingIssue(`${label} 是勾选项，必须用 selected 从 options 中选择`));
         return null;
       }
       const selected = [...new Set(item.selected.map(option => option.trim()))];
       const invalid = selected.filter(option => !unit.options.includes(option));
       if (invalid.length) {
-        issues.push(`${label} 的选项不在 options 中：${invalid.join('、')}；可选：${unit.options.join('、')}`);
+        issues.push(blockingIssue(`${label} 的选项不在 options 中：${invalid.join('、')}；可选：${unit.options.join('、')}`));
         return null;
       }
       return { selected };
     }
     if (!hasValue) {
-      issues.push(`${label} 是文字字段，必须用 value 填写`);
+      issues.push(blockingIssue(`${label} 是文字字段，必须用 value 填写`));
       return null;
     }
     return { value: item.value.replace(/\r\n?/g, '\n') };
@@ -335,11 +343,11 @@ function validateBusinessTemplateFillResult(payload, units) {
   function findTable(tableId, row, context) {
     const table = tables.get(tableId);
     if (!table) {
-      issues.push(`${context}：未知表格 ${tableId}`);
+      issues.push(blockingIssue(`${context}：未知表格 ${tableId}`));
       return null;
     }
     if (!table.rows.has(row)) {
-      issues.push(`${context}：表格 ${tableId} 没有第 ${row} 行`);
+      issues.push(blockingIssue(`${context}：表格 ${tableId} 没有第 ${row} 行`));
       return null;
     }
     return table;
@@ -348,7 +356,7 @@ function validateBusinessTemplateFillResult(payload, units) {
   for (const item of payload.values) {
     const unit = scalars.get(item.name);
     if (!unit) {
-      issues.push(`values 中的“${item.name}”不是普通待填字段${tables.size ? '（表格列请写在 rows 中）' : ''}`);
+      issues.push(blockingIssue(`values 中的“${item.name}”不是普通待填字段${tables.size ? '（表格列请写在 rows 中）' : ''}`));
       continue;
     }
     const decision = checkValue(unit, item, `“${item.name}”`);
@@ -358,10 +366,11 @@ function validateBusinessTemplateFillResult(payload, units) {
   for (const rowItem of payload.rows) {
     const table = findTable(rowItem.table_id, rowItem.row, 'rows');
     if (!table) continue;
+    usedRows.get(rowItem.table_id).add(rowItem.row);
     for (const item of rowItem.values) {
       const label = `表格 ${rowItem.table_id} 第 ${rowItem.row} 行“${item.name}”`;
       if (!table.columns.has(item.name)) {
-        issues.push(`${label} 不是该表格的列`);
+        issues.push(blockingIssue(`${label} 不是该表格的列`));
         continue;
       }
       // 列与行按表格汇总，个别行没有该列时忽略这一项。
@@ -377,14 +386,14 @@ function validateBusinessTemplateFillResult(payload, units) {
     if (!Object.hasOwn(item, 'table_id') && !Object.hasOwn(item, 'row')) {
       const unit = item.name ? scalars.get(item.name) : null;
       if (!unit) {
-        issues.push(item.name ? `unresolved 中的“${item.name}”不是普通待填字段` : 'unresolved 中有缺少 name 的普通字段');
+        issues.push(blockingIssue(item.name ? `unresolved 中的“${item.name}”不是普通待填字段` : 'unresolved 中有缺少 name 的普通字段'));
         continue;
       }
       decide(unit, `“${item.name}”`, { reason });
       continue;
     }
     if (!Object.hasOwn(item, 'table_id') || !Object.hasOwn(item, 'row')) {
-      issues.push('unresolved 中的表格项必须同时填写 table_id 和 row');
+      issues.push(blockingIssue('unresolved 中的表格项必须同时填写 table_id 和 row'));
       continue;
     }
     const table = findTable(item.table_id, item.row, 'unresolved');
@@ -392,33 +401,86 @@ function validateBusinessTemplateFillResult(payload, units) {
     if (item.name) {
       const label = `表格 ${item.table_id} 第 ${item.row} 行“${item.name}”`;
       if (!table.columns.has(item.name)) {
-        issues.push(`${label} 不是该表格的列`);
+        issues.push(blockingIssue(`${label} 不是该表格的列`));
         continue;
       }
-      const unit = table.cells.get(`${item.row}\u0000${item.name}`);
-      if (unit) decide(unit, label, { reason });
+      // 单元格无法确定只用于已写入 rows 的行，等全部行登记后再判断。
+      cellUnresolved.push({ table, item, label, reason });
       continue;
     }
-    const rowUnits = [...table.cells.values()].filter(unit => unit.row === item.row);
-    for (const unit of rowUnits) decide(unit, `表格 ${item.table_id} 第 ${item.row} 行“${unit.name}”`, { reason });
+    wholeRows.get(item.table_id).add(item.row);
+    for (const unit of [...table.cells.values()].filter(cell => cell.row === item.row)) {
+      decide(unit, `表格 ${item.table_id} 第 ${item.row} 行“${unit.name}”`, { reason });
+    }
   }
 
-  // 缺失项逐条计数，退回修复时按问题数判断是否有进展。
-  for (const unit of units.filter(item => !decided.has(item.key))) {
-    issues.push(`${unit.table_id ? `表格 ${unit.table_id} 第 ${unit.row} 行“${unit.name}”` : `“${unit.name}”`} 尚未填写或列入 unresolved`);
+  for (const { table, item, label, reason } of cellUnresolved) {
+    if (!usedRows.get(table.table_id).has(item.row)) {
+      issues.push(blockingIssue(`${label} 所在行没有写入 rows；单元格 unresolved 只用于已填写的行，未使用的行不要写入，程序会留空`));
+      continue;
+    }
+    const unit = table.cells.get(`${item.row}\u0000${item.name}`);
+    if (unit) decide(unit, label, { reason });
   }
-  if (issues.length) throw createValidationError(issues);
+
+  for (const unit of units.filter(item => !item.table_id && !decided.has(item.key))) {
+    issues.push(blockingIssue(`“${unit.name}” 尚未填写或列入 unresolved`));
+  }
+
+  for (const table of tables.values()) {
+    const orderedRows = [...table.rows].sort((a, b) => a - b);
+    const used = usedRows.get(table.table_id);
+    const whole = wholeRows.get(table.table_id);
+    if (!used.size && !whole.size) {
+      issues.push(blockingIssue(`表格 ${table.table_id} 一行都没有填写；没有可用记录时，把第 ${orderedRows[0]} 行整行列入 unresolved`));
+    }
+    const usedOrdered = [...used].sort((a, b) => a - b);
+    if (usedOrdered.some((row, index) => row !== orderedRows[index])) {
+      issues.push(qualityIssue(`表格 ${table.table_id} 已填写的行应从第 ${orderedRows[0]} 行起连续使用，当前为第 ${usedOrdered.join('、')} 行`));
+    }
+    if (whole.size && (used.size || [...whole].some(row => row !== orderedRows[0]))) {
+      issues.push(qualityIssue(`表格 ${table.table_id} 的整行 unresolved 只用于没有任何记录时的第 ${orderedRows[0]} 行；未使用的行不要写入，程序会留空`));
+    }
+    for (const row of orderedRows) {
+      const cells = [...table.cells.values()].filter(cell => cell.row === row);
+      if (used.has(row)) {
+        // 已使用行缺列按行汇总，退回修复时按行计数判断进展。
+        const missing = cells.filter(cell => !decided.has(cell.key)).map(cell => cell.name);
+        if (missing.length) issues.push(blockingIssue(`表格 ${table.table_id} 第 ${row} 行缺少：${missing.join('、')}，请填写取值或按单元格列入 unresolved`));
+        continue;
+      }
+      if (whole.has(row)) continue;
+      blankRowCount += 1;
+      for (const cell of cells) {
+        for (const id of cell.field_ids) entries[id] = { blank: true };
+      }
+    }
+  }
+
+  const blocked = issues.some(issue => issue.severity === 'blocking');
   return {
-    entries,
-    stats: { field_count: units.length, filled_count: filledCount, unresolved },
+    value: blocked ? null : {
+      entries,
+      stats: { field_count: units.length, filled_count: filledCount, unresolved, blank_row_count: blankRowCount },
+    },
+    issues,
+    minimumGoal: '结果文件是完整有效 JSON；每个普通字段和已写入 rows 的表格行都有取值或列入 unresolved；文字与勾选项的写法和选项合法。',
   };
 }
 
-function buildRetryPrompt(error) {
-  if (error?.agentValidationFailed === true) {
-    return `${error.message}\n请保留 ${FILL_OUTPUT_FILE} 中已有的有效内容，只修正上述问题；修正后保持完整有效 JSON，然后直接结束。`;
+// 统一入口：先解析结构，再逐项核对，返回 Runtime 的提交报告。
+function checkBusinessTemplateFillResult(content, units) {
+  const parsed = parseFillResult(content);
+  if (!parsed.payload) return { value: null, issues: parsed.issues, minimumGoal: '结果文件是完整有效 JSON，结构符合 Schema。' };
+  return validateBusinessTemplateFillResult(parsed.payload, units);
+}
+
+// 执行失败续写原文件；提交退回只补充文件信息，问题清单和修复模式由公共层拼接。
+function buildRetryPrompt(request) {
+  if (request.kind === 'execution') {
+    return `上一轮执行失败：${String(request.error?.message || request.error).slice(0, 800)}\n请在当前会话和工作区中继续完成 ${FILL_OUTPUT_FILE}，已有有效内容保留，不要重做已完成部分。`;
   }
-  return `上一轮执行失败：${String(error?.message || error).slice(0, 800)}\n请在当前会话和工作区中继续完成 ${FILL_OUTPUT_FILE}，已有有效内容保留，不要重做已完成部分。`;
+  return `结果文件为当前工作目录根目录的 ${FILL_OUTPUT_FILE}，用 edit 或 write 修改同一文件并保持完整有效 JSON；未使用的表格行不要写入，程序会留空。修复后直接结束，不输出总结。`;
 }
 
 // 按阶段续跑：filling 运行副 Agent 并保存字段值，rendering 以底稿重新生成 Word；值已保存时只重试回填。
@@ -448,7 +510,7 @@ async function runBusinessTemplateFill({
     const units = buildFillUnits(fields);
     if (!units.length) {
       workspaceStore.saveBidTemplateFieldValues({});
-      update({ phase: 'rendering', field_count: 0, filled_count: 0, manual_count: manualCount, unresolved: [] });
+      update({ phase: 'rendering', field_count: 0, filled_count: 0, manual_count: manualCount, unresolved: [], blank_row_count: 0, accepted_issues: [] });
     } else {
       signal?.throwIfAborted();
       const resumeSession = agentService.hasPersistentTaskSession(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
@@ -484,7 +546,7 @@ async function runBusinessTemplateFill({
           initial_stage: BUSINESS_TEMPLATE_FILL_STAGE,
           json_validation_schemas: { [FILL_OUTPUT_FILE]: BUSINESS_TEMPLATE_FILL_JSON_SCHEMA },
           max_retries: 1,
-          validateOutput: candidate => validateBusinessTemplateFillResult(parseFillResult(candidate?.output_content), units).stats,
+          validateOutput: candidate => checkBusinessTemplateFillResult(candidate.output_content, units),
           buildRetryPrompt,
           onActivity,
         });
@@ -498,21 +560,24 @@ async function runBusinessTemplateFill({
         throw error;
       }
       signal?.throwIfAborted();
-      // 持久会话返回的结果同样须通过校验后才写入字段清单。
-      const validated = validateBusinessTemplateFillResult(parseFillResult(result.output_content), units);
+      // Runtime 只在提交通过后返回，直接使用本轮已经验收的结果。
+      const validated = result.validation_result;
+      // 连续修复无改善后按原样放行的质量问题随状态记录，供任务日志说明。
+      const acceptedIssues = (result.accepted_submission_issues || []).flatMap(item => item.issues.map(issue => issue.message));
       workspaceStore.saveBidTemplateFieldValues(validated.entries);
       agentService.updatePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, {
         status: 'success', phase: 'completed', agent_connection: 'idle', error: null, completed_at: new Date().toISOString(),
       });
-      update({ phase: 'rendering', ...validated.stats, manual_count: manualCount });
+      update({ phase: 'rendering', ...validated.stats, manual_count: manualCount, accepted_issues: acceptedIssues });
     }
   }
 
   if (current.phase === 'rendering') {
     signal?.throwIfAborted();
     const values = (workspaceStore.readBidTemplateFields().fields || [])
-      .filter(field => Object.hasOwn(field, 'value') || Object.hasOwn(field, 'selected'))
-      .map(field => (Object.hasOwn(field, 'selected') ? { id: field.id, selected: field.selected } : { id: field.id, value: field.value }));
+      .filter(field => ['value', 'selected', 'blank'].some(key => Object.hasOwn(field, key)))
+      .map(field => (Object.hasOwn(field, 'selected') ? { id: field.id, selected: field.selected }
+        : Object.hasOwn(field, 'blank') ? { id: field.id, blank: true } : { id: field.id, value: field.value }));
     await openXmlHelperService.runJob({
       action: 'fill-template-fields',
       request: {
@@ -537,5 +602,6 @@ module.exports = {
   buildCredentialLibraryInput,
   parseFillResult,
   validateBusinessTemplateFillResult,
+  checkBusinessTemplateFillResult,
   runBusinessTemplateFill,
 };

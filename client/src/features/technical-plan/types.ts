@@ -268,6 +268,10 @@ export interface BusinessTemplateFillState {
   filled_count: number;
   manual_count: number;
   unresolved: Array<{ label: string; reason: string }>;
+  /** 逐行清单表中未使用、已留空的行数。 */
+  blank_row_count?: number;
+  /** 连续修复无改善后按原样放行的质量问题。 */
+  accepted_issues?: string[];
   error?: string | null;
   updated_at?: string;
 }

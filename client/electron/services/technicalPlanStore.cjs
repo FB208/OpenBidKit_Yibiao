@@ -39,8 +39,8 @@ const bidTemplateRelativePath = path.join('technical-plan', 'bid-template.docx')
 const bidTemplateSourceRelativePath = path.join('technical-plan', 'bid-template-source.docx').replace(/\\/g, '/');
 const bidTemplateFieldsRelativePath = path.join('technical-plan', 'bid-template-fields.json').replace(/\\/g, '/');
 const bidTemplateBlankRelativePath = path.join('technical-plan', 'bid-template-blank.docx').replace(/\\/g, '/');
-// 字段清单中由商务模版填写写入的键，三者互斥；失效时一并清除。
-const BID_TEMPLATE_FILL_KEYS = ['value', 'selected', 'unresolved_reason'];
+// 字段清单中由商务模版填写写入的键，四者互斥（blank 表示逐行清单表未使用的单元格留空）；失效时一并清除。
+const BID_TEMPLATE_FILL_KEYS = ['value', 'selected', 'unresolved_reason', 'blank'];
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
@@ -1092,7 +1092,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     writeBidTemplateFile(bidTemplateBlankPath, tempPath => fs.copyFileSync(bidTemplatePath, tempPath));
   }
 
-  // entries 按字段 id 给出 value / selected / unresolved_reason 之一，未列出的字段清除旧值。
+  // entries 按字段 id 给出 value / selected / unresolved_reason / blank 之一，未列出的字段清除旧值。
   function saveBidTemplateFieldValues(entries) {
     const payload = readBidTemplateFields();
     payload.fields = payload.fields.map(field => ({ ...withoutBidTemplateFillValues(field), ...(entries[field.id] || {}) }));
