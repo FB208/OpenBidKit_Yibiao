@@ -46,23 +46,29 @@ static class ApplyTemplateFieldsAction
                     .DefaultIfEmpty(0)
                     .Max() + 1;
                 definitions = new TemplateFieldDefinitionFile();
-                var applications = new List<(TemplateFieldCandidate Candidate, TemplateFieldDefinition Field, int WordId)>();
+                var applications = new List<(TemplateFieldCandidate Candidate, List<(TemplateFieldDefinition Field, int WordId)> Fields)>();
                 foreach (var item in normalized.OrderBy(item => item.Candidate.Order))
                 {
                     var kind = TemplateFieldKinds.ToFieldKind(item.Candidate.Kind);
-                    var field = new TemplateFieldDefinition
+                    var fields = new List<(TemplateFieldDefinition Field, int WordId)>();
+                    // 拆分的附件按部分顺序各占一个字段，未拆分的候选只有一项。
+                    foreach (var part in item.Fields)
                     {
-                        Id = $"f{definitions.Fields.Count + 1:D4}",
-                        Name = item.Selection.Name,
-                        FillBy = item.Selection.FillBy,
-                        Instruction = item.Selection.Instruction,
-                        Kind = kind,
-                        Options = kind == TemplateFieldKinds.ChoiceField ? item.Candidate.Options : null,
-                        TableId = item.Candidate.TableId,
-                        Row = item.Candidate.TableId is null ? null : item.Candidate.RowNumber,
-                    };
-                    definitions.Fields.Add(field);
-                    applications.Add((item.Candidate, field, nextWordId++));
+                        var field = new TemplateFieldDefinition
+                        {
+                            Id = $"f{definitions.Fields.Count + 1:D4}",
+                            Name = part.Name,
+                            FillBy = item.Selection.FillBy,
+                            Instruction = part.Instruction,
+                            Kind = kind,
+                            Options = kind == TemplateFieldKinds.ChoiceField ? item.Candidate.Options : null,
+                            TableId = item.Candidate.TableId,
+                            Row = item.Candidate.TableId is null ? null : item.Candidate.RowNumber,
+                        };
+                        definitions.Fields.Add(field);
+                        fields.Add((field, nextWordId++));
+                    }
+                    applications.Add((item.Candidate, fields));
                 }
 
                 var writtenElements = new List<OpenXmlElement>();
@@ -70,7 +76,9 @@ static class ApplyTemplateFieldsAction
                     .OrderByDescending(item => item.Candidate.Start)
                     .ThenByDescending(item => item.Candidate.Order))
                 {
-                    writtenElements.AddRange(TemplateFieldSdtWriter.Apply(application.Candidate, application.Field, application.WordId));
+                    writtenElements.AddRange(application.Fields.Count == 1
+                        ? TemplateFieldSdtWriter.Apply(application.Candidate, application.Fields[0].Field, application.Fields[0].WordId)
+                        : TemplateFieldSdtWriter.ApplyAttachmentParts(application.Candidate, application.Fields));
                 }
 
                 mainPart.Document.Save();
@@ -150,7 +158,13 @@ static class ApplyTemplateFieldsAction
         }
     }
 
-    static List<(TemplateFieldCandidate Candidate, TemplateFieldSelection Selection)> NormalizeSelections(
+    /// <summary>规范化后的分类：Fields 为最终字段的名称与说明，拆分的附件按部分顺序展开。</summary>
+    sealed record NormalizedSelection(
+        TemplateFieldCandidate Candidate,
+        TemplateFieldSelection Selection,
+        IReadOnlyList<TemplateFieldPart> Fields);
+
+    static List<NormalizedSelection> NormalizeSelections(
         ApplyTemplateFieldsRequest request,
         TemplateFieldCandidateFile candidateFile)
     {
@@ -166,6 +180,11 @@ static class ApplyTemplateFieldsAction
             Name = (item.Name ?? "").Trim(),
             FillBy = (item.FillBy ?? "").Trim().ToLowerInvariant(),
             Instruction = string.IsNullOrWhiteSpace(item.Instruction) ? null : item.Instruction.Trim(),
+            Parts = item.Parts?.Select(part => new TemplateFieldPart
+            {
+                Name = (part.Name ?? "").Trim(),
+                Instruction = string.IsNullOrWhiteSpace(part.Instruction) ? null : part.Instruction.Trim(),
+            }).ToList(),
         }).ToList();
         if (selections.Any(item => item.CandidateId.Length == 0 || item.Name.Length == 0))
         {
@@ -204,7 +223,43 @@ static class ApplyTemplateFieldsAction
                 "apply-template-fields 不会记忆或合并前一次失败调用的参数；请重新提交完整 fields 和 ignored_candidate_ids，每个候选必须且只能归入一类，禁止增量补交或使用通配符。");
         }
 
-        var inconsistent = selections
+        // parts 只用于附件位置，至少两项且候选内不重名；部分未写 instruction 时沿用所在项。
+        var partErrors = new List<string>();
+        foreach (var item in selections.Where(item => item.Parts is not null))
+        {
+            var candidateKind = candidateMap[item.CandidateId].Kind;
+            if (candidateKind is not (TemplateFieldKinds.AttachmentSlot or TemplateFieldKinds.AttachmentNote))
+            {
+                partErrors.Add($"{item.CandidateId} 不是附件位置，不能使用 parts");
+                continue;
+            }
+            var parts = item.Parts!;
+            if (parts.Count < 2) partErrors.Add($"{item.CandidateId} 的 parts 至少需要两项，只有一张图片时不要使用 parts");
+            if (parts.Any(part => part.Name.Length == 0)) partErrors.Add($"{item.CandidateId} 的 parts 存在空名称");
+            var duplicatedParts = parts.GroupBy(part => part.Name, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key).ToList();
+            if (duplicatedParts.Count > 0) partErrors.Add($"{item.CandidateId} 的 parts 名称重复：{string.Join('、', duplicatedParts)}");
+        }
+        if (partErrors.Count > 0)
+        {
+            throw new InvalidOperationException($"附件拆分无效：{string.Join("；", partErrors)}");
+        }
+
+        var normalized = selections.Select(item => new NormalizedSelection(
+            candidateMap[item.CandidateId],
+            item,
+            item.Parts is { } parts
+                ? parts.Select(part => new TemplateFieldPart { Name = part.Name, Instruction = part.Instruction ?? item.Instruction }).ToList()
+                : [new TemplateFieldPart { Name = item.Name, Instruction = item.Instruction }])).ToList();
+        var expanded = normalized
+            .SelectMany(item => item.Fields.Select(field => (
+                field.Name,
+                field.Instruction,
+                item.Selection.FillBy,
+                item.Selection.CandidateId,
+                Kind: TemplateFieldKinds.ToFieldKind(item.Candidate.Kind))))
+            .ToList();
+
+        var inconsistent = expanded
             .GroupBy(item => item.Name, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Select(item => $"{item.FillBy}\u0000{item.Instruction ?? ""}").Distinct(StringComparer.Ordinal).Count() > 1);
         if (inconsistent is not null)
@@ -212,24 +267,15 @@ static class ApplyTemplateFieldsAction
             throw new InvalidOperationException($"同名字段的 fill_by 和 instruction 必须一致：{inconsistent.Key}");
         }
 
-        var automaticAttachments = selections
-            .Where(item => TemplateFieldKinds.ToFieldKind(candidateMap[item.CandidateId].Kind) == TemplateFieldKinds.AttachmentField && item.FillBy != "manual")
-            .Select(item => item.CandidateId)
-            .ToList();
-        if (automaticAttachments.Count > 0)
-        {
-            throw new InvalidOperationException($"附件材料位置必须使用 manual：{string.Join('、', automaticAttachments)}");
-        }
-
-        var mixedKinds = selections
+        var mixedKinds = expanded
             .GroupBy(item => item.Name, StringComparer.Ordinal)
-            .FirstOrDefault(group => group.Select(item => TemplateFieldKinds.ToFieldKind(candidateMap[item.CandidateId].Kind)).Distinct(StringComparer.Ordinal).Count() > 1);
+            .FirstOrDefault(group => group.Select(item => item.Kind).Distinct(StringComparer.Ordinal).Count() > 1);
         if (mixedKinds is not null)
         {
-            throw new InvalidOperationException($"同名字段的类型必须一致（文本、勾选项、附件不能同名）：{mixedKinds.Key}，涉及 {string.Join('、', mixedKinds.Select(item => item.CandidateId))}");
+            throw new InvalidOperationException($"同名字段的类型必须一致（文本、勾选项、附件不能同名）：{mixedKinds.Key}，涉及 {string.Join('、', mixedKinds.Select(item => item.CandidateId).Distinct(StringComparer.Ordinal))}");
         }
 
-        return selections.Select(item => (candidateMap[item.CandidateId], item)).ToList();
+        return normalized;
     }
 
     static bool TryReadRequest(string workspace, string jobId, out ApplyTemplateFieldsRequest request, out string error)

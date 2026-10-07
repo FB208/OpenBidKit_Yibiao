@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const Ajv = require('ajv');
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
+const { CREDENTIAL_IMAGE_FIELD_LABELS } = require('./credentialLibraryService.cjs');
 
 const BUSINESS_TEMPLATE_FILL_STAGE = 'business-template-fill';
 const FIELDS_INPUT_FILE = '商务模版待填字段.json';
@@ -23,9 +24,10 @@ const FILL_VALUE_ITEM_SCHEMA = {
     name: nonEmptyString,
     value: nonEmptyString,
     selected: { type: 'array', minItems: 1, items: nonEmptyString },
+    image_id: nonEmptyString,
   },
 };
-// value 与 selected 的互斥及字段类型在 validateOutput 中按填写项检查。
+// value、selected、image_id 的互斥及字段类型在 validateOutput 中按填写项检查。
 const BUSINESS_TEMPLATE_FILL_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -64,11 +66,14 @@ const BUSINESS_TEMPLATE_FILL_JSON_SCHEMA = {
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validateFillSchema = ajv.compile(BUSINESS_TEMPLATE_FILL_JSON_SCHEMA);
 
-// 字段清单 v2：同一表格内同名字段出现在多行时逐行填写，其余同名字段填同一个值；附件始终人工处理。
-function buildFillUnits(fields = []) {
-  const aiFields = fields.filter(field => field.fill_by === 'ai' && field.kind !== 'attachment');
+const FIELD_KINDS = new Set(['text', 'choice', 'attachment']);
+const FILL_VALUE_KEYS = ['value', 'selected', 'image_id'];
+const UNIT_STATE_KEYS = [...FILL_VALUE_KEYS, 'blank', 'unresolved_reason'];
+
+// 字段清单 v2：同一表格内同名字段出现在多行时逐行填写，其余同名字段填同一个值；同名字段的 fill_by 一致。
+function groupFieldUnits(fields = []) {
   const tableRows = new Map();
-  for (const field of aiFields) {
+  for (const field of fields) {
     if (!field.table_id || !Number.isInteger(field.row)) continue;
     const key = `${field.table_id}\u0000${field.name}`;
     if (!tableRows.has(key)) tableRows.set(key, new Set());
@@ -76,7 +81,7 @@ function buildFillUnits(fields = []) {
   }
   const units = [];
   const unitsByKey = new Map();
-  for (const field of aiFields) {
+  for (const field of fields) {
     const perRow = Boolean(field.table_id) && (tableRows.get(`${field.table_id}\u0000${field.name}`)?.size || 0) >= 2;
     const key = perRow ? `row\u0000${field.table_id}\u0000${field.row}\u0000${field.name}` : `name\u0000${field.name}`;
     let unit = unitsByKey.get(key);
@@ -84,7 +89,8 @@ function buildFillUnits(fields = []) {
       unit = {
         key,
         name: field.name,
-        kind: field.kind === 'choice' ? 'choice' : 'text',
+        kind: FIELD_KINDS.has(field.kind) ? field.kind : 'text',
+        fill_by: field.fill_by,
         ...(field.instruction ? { instruction: field.instruction } : {}),
         ...(field.kind === 'choice' ? { options: field.options || [] } : {}),
         ...(perRow ? { table_id: field.table_id, row: field.row } : {}),
@@ -96,6 +102,21 @@ function buildFillUnits(fields = []) {
     unit.field_ids.push(field.id);
   }
   return units;
+}
+
+// 副 Agent 只填写 fill_by=ai 的填写项，附件从资信库图片中推荐。
+function buildFillUnits(fields = []) {
+  return groupFieldUnits(fields).filter(unit => unit.fill_by === 'ai');
+}
+
+function hasFilledValue(target) {
+  return FILL_VALUE_KEYS.some(key => Object.hasOwn(target, key));
+}
+
+// 同一填写项展开到的字段值相同，取第一个字段的当前值。
+function readUnitState(unit, fieldsById) {
+  const field = fieldsById.get(unit.field_ids[0]) || {};
+  return Object.fromEntries(UNIT_STATE_KEYS.filter(key => Object.hasOwn(field, key)).map(key => [key, field[key]]));
 }
 
 function describeUnit(unit) {
@@ -146,10 +167,23 @@ function formatValidity(mode, from, to) {
   return '';
 }
 
-// 键名沿用资信库页面文案；不提供图片、水印和时间戳。
+// 记录下的图片目录只给 id、栏目和名称，不提供图片内容。
+function imagesOf(snapshot, ownerType, ownerId) {
+  return (snapshot.images || [])
+    .filter(image => image.ownerType === ownerType && image.ownerId === ownerId)
+    .map(image => ({ id: image.imageId, 栏目: CREDENTIAL_IMAGE_FIELD_LABELS[image.fieldKey] || image.fieldKey, 名称: image.customName || image.originalName }));
+}
+
+function withImages(record, images) {
+  return images.length ? { ...record, 图片: images } : record;
+}
+
+// 键名沿用资信库页面文案；附带图片目录，不提供水印和时间戳。
 function buildCredentialLibraryInput(snapshot = {}) {
   const profile = snapshot.profile || {};
+  const profileImages = (snapshot.images || []).filter(image => image.ownerType === 'profile');
   return {
+    ...(profileImages.length ? { 企业图片: imagesOf(snapshot, 'profile', profileImages[0].ownerId) } : {}),
     基本信息: pickFilled([
       ['公司名称', profile.companyName],
       ['统一社会信用代码', profile.unifiedSocialCreditCode],
@@ -166,12 +200,12 @@ function buildCredentialLibraryInput(snapshot = {}) {
       ['经营范围', profile.businessScope],
       ['公司介绍', profile.companyIntro],
     ]),
-    资质: (snapshot.certificates || []).map(item => pickFilled([
+    资质: (snapshot.certificates || []).map(item => withImages(pickFilled([
       ['名称', item.name],
       ['编号', item.number],
       ['有效期', formatValidity(item.validityMode, item.validFrom, item.validTo)],
-    ])),
-    员工: (snapshot.employees || []).map(item => pickFilled([
+    ]), imagesOf(snapshot, 'certificate', item.certificateId))),
+    员工: (snapshot.employees || []).map(item => withImages(pickFilled([
       ['姓名', item.name],
       ['身份证号', item.idNumber],
       ['职务', item.position],
@@ -183,8 +217,8 @@ function buildCredentialLibraryInput(snapshot = {}) {
       ['学校', item.school],
       ['专业', item.major],
       ['人员简介', item.introduction],
-    ])),
-    业绩: (snapshot.projects || []).map(item => pickFilled([
+    ]), imagesOf(snapshot, 'employee', item.employeeId))),
+    业绩: (snapshot.projects || []).map(item => withImages(pickFilled([
       ['项目名称', item.projectName],
       ['项目编号', item.projectNumber],
       ['客户名称', item.customerName],
@@ -195,7 +229,7 @@ function buildCredentialLibraryInput(snapshot = {}) {
       ['结束日期', item.endDate],
       ['项目状态', item.projectStatus],
       ['项目介绍', item.introduction],
-    ])),
+    ]), imagesOf(snapshot, 'project', item.projectId))),
     财务信息: pickFilled([
       ['开户名称', profile.bankAccountName],
       ['银行账号', profile.bankAccountNumber],
@@ -208,10 +242,10 @@ function buildCredentialLibraryInput(snapshot = {}) {
       ['社保缴纳证明信息时间', profile.socialSecurityCertificateDate],
       ['社保缴纳证明备注', profile.socialSecurityCertificateNote],
     ]),
-    其他: (snapshot.otherMaterials || []).map(item => pickFilled([
+    其他: (snapshot.otherMaterials || []).map(item => withImages(pickFilled([
       ['资料名称', item.name],
       ['备注', item.note],
-    ])),
+    ]), imagesOf(snapshot, 'other', item.materialId))),
   };
 }
 
@@ -231,8 +265,8 @@ function createBusinessTemplateFillPrompt({ resume = false } = {}) {
 任务：为投标文件商务模版的待填字段取值，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
 
 输入文件：
-- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options。
-- ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料。
+- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=attachment 为附件图片。
+- ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料；企业图片和各条记录下的“图片”列出可用图片的 id、栏目和名称。
 - ${TENDER_INPUT_FILE}：当前标段的招标文件全文。
 - ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。
 - ${GLOBAL_FACTS_INPUT_FILE}：本次投标已确定的全局事实。
@@ -243,13 +277,14 @@ function createBusinessTemplateFillPrompt({ resume = false } = {}) {
 3. tables 中同一行各列取自同一条记录，不同行取不同记录。只把有真实记录的行写入 rows，从该表格 rows 列出的第一行起按顺序连续使用；记录用完后剩余的行不要写入 rows 或 unresolved，程序会把它们留空。已使用的行中个别列没有依据时，按单元格列入 unresolved（写 table_id、row、name 和 reason）。一条可用记录都没有时，只把该表格的第一行整行列入 unresolved（只写 table_id、row 和 reason）。序号类列按行顺序填写。
 4. 项目信息（项目名称、项目编号、招标人、工期或服务期、质量标准、投标有效期等）以全局事实为准，全局事实未提及时取招标文件原文。
 5. 勾选项只能从 options 中原样选择，可以多选；没有依据时列入 unresolved。
-6. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。
-7. 每个值为一段纯文本，需要多行时用换行符；有 instruction 时按其格式要求填写。
+6. 附件用 image_id 从资信库图片中选择一张：按栏目和所属记录匹配材料，人员、证书、业绩相关附件必须属于已选用的同一人员、证书或业绩记录；同一张图片可用于多处；没有匹配的图片时列入 unresolved。
+7. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。
+8. 每个值为一段纯文本，需要多行时用换行符；有 instruction 时按其格式要求填写。
 
 结果格式（${FILL_OUTPUT_FILE}）：
-{"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"table_id":"表格ID","row":2,"name":"列名","reason":"该列无依据的原因"}]}
+{"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]},{"name":"附件","image_id":"图片 id"}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"table_id":"表格ID","row":2,"name":"列名","reason":"该列无依据的原因"}]}
 - 每个普通字段必须且只能出现在 values 或 unresolved 中一次；写入 rows 的行，每一列都必须给出取值或按单元格列入 unresolved；未使用的行不要写。
-- 文字字段用 value，勾选项用 selected；没有表格时 rows 写空数组。
+- 文字字段用 value，勾选项用 selected，附件用 image_id；没有表格时 rows 写空数组。
 - 程序已预建空的结果文件，首次填充使用 write，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。可用 json-validation 自查结构。
 - 提交后程序会逐项校验，不通过会把问题退回给你，届时修改同一文件。完成后直接结束，不输出总结。`;
 }
@@ -284,8 +319,8 @@ function parseFillResult(content) {
   return { payload, issues: [] };
 }
 
-// 逐项核对覆盖范围、字段类型和选项，返回统一提交报告；未使用的表格行展开为留空。
-function validateBusinessTemplateFillResult(payload, units) {
+// 逐项核对覆盖范围、字段类型、选项和图片，返回统一提交报告；未使用的表格行展开为留空。
+function validateBusinessTemplateFillResult(payload, units, imageIds = new Set()) {
   const issues = [];
   const scalars = new Map(units.filter(unit => !unit.table_id).map(unit => [unit.name, unit]));
   const tables = groupTableUnits(units);
@@ -310,15 +345,27 @@ function validateBusinessTemplateFillResult(payload, units) {
       return;
     }
     filledCount += 1;
-    for (const id of unit.field_ids) entries[id] = decision.selected ? { selected: decision.selected } : { value: decision.value };
+    for (const id of unit.field_ids) entries[id] = { ...decision };
   }
 
   function checkValue(unit, item, label) {
-    const hasValue = Object.hasOwn(item, 'value');
-    const hasSelected = Object.hasOwn(item, 'selected');
-    if (hasValue === hasSelected) {
-      issues.push(blockingIssue(`${label} 必须且只能填写 value 或 selected 之一`));
+    const provided = FILL_VALUE_KEYS.filter(key => Object.hasOwn(item, key));
+    if (provided.length !== 1) {
+      issues.push(blockingIssue(`${label} 必须且只能填写 value、selected 或 image_id 之一`));
       return null;
+    }
+    const hasValue = provided[0] === 'value';
+    const hasSelected = provided[0] === 'selected';
+    if (unit.kind === 'attachment') {
+      if (provided[0] !== 'image_id') {
+        issues.push(blockingIssue(`${label} 是附件，必须用 image_id 从资信库图片中选择`));
+        return null;
+      }
+      if (!imageIds.has(item.image_id)) {
+        issues.push(blockingIssue(`${label} 的图片 ${item.image_id} 不在资信库中`));
+        return null;
+      }
+      return { image_id: item.image_id };
     }
     if (unit.kind === 'choice') {
       if (!hasSelected) {
@@ -464,15 +511,15 @@ function validateBusinessTemplateFillResult(payload, units) {
       stats: { field_count: units.length, filled_count: filledCount, unresolved, blank_row_count: blankRowCount },
     },
     issues,
-    minimumGoal: '结果文件是完整有效 JSON；每个普通字段和已写入 rows 的表格行都有取值或列入 unresolved；文字与勾选项的写法和选项合法。',
+    minimumGoal: '结果文件是完整有效 JSON；每个普通字段和已写入 rows 的表格行都有取值或列入 unresolved；文字、勾选项和附件的写法、选项及图片合法。',
   };
 }
 
 // 统一入口：先解析结构，再逐项核对，返回 Runtime 的提交报告。
-function checkBusinessTemplateFillResult(content, units) {
+function checkBusinessTemplateFillResult(content, units, imageIds) {
   const parsed = parseFillResult(content);
   if (!parsed.payload) return { value: null, issues: parsed.issues, minimumGoal: '结果文件是完整有效 JSON，结构符合 Schema。' };
-  return validateBusinessTemplateFillResult(parsed.payload, units);
+  return validateBusinessTemplateFillResult(parsed.payload, units, imageIds);
 }
 
 // 执行失败续写原文件；提交退回只补充文件信息，问题清单和修复模式由公共层拼接。
@@ -483,7 +530,82 @@ function buildRetryPrompt(request) {
   return `结果文件为当前工作目录根目录的 ${FILL_OUTPUT_FILE}，用 edit 或 write 修改同一文件并保持完整有效 JSON；未使用的表格行不要写入，程序会留空。修复后直接结束，不输出总结。`;
 }
 
-// 按阶段续跑：filling 运行副 Agent 并保存字段值，rendering 以底稿重新生成 Word；值已保存时只重试回填。
+// 确认后按填写项重算统计：有值计入已填，无值的人工项计入人工处理（按名称），无值的 AI 项计入无法确定，留空的行单独计数。
+function summarizeFillStats(fields = []) {
+  const fieldsById = new Map(fields.map(field => [field.id, field]));
+  const units = groupFieldUnits(fields);
+  const manualNames = new Set();
+  const unresolved = [];
+  const blankRows = new Set();
+  let filledCount = 0;
+  for (const unit of units) {
+    const state = readUnitState(unit, fieldsById);
+    if (hasFilledValue(state)) filledCount += 1;
+    else if (state.blank) blankRows.add(`${unit.table_id}\u0000${unit.row}`);
+    else if (unit.fill_by === 'manual') manualNames.add(unit.name);
+    else unresolved.push({ label: unitLabel(unit), reason: state.unresolved_reason || '未填写' });
+  }
+  return { field_count: units.length, filled_count: filledCount, manual_count: manualNames.size, unresolved, blank_row_count: blankRows.size };
+}
+
+// 用户确认值以填写项 key 为单位展开到字段：有值写入；为空时保留原有的留空和无法确定原因，其余不写值以保留占位。
+function buildConfirmedEntries(fields = [], values = []) {
+  const fieldsById = new Map(fields.map(field => [field.id, field]));
+  const submitted = new Map(values.map(item => [item.key, item]));
+  const entries = {};
+  for (const unit of groupFieldUnits(fields)) {
+    const item = submitted.get(unit.key) || {};
+    const state = readUnitState(unit, fieldsById);
+    const entry = item.image_id ? { image_id: item.image_id }
+      : item.selected?.length ? { selected: item.selected }
+        : textOf(item.value) ? { value: String(item.value).replace(/\r\n?/g, '\n') }
+          : state.blank ? { blank: true }
+            : state.unresolved_reason ? { unresolved_reason: state.unresolved_reason }
+              : null;
+    if (!entry) continue;
+    for (const id of unit.field_ids) entries[id] = entry;
+  }
+  return entries;
+}
+
+// 图片所属记录的展示名，供确认弹窗分组。
+function imageOwnerLabels(snapshot = {}) {
+  const labels = new Map();
+  for (const item of snapshot.certificates || []) labels.set(`certificate\u0000${item.certificateId}`, `资质：${item.name || '未命名'}`);
+  for (const item of snapshot.employees || []) labels.set(`employee\u0000${item.employeeId}`, `员工：${item.name || '未命名'}`);
+  for (const item of snapshot.projects || []) labels.set(`project\u0000${item.projectId}`, `业绩：${item.projectName || '未命名'}`);
+  for (const item of snapshot.otherMaterials || []) labels.set(`other\u0000${item.materialId}`, `其他：${item.name || '未命名'}`);
+  return labels;
+}
+
+// 确认弹窗数据：全部填写项及当前值，以及资信库图片目录。
+function loadBusinessFillReview({ workspaceStore, credentialLibraryService }) {
+  const fields = workspaceStore.readBidTemplateFields().fields || [];
+  const fieldsById = new Map(fields.map(field => [field.id, field]));
+  const snapshot = credentialLibraryService.load();
+  const owners = imageOwnerLabels(snapshot);
+  return {
+    units: groupFieldUnits(fields).map(unit => ({
+      key: unit.key,
+      name: unit.name,
+      kind: unit.kind,
+      fill_by: unit.fill_by,
+      ...(unit.instruction ? { instruction: unit.instruction } : {}),
+      ...(unit.options ? { options: unit.options } : {}),
+      ...(unit.table_id ? { table_id: unit.table_id, row: unit.row } : {}),
+      ...readUnitState(unit, fieldsById),
+    })),
+    images: (snapshot.images || []).map(image => ({
+      image_id: image.imageId,
+      group: image.ownerType === 'profile' ? '企业资料' : owners.get(`${image.ownerType}\u0000${image.ownerId}`) || '其他',
+      label: CREDENTIAL_IMAGE_FIELD_LABELS[image.fieldKey] || image.fieldKey,
+      name: image.customName || image.originalName,
+      asset_url: image.assetUrl,
+    })),
+  };
+}
+
+// 按阶段续跑：filling 运行副 Agent 并保存字段值，reviewing 等待用户确认，rendering 以底稿重新生成 Word；值已确认时只重试回填。
 async function runBusinessTemplateFill({
   agentService,
   workspaceStore,
@@ -494,6 +616,7 @@ async function runBusinessTemplateFill({
   primarySession = false,
   signal,
   isPauseError = () => false,
+  waitForReview,
   onState,
   onActivity,
 }) {
@@ -510,8 +633,10 @@ async function runBusinessTemplateFill({
     const units = buildFillUnits(fields);
     if (!units.length) {
       workspaceStore.saveBidTemplateFieldValues({});
-      update({ phase: 'rendering', field_count: 0, filled_count: 0, manual_count: manualCount, unresolved: [], blank_row_count: 0, accepted_issues: [] });
+      // 没有 AI 填写项也交给用户确认人工字段和附件；完全没有字段时直接回填。
+      update({ phase: fields.length ? 'reviewing' : 'rendering', field_count: 0, filled_count: 0, manual_count: manualCount, unresolved: [], blank_row_count: 0, accepted_issues: [] });
     } else {
+      const imageIds = new Set((credentialLibraryService.load().images || []).map(image => image.imageId));
       signal?.throwIfAborted();
       const resumeSession = agentService.hasPersistentTaskSession(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
       // 要求已在原会话发出时，继续只发送“继续之前的任务”。
@@ -546,7 +671,7 @@ async function runBusinessTemplateFill({
           initial_stage: BUSINESS_TEMPLATE_FILL_STAGE,
           json_validation_schemas: { [FILL_OUTPUT_FILE]: BUSINESS_TEMPLATE_FILL_JSON_SCHEMA },
           max_retries: 1,
-          validateOutput: candidate => checkBusinessTemplateFillResult(candidate.output_content, units),
+          validateOutput: candidate => checkBusinessTemplateFillResult(candidate.output_content, units, imageIds),
           buildRetryPrompt,
           onActivity,
         });
@@ -568,16 +693,35 @@ async function runBusinessTemplateFill({
       agentService.updatePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, {
         status: 'success', phase: 'completed', agent_connection: 'idle', error: null, completed_at: new Date().toISOString(),
       });
-      update({ phase: 'rendering', ...validated.stats, manual_count: manualCount, accepted_issues: acceptedIssues });
+      update({ phase: 'reviewing', ...validated.stats, manual_count: manualCount, accepted_issues: acceptedIssues });
     }
+  }
+
+  if (current.phase === 'reviewing') {
+    signal?.throwIfAborted();
+    // 返回 null 表示自动确认，保留已保存的值。
+    const confirmed = await waitForReview(signal);
+    if (confirmed) {
+      workspaceStore.saveBidTemplateFieldValues(buildConfirmedEntries(workspaceStore.readBidTemplateFields().fields || [], confirmed.values));
+    }
+    update({ phase: 'rendering', ...summarizeFillStats(workspaceStore.readBidTemplateFields().fields || []), confirmed_by: confirmed ? 'user' : 'auto' });
   }
 
   if (current.phase === 'rendering') {
     signal?.throwIfAborted();
-    const values = (workspaceStore.readBidTemplateFields().fields || [])
-      .filter(field => ['value', 'selected', 'blank'].some(key => Object.hasOwn(field, key)))
-      .map(field => (Object.hasOwn(field, 'selected') ? { id: field.id, selected: field.selected }
-        : Object.hasOwn(field, 'blank') ? { id: field.id, blank: true } : { id: field.id, value: field.value }));
+    const imagePaths = new Map((credentialLibraryService.load().images || []).map(image => [image.imageId, `credential-library/${image.relativePath}`]));
+    const missingImages = new Set();
+    const values = [];
+    for (const field of workspaceStore.readBidTemplateFields().fields || []) {
+      if (Object.hasOwn(field, 'image_id')) {
+        const image = imagePaths.get(field.image_id);
+        // 确认后图片已从资信库删除时保留占位。
+        if (image) values.push({ id: field.id, image });
+        else missingImages.add(field.name);
+      } else if (Object.hasOwn(field, 'selected')) values.push({ id: field.id, selected: field.selected });
+      else if (Object.hasOwn(field, 'blank')) values.push({ id: field.id, blank: true });
+      else if (Object.hasOwn(field, 'value')) values.push({ id: field.id, value: field.value });
+    }
     await openXmlHelperService.runJob({
       action: 'fill-template-fields',
       request: {
@@ -588,7 +732,13 @@ async function runBusinessTemplateFill({
       timeoutMs: FILL_RENDER_TIMEOUT_MS,
       signal,
     });
-    update({ phase: 'completed' });
+    update({
+      phase: 'completed',
+      ...(missingImages.size ? {
+        filled_count: Math.max(0, (current.filled_count || 0) - missingImages.size),
+        unresolved: [...(current.unresolved || []), ...[...missingImages].map(label => ({ label, reason: '所选资信库图片已删除，保留占位' }))],
+      } : {}),
+    });
   }
   return current;
 }
@@ -597,8 +747,12 @@ module.exports = {
   BUSINESS_TEMPLATE_FILL_STAGE,
   FILL_OUTPUT_FILE,
   BUSINESS_TEMPLATE_FILL_JSON_SCHEMA,
+  groupFieldUnits,
   buildFillUnits,
   buildFieldsInput,
+  buildConfirmedEntries,
+  summarizeFillStats,
+  loadBusinessFillReview,
   buildCredentialLibraryInput,
   parseFillResult,
   validateBusinessTemplateFillResult,

@@ -25,6 +25,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentServic
   ipcMain.handle('technical-plan:save-chapter-content', (_event, payload) => technicalPlanStore.saveChapterContent(payload));
   ipcMain.handle('technical-plan:reset-content-generation', () => taskService.resetContentGeneration());
   ipcMain.handle('technical-plan:clear', () => taskService.resetTechnicalPlan());
+  ipcMain.handle('technical-plan:get-business-fill-review', () => taskService.getBusinessFillReview());
   ipcMain.handle('technical-plan:open-bid-template', async () => {
     const filePath = technicalPlanStore.getBidTemplatePath?.();
     if (!filePath || !technicalPlanStore.hasBidTemplate?.()) {

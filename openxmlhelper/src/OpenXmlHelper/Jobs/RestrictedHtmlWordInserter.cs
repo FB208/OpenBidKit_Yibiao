@@ -27,9 +27,10 @@ sealed class FigureAssets(IReadOnlyDictionary<string, string>? declaredTypes = n
 static partial class RestrictedHtmlWordInserter
 {
     public const string TagPrefix = "yibiao:body:";
-    const long EmusPerTwip = 635L;
+    internal const long EmusPerTwip = 635L;
     const long EmusPerPoint = 12_700L;
     const long DefaultPageWidthTwips = 11_906L;
+    const long DefaultPageHeightTwips = 16_838L;
     const long DefaultPageMarginTwips = 1_134L;
     const long DefaultColumnSpacingTwips = 720L;
     const string FigureTokenPrefix = "YIBIAOFIGURE";
@@ -412,30 +413,50 @@ static partial class RestrictedHtmlWordInserter
             // 高度只会小于等于版面预算，所以排版侧的装箱结论仍然成立。
             (width, height) = FitInside(spec.Dimensions, width, height);
         }
-        var imagePart = mainPart.AddImagePart(spec.PartType);
+        var crop = spec.Fit == FigureFit.Contain
+            ? new CropValues(0, 0, 0, 0)
+            : ResolveCenterCrop(spec.Dimensions, spec.Size);
+        Wp.Drawing drawing;
         using (var stream = spec.Bytes is null
             ? (Stream)File.OpenRead(spec.AssetPath)
             : new MemoryStream(spec.Bytes, writable: false))
         {
-            imagePart.FeedData(stream);
+            drawing = CreateInlineDrawing(mainPart, stream, spec.PartType, width, height, drawingId, Path.GetFileName(spec.AssetPath), spec.Alt, crop);
         }
-        var relationshipId = mainPart.GetIdOfPart(imagePart);
-        var crop = spec.Fit == FigureFit.Contain
-            ? new CropValues(0, 0, 0, 0)
-            : ResolveCenterCrop(spec.Dimensions, spec.Size);
-        var name = Path.GetFileName(spec.AssetPath);
 
-        var drawing = new Wp.Drawing(
+        return new Wp.Paragraph(
+            new Wp.ParagraphProperties(new Wp.Justification { Val = Wp.JustificationValues.Center }),
+            new Wp.Run(drawing));
+    }
+
+    /// <summary>写入图片部件并创建内嵌图片，正文配图与模版附件共用。</summary>
+    internal static Wp.Drawing CreateInlineDrawing(
+        MainDocumentPart mainPart,
+        Stream data,
+        PartTypeInfo partType,
+        long width,
+        long height,
+        uint drawingId,
+        string name,
+        string alt,
+        CropValues? crop = null)
+    {
+        var imagePart = mainPart.AddImagePart(partType);
+        imagePart.FeedData(data);
+        var relationshipId = mainPart.GetIdOfPart(imagePart);
+        crop ??= new CropValues(0, 0, 0, 0);
+
+        return new Wp.Drawing(
             new DW.Inline(
                 new DW.Extent { Cx = width, Cy = height },
                 new DW.EffectExtent { LeftEdge = 0L, TopEdge = 0L, RightEdge = 0L, BottomEdge = 0L },
-                new DW.DocProperties { Id = drawingId, Name = name, Description = spec.Alt },
+                new DW.DocProperties { Id = drawingId, Name = name, Description = alt },
                 new DW.NonVisualGraphicFrameDrawingProperties(new A.GraphicFrameLocks { NoChangeAspect = true }),
                 new A.Graphic(
                     new A.GraphicData(
                         new PIC.Picture(
                             new PIC.NonVisualPictureProperties(
-                                new PIC.NonVisualDrawingProperties { Id = drawingId, Name = name, Description = spec.Alt },
+                                new PIC.NonVisualDrawingProperties { Id = drawingId, Name = name, Description = alt },
                                 new PIC.NonVisualPictureDrawingProperties()),
                             new PIC.BlipFill(
                                 new A.Blip { Embed = relationshipId, CompressionState = A.BlipCompressionValues.Print },
@@ -459,10 +480,6 @@ static partial class RestrictedHtmlWordInserter
                 DistanceFromLeft = 0U,
                 DistanceFromRight = 0U,
             });
-
-        return new Wp.Paragraph(
-            new Wp.ParagraphProperties(new Wp.Justification { Val = Wp.JustificationValues.Center }),
-            new Wp.Run(drawing));
     }
 
     static Wp.Paragraph CreateCaptionParagraph(string caption)
@@ -473,13 +490,9 @@ static partial class RestrictedHtmlWordInserter
     }
 
     /// <summary>读取正文或目标内容控件所在节的宽度，未设置页面参数时按 A4 与 2 cm 页边距处理。</summary>
-    static long ResolvePageContentWidth(MainDocumentPart mainPart, OpenXmlCompositeElement target)
+    internal static long ResolvePageContentWidth(MainDocumentPart mainPart, OpenXmlCompositeElement target)
     {
-        var body = mainPart.Document.Body;
-        var passedTarget = false;
-        var section = target is Wp.Body
-            ? target.GetFirstChild<Wp.SectionProperties>()
-            : body is null ? null : FindFollowingSectionProperties(body, target, ref passedTarget);
+        var section = FindSection(mainPart, target);
         var pageWidthValue = section?.GetFirstChild<Wp.PageSize>()?.Width?.Value;
         var pageWidth = pageWidthValue is null ? DefaultPageWidthTwips : (long)pageWidthValue.Value;
         var margins = section?.GetFirstChild<Wp.PageMargin>();
@@ -498,6 +511,29 @@ static partial class RestrictedHtmlWordInserter
             contentWidth = Math.Max(1L, contentWidth - spacing * (columnCount - 1)) / columnCount;
         }
         return Math.Max(1L, contentWidth) * EmusPerTwip;
+    }
+
+    /// <summary>读取目标所在节的版心高度，未设置页面参数时按 A4 与 2 cm 页边距处理。</summary>
+    internal static long ResolvePageContentHeight(MainDocumentPart mainPart, OpenXmlCompositeElement target)
+    {
+        var section = FindSection(mainPart, target);
+        var pageHeightValue = section?.GetFirstChild<Wp.PageSize>()?.Height?.Value;
+        var pageHeight = pageHeightValue is null ? DefaultPageHeightTwips : (long)pageHeightValue.Value;
+        var margins = section?.GetFirstChild<Wp.PageMargin>();
+        var topValue = margins?.Top?.Value;
+        var bottomValue = margins?.Bottom?.Value;
+        var top = topValue is null ? DefaultPageMarginTwips : Math.Abs((long)topValue.Value);
+        var bottom = bottomValue is null ? DefaultPageMarginTwips : Math.Abs((long)bottomValue.Value);
+        return Math.Max(1L, pageHeight - top - bottom) * EmusPerTwip;
+    }
+
+    static Wp.SectionProperties? FindSection(MainDocumentPart mainPart, OpenXmlCompositeElement target)
+    {
+        var body = mainPart.Document.Body;
+        var passedTarget = false;
+        return target is Wp.Body
+            ? target.GetFirstChild<Wp.SectionProperties>()
+            : body is null ? null : FindFollowingSectionProperties(body, target, ref passedTarget);
     }
 
     /// <summary>按文档顺序查找目标位置之后最近的分节属性。</summary>
@@ -553,7 +589,7 @@ static partial class RestrictedHtmlWordInserter
     /// 按文件头识别格式，尺寸解析和 Word 图片类型共用结果，不依赖文件后缀；尺寸读不到时交由画框决定大小。
     /// 文件头无法识别时，仅在 Main 按扩展名声明了无法按文件头核对的图片类型时原样嵌入，交给 Word 显示。
     /// </summary>
-    static (ImageDimensions? Dimensions, PartTypeInfo PartType) ReadImageInfo(Stream stream, string path, string? declaredType)
+    internal static (ImageDimensions? Dimensions, PartTypeInfo PartType) ReadImageInfo(Stream stream, string path, string? declaredType)
     {
         var format = DetectImageFormat(stream);
         if (format is null)
@@ -866,10 +902,10 @@ static partial class RestrictedHtmlWordInserter
     sealed record FigureSize(double WidthRatio, int AspectWidth, int AspectHeight);
     sealed record FigurePlacement(double WidthRatio, double HorizontalPaddingPoints);
     sealed record TableCellPlacement(double WidthRatio, double HorizontalPaddingPoints);
-    sealed record ImageDimensions(int Width, int Height);
+    internal sealed record ImageDimensions(int Width, int Height);
 
     sealed record CachedAsset(byte[]? Bytes, ImageDimensions? Dimensions, PartTypeInfo PartType);
-    sealed record CropValues(int Left, int Top, int Right, int Bottom);
+    internal sealed record CropValues(int Left, int Top, int Right, int Bottom);
     sealed record FigureSpec(
         string Token,
         string AssetPath,

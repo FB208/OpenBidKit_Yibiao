@@ -124,6 +124,16 @@ sealed class TemplateFieldSelection
     [JsonPropertyName("fill_by")]
     public string FillBy { get; set; } = "";
     public string? Instruction { get; set; }
+    /// <summary>附件拆分为多个连续位置时的各部分，每部分生成一个字段。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TemplateFieldPart>? Parts { get; set; }
+}
+
+sealed class TemplateFieldPart
+{
+    public string Name { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Instruction { get; set; }
 }
 
 sealed class TemplateFieldDefinitionFile
@@ -183,12 +193,13 @@ sealed class ScanTemplateFieldsRequest
     public string Input { get; set; } = "";
 }
 
-/// <summary>回填一个字段：文字字段给 value，勾选项给 selected，逐行清单表未使用的单元格给 blank。</summary>
+/// <summary>回填一个字段：文字字段给 value，勾选项给 selected，附件给 image（工作区相对路径），逐行清单表未使用的单元格给 blank。</summary>
 sealed class TemplateFieldFillValue
 {
     public string Id { get; set; } = "";
     public string? Value { get; set; }
     public List<string>? Selected { get; set; }
+    public string? Image { get; set; }
     public bool? Blank { get; set; }
 }
 

@@ -21,6 +21,14 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.suppressOutlineSelectionAutoConfirmation(payload);
   });
+  ipcMain.handle('tasks:confirm-business-fill-review', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.confirmBusinessFillReview(payload);
+  });
+  ipcMain.handle('tasks:suppress-business-fill-review-auto-confirmation', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.suppressBusinessFillReviewAutoConfirmation(payload);
+  });
   ipcMain.handle('tasks:start-global-facts-generation', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startGlobalFactsGeneration(payload);

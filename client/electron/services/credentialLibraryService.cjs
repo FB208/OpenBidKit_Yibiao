@@ -39,6 +39,39 @@ const importImageFieldKeys = {
   other: new Set(['otherMaterialImages']),
 };
 
+// 图片栏目中文名，与资信库页面文案一致，供商务模版附件推荐与选择展示。
+const CREDENTIAL_IMAGE_FIELD_LABELS = {
+  officeEnvironment: '办公环境',
+  businessLicense: '营业执照',
+  legalRepresentativeIdEmblem: '法定代表人身份证国徽面',
+  legalRepresentativeIdPortrait: '法定代表人身份证人像面',
+  legalRepresentativeAuthorization: '法定代表人授权委托书',
+  authorizedRepresentativeIdEmblem: '授权代表身份证国徽面',
+  authorizedRepresentativeIdPortrait: '授权代表身份证人像面',
+  basicDepositAccountInfo: '企业基本存款账户信息单',
+  creditChinaReport: '信用中国网站企业信用信息报告',
+  governmentProcurementRecord: '中国政府采购网严重违法失信行为记录查询截图',
+  enterpriseCreditReport: '国家企业信用信息公示系统企业信用信息公示报告',
+  dishonestEnforcementQuery: '中国执行信息公开网失信被执行人查询截图',
+  taxCertificate: '纳税证明',
+  auditReport: '财务审计报告',
+  socialSecurityCertificate: '社保缴纳证明',
+  bankAccountLicense: '开户许可证',
+  certificateImages: '证书图片',
+  employeeSocialSecurity: '社保信息',
+  employeeIdEmblem: '身份证国徽面',
+  employeeIdPortrait: '身份证人像面',
+  laborContract: '劳动合同',
+  educationCertificate: '学历证书',
+  driverLicense: '驾驶证',
+  skillCertificate: '技能证书',
+  projectContract: '合同',
+  bidWinningNotice: '中标通知书',
+  projectAcceptanceCertificate: '项目验收证明',
+  paymentInvoice: '回款发票',
+  otherMaterialImages: '资料图片',
+};
+
 const profileFieldColumns = {
   companyName: 'company_name',
   unifiedSocialCreditCode: 'unified_social_credit_code',
@@ -697,5 +730,6 @@ function createCredentialLibraryService({ app, db }) {
 }
 
 module.exports = {
+  CREDENTIAL_IMAGE_FIELD_LABELS,
   createCredentialLibraryService,
 };

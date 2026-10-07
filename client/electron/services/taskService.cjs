@@ -14,6 +14,7 @@ const {
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+const { loadBusinessFillReview } = require('./businessTemplateFillTask.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
@@ -696,6 +697,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       outlineSelectionWaiter: null,
       outlineSelectionResult: null,
       outlineSelectionAutoConfirmationId: null,
+      businessFillReviewWaiter: null,
+      businessFillReviewAutoConfirmationId: null,
       isPauseRequested() {
         return this.pauseRequested;
       },
@@ -726,6 +729,62 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         this.registerOutlineSelectionAutoConfirmation?.();
         return promise;
       },
+      // 商务模版字段值确认：signal 中止（暂停）时拒绝等待并注销自动确认，自动确认以 null 提交表示保留已存值。
+      waitForBusinessFillReview({ signal, onAutoAnswerAtChange } = {}) {
+        if (signal?.aborted) return Promise.reject(signal.reason);
+        this.releaseBusinessFillReview();
+        let resolve;
+        let reject;
+        const promise = new Promise((resolvePromise, rejectPromise) => {
+          resolve = resolvePromise;
+          reject = rejectPromise;
+        });
+        promise.catch(() => undefined);
+        const onAbort = () => this.releaseBusinessFillReview(signal.reason);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        this.businessFillReviewWaiter = {
+          resolve: (value) => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve(value);
+          },
+          reject: (error) => {
+            signal?.removeEventListener('abort', onAbort);
+            reject(error);
+          },
+        };
+        const confirmationId = `business-fill-review:${currentTask.task_id}`;
+        this.businessFillReviewAutoConfirmationId = confirmationId;
+        autoConfirmationService.register({
+          id: confirmationId,
+          submit: () => this.confirmBusinessFillReview({ taskId: currentTask.task_id, values: null }),
+          onStateChange: ({ auto_answer_at: autoAnswerAt }) => onAutoAnswerAtChange?.(autoAnswerAt || null),
+        });
+        return promise;
+      },
+      releaseBusinessFillReview(error) {
+        const waiter = this.businessFillReviewWaiter;
+        this.businessFillReviewWaiter = null;
+        autoConfirmationService.unregister(this.businessFillReviewAutoConfirmationId);
+        this.businessFillReviewAutoConfirmationId = null;
+        if (waiter && error) waiter.reject(error);
+        return waiter;
+      },
+      confirmBusinessFillReview(request = {}) {
+        if (type !== 'content-generation' || request.taskId !== currentTask.task_id) {
+          throw new Error('正文任务已变化，请重新打开后再确认');
+        }
+        const waiter = this.releaseBusinessFillReview();
+        if (!waiter) throw new Error('当前正文任务不在商务模版确认阶段');
+        waiter.resolve(Array.isArray(request.values) ? { values: request.values } : null);
+        return { success: true };
+      },
+      // 用户修改字段值后停止本次自动确认。
+      suppressBusinessFillReviewAutoConfirmation(request = {}) {
+        if (type === 'content-generation' && request.taskId === currentTask.task_id) {
+          autoConfirmationService.suppress(this.businessFillReviewAutoConfirmationId);
+        }
+        return { success: true };
+      },
       cancel(reason = '后台任务已取消') {
         const error = new Error(reason);
         error.code = 'TASK_CANCELLED';
@@ -733,6 +792,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         this.outlineSelectionWaiter = null;
         autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
         this.outlineSelectionAutoConfirmationId = null;
+        this.releaseBusinessFillReview(error);
         if (!abortController.signal.aborted) abortController.abort(error);
       },
       waitForSettlement() {
@@ -743,6 +803,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         this.outlineSelectionWaiter = null;
         autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
         this.outlineSelectionAutoConfirmationId = null;
+        this.releaseBusinessFillReview(new Error('正文任务已结束'));
       },
     };
     activeTaskControls.set(type, taskControl);
@@ -1632,6 +1693,17 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       const control = activeTaskControls.get('outline-generation');
       if (!control?.suppressOutlineSelectionAutoConfirmation) return { success: true };
       return control.suppressOutlineSelectionAutoConfirmation(payload);
+    },
+    confirmBusinessFillReview(payload) {
+      const control = activeTaskControls.get('content-generation');
+      if (!control) throw new Error('当前没有等待确认的商务模版');
+      return control.confirmBusinessFillReview(payload);
+    },
+    suppressBusinessFillReviewAutoConfirmation(payload) {
+      return activeTaskControls.get('content-generation')?.suppressBusinessFillReviewAutoConfirmation(payload) || { success: true };
+    },
+    getBusinessFillReview() {
+      return loadBusinessFillReview({ workspaceStore: technicalPlanStore, credentialLibraryService });
     },
     async resetTechnicalPlan() {
       await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');

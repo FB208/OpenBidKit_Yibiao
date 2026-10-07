@@ -6,7 +6,8 @@ import { AppDialog, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, 
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
 import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections } from '../types';
+import type { BackgroundTaskState, BusinessFillReview, BusinessFillReviewValue, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections } from '../types';
+import BusinessFillReviewDialog from '../components/BusinessFillReviewDialog';
 import ContentWordPreview from '../components/ContentWordPreview';
 import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
@@ -218,6 +219,9 @@ function ContentEditPage({
   const generationStarting = useRef(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
+  const [businessReviewOpen, setBusinessReviewOpen] = useState(false);
+  const [businessReview, setBusinessReview] = useState<BusinessFillReview | null>(null);
+  const [businessReviewSaving, setBusinessReviewSaving] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
@@ -302,12 +306,14 @@ function ContentEditPage({
           ? '已暂停'
           : businessFill.status === 'interrupted' || !taskInFlight
             ? '已中断'
-            : businessFill.phase === 'rendering' ? '回填 Word 中' : '填写中';
+            : businessFill.phase === 'reviewing' ? '待确认' : businessFill.phase === 'rendering' ? '回填 Word 中' : '填写中';
+  // 与一级目录确认相同：任务运行中等待确认时自动弹窗，关闭后可从命令栏重新打开。
+  const awaitingBusinessReview = taskInFlight && businessFill?.phase === 'reviewing' && businessFill.status === 'running';
   const businessFillTitle = businessFill?.status === 'error'
     ? `失败原因：${businessFill.error || '未知错误'}`
     : businessFill?.phase === 'completed' && businessFill.unresolved.length
       ? `无法确定的字段：\n${businessFill.unresolved.map((item) => `${item.label}：${item.reason}`).join('\n')}`
-      : '商务模版的 AI 字段由副 Agent 结合资信库、招标文件和全局事实填写，签字、盖章和附件保留人工处理。';
+      : '商务模版的 AI 字段和附件由副 Agent 结合资信库、招标文件和全局事实填写，确认后回填 Word；签字和盖章保留人工处理。';
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   // 单轮审计：先并发核对各小节事实，再由主 Agent 跨节比对并统一修复。
@@ -425,6 +431,44 @@ function ContentEditPage({
               : '当前目录没有 AI 生成小节，点击“填写商务模版”后将结合资信库、招标文件和全局事实填写商务模版。',
   } : null;
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
+  useEffect(() => {
+    if (!awaitingBusinessReview) {
+      setBusinessReviewOpen(false);
+      return;
+    }
+    setBusinessReviewOpen(true);
+  }, [awaitingBusinessReview, task?.task_id]);
+
+  useEffect(() => {
+    if (!businessReviewOpen) return;
+    let cancelled = false;
+    setBusinessReview(null);
+    window.yibiao.technicalPlan.getBusinessFillReview()
+      .then((review) => { if (!cancelled) setBusinessReview(review); })
+      .catch((error) => { if (!cancelled) showToast(error instanceof Error ? error.message : '读取商务模版字段值失败', 'error'); });
+    return () => { cancelled = true; };
+  }, [businessReviewOpen, showToast]);
+
+  const confirmBusinessReview = async (values: BusinessFillReviewValue[]) => {
+    if (!task?.task_id) return;
+    try {
+      setBusinessReviewSaving(true);
+      await window.yibiao.tasks.confirmBusinessFillReview({ taskId: task.task_id, values });
+      setBusinessReviewOpen(false);
+      showToast('已确认商务模版字段值，正在回填 Word', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '确认商务模版字段值失败', 'error');
+    } finally {
+      setBusinessReviewSaving(false);
+    }
+  };
+
+  // 用户修改字段值时停止当前弹窗的自动确认计时。
+  const suppressBusinessReviewAutoConfirmation = () => {
+    if (!task?.task_id) return;
+    void window.yibiao.tasks.suppressBusinessFillReviewAutoConfirmation({ taskId: task.task_id }).catch(() => undefined);
+  };
+
   const generationButtonLabel = pausing
     ? '正在暂停中...'
     : running
@@ -883,6 +927,11 @@ function ContentEditPage({
           )}
         </div>
         <div className="content-generation-actions">
+          {awaitingBusinessReview && !businessReviewOpen && (
+            <button type="button" className="secondary-action" onClick={() => setBusinessReviewOpen(true)}>
+              确认商务模版
+            </button>
+          )}
           {bidTemplateExists && (
             <button type="button" className="secondary-action" onClick={() => void onOpenBidTemplate?.()}>
               打开商务模版
@@ -1048,6 +1097,16 @@ function ContentEditPage({
             确定
           </button>
         )}
+      />
+
+      <BusinessFillReviewDialog
+        open={businessReviewOpen}
+        review={businessReview}
+        autoAnswerAt={businessFill?.auto_answer_at}
+        saving={businessReviewSaving}
+        onDismiss={() => setBusinessReviewOpen(false)}
+        onInteraction={suppressBusinessReviewAutoConfirmation}
+        onConfirm={(values) => { void confirmBusinessReview(values); }}
       />
 
       <Dialog.Root

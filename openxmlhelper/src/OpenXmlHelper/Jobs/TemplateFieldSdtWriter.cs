@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -54,10 +55,45 @@ static class TemplateFieldSdtWriter
         return written;
     }
 
+    /// <summary>拆分的附件按部分顺序占用连续段落：附件位置的第一部分替换原位置，其余部分依次插在其后；附件说明之后全部依次插入。</summary>
+    public static IReadOnlyList<OpenXmlElement> ApplyAttachmentParts(
+        TemplateFieldCandidate candidate,
+        IReadOnlyList<(TemplateFieldDefinition Field, int WordId)> parts)
+    {
+        if (candidate.Target is not Wp.Paragraph paragraph)
+        {
+            throw new InvalidOperationException($"候选位置已失效：{candidate.CandidateId}");
+        }
+
+        var written = new List<OpenXmlElement>();
+        var anchor = paragraph;
+        var fallbackAnchor = candidate.FallbackTarget;
+        var remaining = parts;
+        if (candidate.Kind == TemplateFieldKinds.AttachmentSlot)
+        {
+            var (field, wordId) = parts[0];
+            if (fallbackAnchor is not null)
+            {
+                ReplaceFallbackText(fallbackAnchor, candidate.Start, candidate.Length, field);
+            }
+            ReplaceParagraphRange(paragraph, candidate.Start, candidate.Length, field, wordId, written);
+            remaining = parts.Skip(1).ToList();
+        }
+        foreach (var (field, wordId) in remaining)
+        {
+            (anchor, fallbackAnchor) = InsertAttachmentSlot(anchor, field, wordId, written, fallbackAnchor);
+        }
+        return written;
+    }
+
     public const char CheckedBox = '☑';
 
-    /// <summary>向已标记的字段控件写入值，保留字段标识；返回本次新写入或修改的元素供调用方校验。</summary>
-    public static IReadOnlyList<OpenXmlElement> Fill(Wp.SdtElement control, TemplateFieldFillValue value)
+    /// <summary>向已标记的字段控件写入值，保留字段标识；image 为已解析的图片绝对路径。返回本次新写入或修改的元素供调用方校验。</summary>
+    public static IReadOnlyList<OpenXmlElement> Fill(
+        MainDocumentPart mainPart,
+        Wp.SdtElement control,
+        TemplateFieldFillValue value,
+        Func<uint> nextDrawingId)
     {
         var written = new List<OpenXmlElement>();
         var properties = control.GetFirstChild<Wp.SdtProperties>();
@@ -70,9 +106,15 @@ static class TemplateFieldSdtWriter
             return written;
         }
 
+        if (value.Image is { } imagePath)
+        {
+            FillImage(mainPart, control, name, imagePath, nextDrawingId(), written);
+            return written;
+        }
+
         var blank = value.Blank == true;
         // 留空只清除待填写占位；勾选项等原有内容保持原样。
-        if (blank && !control.InnerText.Contains($"【待填写：{name}】", StringComparison.Ordinal)) return written;
+        if (blank && !PlaceholderTexts(name).Any(text => control.InnerText.Contains(text, StringComparison.Ordinal))) return written;
         var lines = blank ? [""] : (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         switch (control)
         {
@@ -146,6 +188,88 @@ static class TemplateFieldSdtWriter
         }
     }
 
+    /// <summary>附件写入内嵌图片：等比缩放且不放大原图，宽不超过所在单元格或版心，高不超过版心；文本框兼容显示写入字段名称。</summary>
+    static void FillImage(
+        MainDocumentPart mainPart,
+        Wp.SdtElement control,
+        string name,
+        string imagePath,
+        uint drawingId,
+        List<OpenXmlElement> written)
+    {
+        using var stream = File.OpenRead(imagePath);
+        RestrictedHtmlWordInserter.ImageDimensions? dimensions;
+        PartTypeInfo partType;
+        try
+        {
+            (dimensions, partType) = RestrictedHtmlWordInserter.ReadImageInfo(stream, imagePath, null);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new InvalidOperationException($"附件“{name}”的图片无法写入：{error.Message}");
+        }
+        stream.Position = 0;
+        var (width, height) = FitImage(dimensions, ResolveImageMaxWidth(mainPart, control), RestrictedHtmlWordInserter.ResolvePageContentHeight(mainPart, control));
+        var drawing = RestrictedHtmlWordInserter.CreateInlineDrawing(mainPart, stream, partType, width, height, drawingId, Path.GetFileName(imagePath), name);
+        switch (control)
+        {
+            case Wp.SdtRun run:
+            {
+                var content = run.SdtContentRun ?? run.AppendChild(new Wp.SdtContentRun());
+                content.RemoveAllChildren();
+                written.Add(content.AppendChild(new Wp.Run(drawing)));
+                break;
+            }
+            case Wp.SdtBlock block:
+            {
+                var content = block.SdtContentBlock ?? block.AppendChild(new Wp.SdtContentBlock());
+                var sourceParagraph = content.Descendants<Wp.Paragraph>().FirstOrDefault();
+                content.RemoveAllChildren();
+                var paragraph = new Wp.Paragraph();
+                if (sourceParagraph?.ParagraphProperties is not null)
+                {
+                    paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
+                }
+                paragraph.AppendChild(new Wp.Run(drawing));
+                written.Add(content.AppendChild(paragraph));
+                break;
+            }
+            default:
+                throw new InvalidOperationException($"模版字段 {name} 的控件类型不支持填写");
+        }
+        FillFallback(control, name, [name]);
+    }
+
+    /// <summary>所在表格单元格设置了固定宽度时取单元格宽度（扣除默认左右边距），否则取版心宽度。</summary>
+    static long ResolveImageMaxWidth(MainDocumentPart mainPart, Wp.SdtElement control)
+    {
+        var pageWidth = RestrictedHtmlWordInserter.ResolvePageContentWidth(mainPart, control);
+        var cellWidth = control.Ancestors<Wp.TableCell>().FirstOrDefault()?.TableCellProperties?.TableCellWidth;
+        if (cellWidth?.Type?.Value != Wp.TableWidthUnitValues.Dxa || !long.TryParse(cellWidth.Width?.Value, out var twips)) return pageWidth;
+        var available = (twips - DefaultCellMarginTwips * 2) * RestrictedHtmlWordInserter.EmusPerTwip;
+        return available > 0 ? Math.Min(available, pageWidth) : pageWidth;
+    }
+
+    /// <summary>按 96 DPI 计算原始尺寸，等比缩小到不超过给定宽高；尺寸未知时取正方形。</summary>
+    static (long Width, long Height) FitImage(RestrictedHtmlWordInserter.ImageDimensions? dimensions, long maxWidth, long maxHeight)
+    {
+        if (dimensions is null || dimensions.Width <= 0 || dimensions.Height <= 0)
+        {
+            var side = Math.Min(maxWidth, maxHeight);
+            return (side, side);
+        }
+        double width = dimensions.Width * EmusPerPixel;
+        double height = dimensions.Height * EmusPerPixel;
+        var scale = Math.Min(1.0, Math.Min(maxWidth / width, maxHeight / height));
+        return (Math.Max(1L, (long)Math.Round(width * scale)), Math.Max(1L, (long)Math.Round(height * scale)));
+    }
+
+    const long EmusPerPixel = 9_525L;
+    const long DefaultCellMarginTwips = 108L;
+
+    /// <summary>字段占位文字：AI 填写为“待填写”，人工处理为“人工处理”。</summary>
+    static string[] PlaceholderTexts(string name) => [$"【待填写：{name}】", $"【人工处理：{name}】"];
+
     /// <summary>文本框兼容显示（mc:Fallback）只有纯文字占位，按同名占位的出现顺序同步写入相同文字。</summary>
     static void FillFallback(Wp.SdtElement control, string name, IReadOnlyList<string> lines)
     {
@@ -156,8 +280,8 @@ static class TemplateFieldSdtWriter
             .Where(item => item.GetFirstChild<Wp.SdtProperties>()?.GetFirstChild<Wp.SdtAlias>()?.Val?.Value == name)
             .ToList()
             .IndexOf(control);
-        var placeholder = $"【待填写：{name}】";
-        var runs = fallback.Descendants<Wp.Run>().Where(item => ReadRunText(item) == placeholder).ToList();
+        var placeholders = PlaceholderTexts(name);
+        var runs = fallback.Descendants<Wp.Run>().Where(item => placeholders.Contains(ReadRunText(item))).ToList();
         if (index < 0 || index >= runs.Count) return;
         runs[index].InsertBeforeSelf(CreateValueRun(lines, runs[index]));
         runs[index].Remove();
@@ -376,8 +500,8 @@ static class TemplateFieldSdtWriter
         }
     }
 
-    /// <summary>附件说明保持原文，在其后插入一段附件占位；文本框兼容显示同步插入纯文字占位。</summary>
-    static void InsertAttachmentSlot(
+    /// <summary>附件说明保持原文，在其后插入一段附件占位；文本框兼容显示同步插入纯文字占位。返回新插入的段落，供后续部分继续向后插入。</summary>
+    static (Wp.Paragraph Slot, Wp.Paragraph? FallbackSlot) InsertAttachmentSlot(
         Wp.Paragraph paragraph,
         TemplateFieldDefinition field,
         int wordId,
@@ -386,10 +510,11 @@ static class TemplateFieldSdtWriter
     {
         var control = CreateControl(field, wordId, paragraph.Elements<Wp.Run>().LastOrDefault());
         written.Add(control);
-        paragraph.InsertAfterSelf(CreateSlotParagraph(paragraph, control));
-        fallback?.InsertAfterSelf(CreateSlotParagraph(
+        var slot = paragraph.InsertAfterSelf(CreateSlotParagraph(paragraph, control));
+        var fallbackSlot = fallback?.InsertAfterSelf(CreateSlotParagraph(
             fallback,
             CreatePlaceholderRun(field, fallback.Elements<Wp.Run>().LastOrDefault())));
+        return (slot, fallbackSlot);
     }
 
     /// <summary>沿用说明段落格式，去掉分节、编号和段前分页，避免插入段改变版面结构。</summary>

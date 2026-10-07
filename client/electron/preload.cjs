@@ -254,6 +254,7 @@ const bridge = {
     resetContentGeneration: () => ipcRenderer.invoke('technical-plan:reset-content-generation'),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
     openBidTemplate: () => ipcRenderer.invoke('technical-plan:open-bid-template'),
+    getBusinessFillReview: () => ipcRenderer.invoke('technical-plan:get-business-fill-review'),
   },
   feasibilityReport: {
     loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),
@@ -302,6 +303,8 @@ const bridge = {
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
     suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
+    confirmBusinessFillReview: (payload) => ipcRenderer.invoke('tasks:confirm-business-fill-review', payload),
+    suppressBusinessFillReviewAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-business-fill-review-auto-confirmation', payload),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),

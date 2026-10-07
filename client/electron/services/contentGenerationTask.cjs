@@ -1313,9 +1313,9 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
     stepLabel = ({ checking: '正在导出并检测页栏留白', supplementing: '正在并发补写', rechecking: '正在重新导出复查', completed: '格式自检完成' })[step];
   } else if (phase === 'business-filling') {
     const fillPhase = stats.business_fill?.phase || 'filling';
-    phaseProgress = fillPhase === 'completed' ? 100 : fillPhase === 'rendering' ? 90 : 0;
+    phaseProgress = fillPhase === 'completed' ? 100 : fillPhase === 'rendering' ? 90 : fillPhase === 'reviewing' ? 80 : 0;
     step = fillPhase;
-    stepLabel = ({ filling: '副 Agent 正在填写商务模版', rendering: '正在回填商务模版 Word', completed: '商务模版填写完成' })[fillPhase] || stepLabel;
+    stepLabel = ({ filling: '副 Agent 正在填写商务模版', reviewing: '等待确认商务模版字段值', rendering: '正在回填商务模版 Word', completed: '商务模版填写完成' })[fillPhase] || stepLabel;
   } else if (phase === 'done') {
     completed = 1;
     total = 1;
@@ -1988,7 +1988,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }
     if (continuing && previous) {
       setBusinessFill({ ...previous, status: 'running', error: null });
-      if (!businessOnly) logs = [...logs, previous.phase === 'rendering' ? '商务模版字段值已保存，继续回填 Word。' : '继续商务模版填写。'];
+      if (!businessOnly) {
+        logs = [...logs, previous.phase === 'rendering' ? '商务模版字段值已保存，继续回填 Word。'
+          : previous.phase === 'reviewing' ? '继续等待确认商务模版字段值。' : '继续商务模版填写。'];
+      }
       return;
     }
     workspaceStore.resetBusinessTemplateFill();
@@ -2014,6 +2017,27 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     };
     const watcher = setInterval(abortOnPause, 500);
     const isPaused = error => isPauseRequested() || isPauseLikeError(error) || isPauseLikeError(controller.signal.reason);
+    // 副流程写进度不改任务状态；暂停或收尾后由最终 checkpoint 一并写入，避免覆盖已提交的状态。
+    const checkpointBusinessFill = () => {
+      if (businessSettled || isPauseRequested()) return;
+      try {
+        checkpointTask({ logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
+      } catch {
+        // 任务已取消时不再写入。
+      }
+    };
+    // 与一级目录确认相同：等待用户确认字段值，自动确认的截止时间随 business_fill 推送给页面。
+    const waitForReview = (signal) => taskControl.waitForBusinessFillReview({
+      signal,
+      onAutoAnswerAtChange(autoAnswerAt) {
+        const { auto_answer_at: _previous, ...rest } = contentRuntime.business_fill || {};
+        setBusinessFill({ ...rest, ...(autoAnswerAt ? { auto_answer_at: autoAnswerAt } : {}) });
+        checkpointBusinessFill();
+      },
+    }).finally(() => {
+      const { auto_answer_at: _previous, ...rest } = contentRuntime.business_fill || {};
+      setBusinessFill(rest);
+    });
     businessFlow = runBusinessTemplateFill({
       agentService, workspaceStore, credentialLibraryService, openXmlHelperService,
       inputs: { bidKeyInfoText: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText), globalFactsText },
@@ -2021,19 +2045,16 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       primarySession: businessOnly,
       signal: AbortSignal.any([taskControl.signal, controller.signal]),
       isPauseError: isPaused,
+      waitForReview,
       onState(next) {
         setBusinessFill({ ...next, status: next.phase === 'completed' ? 'success' : 'running' });
-        if (next.phase === 'rendering') {
-          logs = [...logs, `商务模版字段值已保存（已填 ${next.filled_count} 项，无法确定 ${next.unresolved.length} 项${next.blank_row_count ? `，未使用的 ${next.blank_row_count} 行已留空` : ''}），正在回填 Word。`
+        if (next.phase === 'reviewing') {
+          logs = [...logs, `商务模版字段值已生成（已填 ${next.filled_count} 项，无法确定 ${next.unresolved.length} 项${next.blank_row_count ? `，未使用的 ${next.blank_row_count} 行已留空` : ''}），等待确认。`
             + (next.accepted_issues?.length ? `以下问题多次修复未改善，按原样保留：${next.accepted_issues.join('；')}` : '')];
+        } else if (next.phase === 'rendering') {
+          logs = [...logs, `商务模版字段值已${next.confirmed_by === 'auto' ? '自动' : ''}确认，正在回填 Word。`];
         }
-        // 不改任务状态；暂停或收尾后由最终 checkpoint 一并写入，避免覆盖已提交的状态。
-        if (businessSettled || isPauseRequested()) return;
-        try {
-          checkpointTask({ logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
-        } catch {
-          // 任务已取消时不再写入。
-        }
+        checkpointBusinessFill();
       },
       onActivity: handleBusinessActivity,
     }).then(() => ({ ok: true }), (error) => {

@@ -738,7 +738,8 @@ static class TemplateFieldScanner
         var note = AttachmentNotePattern.Match(text);
         if (note.Success && !Overlaps(text.Length, 0))
         {
-            hits.Add(new ParagraphHit(TemplateFieldKinds.AttachmentNote, text.Length, 0, CleanMaterialName(note.Groups["material"].Value), "manual"));
+            // 附件由 Agent 按材料是否来自资信库判断填写方式，扫描不给 manual 建议。
+            hits.Add(new ParagraphHit(TemplateFieldKinds.AttachmentNote, text.Length, 0, CleanMaterialName(note.Groups["material"].Value), "ai"));
         }
 
         var trimmed = text.Trim();
@@ -750,7 +751,7 @@ static class TemplateFieldScanner
                 text.IndexOf(trimmed, StringComparison.Ordinal),
                 trimmed.Length,
                 CleanName(slot.Groups["name"].Value),
-                "manual"));
+                "ai"));
         }
 
         var trailing = TrailingLabelPattern.Match(text);

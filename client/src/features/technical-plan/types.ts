@@ -262,7 +262,7 @@ export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
 /** 商务模版填写副流程状态，统计以填写项为单位（同名字段或表格单元格）。 */
 export interface BusinessTemplateFillState {
-  phase: 'filling' | 'rendering' | 'completed';
+  phase: 'filling' | 'reviewing' | 'rendering' | 'completed';
   status: 'running' | 'paused' | 'interrupted' | 'error' | 'success';
   field_count: number;
   filled_count: number;
@@ -273,7 +273,50 @@ export interface BusinessTemplateFillState {
   /** 连续修复无改善后按原样放行的质量问题。 */
   accepted_issues?: string[];
   error?: string | null;
+  /** 等待确认字段值时自动确认的截止时间。 */
+  auto_answer_at?: string;
+  /** 字段值由用户确认还是自动确认。 */
+  confirmed_by?: 'user' | 'auto';
   updated_at?: string;
+}
+
+/** 商务模版确认弹窗中的一个填写项：同名字段合并，逐行清单表按表格和行号区分。 */
+export interface BusinessFillReviewUnit {
+  key: string;
+  name: string;
+  kind: 'text' | 'choice' | 'attachment';
+  fill_by: 'ai' | 'manual';
+  instruction?: string;
+  options?: string[];
+  table_id?: string;
+  row?: number;
+  value?: string;
+  selected?: string[];
+  image_id?: string;
+  blank?: boolean;
+  unresolved_reason?: string;
+}
+
+/** 资信库图片选项，group 为所属记录。 */
+export interface BusinessFillReviewImage {
+  image_id: string;
+  group: string;
+  label: string;
+  name: string;
+  asset_url: string;
+}
+
+export interface BusinessFillReview {
+  units: BusinessFillReviewUnit[];
+  images: BusinessFillReviewImage[];
+}
+
+/** 用户确认的填写项值，空值不提交。 */
+export interface BusinessFillReviewValue {
+  key: string;
+  value?: string;
+  selected?: string[];
+  image_id?: string;
 }
 
 export interface ContentGenerationRuntimeState {

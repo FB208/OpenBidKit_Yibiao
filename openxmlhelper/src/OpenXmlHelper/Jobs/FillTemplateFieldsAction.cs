@@ -3,6 +3,7 @@ using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
+using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -27,6 +28,11 @@ static class FillTemplateFieldsAction
             if (!File.Exists(inputPath)) return JobResult.Fail("商务模版空白底稿不存在，请重新生成目录");
             if (WordWorkspace.PathsEqual(inputPath, outputPath)) return JobResult.Fail("空白底稿和填写结果不能使用同一路径");
             var values = NormalizeValues(request.Values);
+            foreach (var value in values.Where(item => item.Image is not null))
+            {
+                value.Image = WordWorkspace.ResolveWorkspacePath(workspace, value.Image!);
+                if (!File.Exists(value.Image)) return JobResult.Fail($"附件图片不存在：{value.Id}");
+            }
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             tempDocumentPath = $"{outputPath}.{Guid.NewGuid():N}.tmp.docx";
@@ -43,6 +49,11 @@ static class FillTemplateFieldsAction
                     .GroupBy(item => item.Tag[TemplateFieldSdtWriter.TagPrefix.Length..], StringComparer.Ordinal)
                     .ToDictionary(group => group.Key, group => group.Select(item => item.Control).ToList(), StringComparer.Ordinal);
 
+                var mainPart = document.MainDocumentPart!;
+                var drawingId = wordDocument.Descendants<DW.DocProperties>()
+                    .Select(item => item.Id?.Value ?? 0U)
+                    .DefaultIfEmpty(0U)
+                    .Max();
                 var writtenElements = new List<OpenXmlElement>();
                 foreach (var value in values)
                 {
@@ -54,7 +65,7 @@ static class FillTemplateFieldsAction
                     {
                         throw new InvalidOperationException($"模版字段 {value.Id} 对应 {matched.Count} 个内容控件，请重新生成目录");
                     }
-                    writtenElements.AddRange(TemplateFieldSdtWriter.Fill(matched[0], value));
+                    writtenElements.AddRange(TemplateFieldSdtWriter.Fill(mainPart, matched[0], value, () => ++drawingId));
                 }
 
                 wordDocument.Save();
@@ -90,7 +101,7 @@ static class FillTemplateFieldsAction
         }
     }
 
-    /// <summary>每个字段只能出现一次，文字、勾选项、留空恰好给出一种；文字值非空，勾选项至少选中一项。</summary>
+    /// <summary>每个字段只能出现一次，文字、勾选项、图片、留空恰好给出一种；文字值和图片路径非空，勾选项至少选中一项。</summary>
     static List<TemplateFieldFillValue> NormalizeValues(IEnumerable<TemplateFieldFillValue>? source)
     {
         var values = (source ?? []).Select(item => new TemplateFieldFillValue
@@ -98,6 +109,7 @@ static class FillTemplateFieldsAction
             Id = (item.Id ?? "").Trim(),
             Value = item.Value,
             Selected = item.Selected?.Select(option => (option ?? "").Trim()).Where(option => option.Length > 0).Distinct(StringComparer.Ordinal).ToList(),
+            Image = string.IsNullOrWhiteSpace(item.Image) ? null : item.Image.Trim(),
             Blank = item.Blank,
         }).ToList();
         var problems = new List<string>();
@@ -105,11 +117,11 @@ static class FillTemplateFieldsAction
         if (duplicates.Count > 0) problems.Add($"字段重复：{string.Join('、', duplicates)}");
         if (values.Any(item => item.Id.Length == 0)) problems.Add("存在缺少 id 的字段");
         var invalid = values
-            .Where(item => (item.Value is not null ? 1 : 0) + (item.Selected is not null ? 1 : 0) + (item.Blank == true ? 1 : 0) != 1
+            .Where(item => (item.Value is not null ? 1 : 0) + (item.Selected is not null ? 1 : 0) + (item.Image is not null ? 1 : 0) + (item.Blank == true ? 1 : 0) != 1
                 || (item.Selected is not null ? item.Selected.Count == 0 : item.Value is not null && string.IsNullOrWhiteSpace(item.Value)))
             .Select(item => item.Id)
             .ToList();
-        if (invalid.Count > 0) problems.Add($"字段值为空，或未恰好给出文字、勾选项、留空之一：{string.Join('、', invalid)}");
+        if (invalid.Count > 0) problems.Add($"字段值为空，或未恰好给出文字、勾选项、图片、留空之一：{string.Join('、', invalid)}");
         if (problems.Count > 0) throw new InvalidOperationException($"回填字段无效：{string.Join("；", problems)}");
         return values;
     }
