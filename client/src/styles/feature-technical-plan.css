@@ -3105,10 +3105,23 @@
   font-weight: 600;
 }
 
-.business-fill-row strong {
+.business-fill-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.business-fill-name strong {
   min-width: 0;
   color: var(--yb-text);
   font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.business-fill-name span {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 

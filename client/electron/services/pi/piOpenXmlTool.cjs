@@ -32,11 +32,12 @@ const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['candidate_id', 'name', 'fill_by'],
+        required: ['candidate_id', 'name', 'subject', 'fill_by'],
         additionalProperties: false,
         properties: {
           candidate_id: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
+          subject: { type: 'string', minLength: 1 },
           fill_by: { type: 'string', enum: ['ai', 'manual'] },
           instruction: { type: 'string' },
           // 附件拆分为多个连续位置，每部分一张图片、生成一个字段。
@@ -154,7 +155,7 @@ function createPiOpenXmlTool({
       })),
       fields_file: Type.Optional(Type.String({
         minLength: 1,
-        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组；fields 每项包含 candidate_id、name、fill_by（ai 或 manual），可选 instruction；附件需要多张图片时用 parts 拆分。',
+        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组；fields 每项包含 candidate_id、name、subject、fill_by（ai 或 manual），可选 instruction；附件需要多张图片时用 parts 拆分。',
       })),
     }, { additionalProperties: false }),
     execute: async (_toolCallId, params, signal) => {
@@ -362,6 +363,7 @@ function normalizeTemplateFields(fields) {
   return (Array.isArray(fields) ? fields : []).map((item) => ({
     candidate_id: String(item?.candidate_id || '').trim(),
     name: String(item?.name || '').trim(),
+    subject: String(item?.subject || '').trim(),
     fill_by: String(item?.fill_by || '').trim(),
     ...(String(item?.instruction || '').trim() ? { instruction: String(item.instruction).trim() } : {}),
     ...(Array.isArray(item?.parts) ? {

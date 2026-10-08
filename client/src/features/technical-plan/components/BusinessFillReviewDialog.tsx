@@ -195,9 +195,16 @@ function BusinessFillReviewDialog({
                 const startsTable = Boolean(unit.table_id) && units[index - 1]?.table_id !== unit.table_id;
                 return (
                   <Fragment key={unit.key}>
-                    {startsTable && <div className="business-fill-table-title">清单表 {tableNumbers.get(unit.table_id!)}</div>}
+                    {startsTable && (
+                      <div className="business-fill-table-title">
+                        清单表 {tableNumbers.get(unit.table_id!)}{unit.section ? ` · ${unit.section}` : ''}
+                      </div>
+                    )}
                     <div className="business-fill-row">
-                      <strong title={unit.instruction || unit.name}>{unit.table_id ? `第${unit.row}行 · ${unit.name}` : unit.name}</strong>
+                      <div className="business-fill-name">
+                        <strong title={unit.instruction || unit.name}>{unit.table_id ? `第${unit.row}行 · ${unit.name}` : unit.name}</strong>
+                        {!unit.table_id && unit.section && <span>{unit.section}</span>}
+                      </div>
                       {renderEditor(unit)}
                       <small>{describeNote(unit)}</small>
                     </div>

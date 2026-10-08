@@ -4,6 +4,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { TEMPLATE_FIELD_CLASSIFICATION_SCHEMA } = require('./pi/piOpenXmlTool.cjs');
 const { NATIVE_AGENT_TOOLS } = require('./agent/agentToolEnvironment.cjs');
+const { CREDENTIAL_IMAGE_FIELD_KEYS, CREDENTIAL_IMAGE_FIELD_LABELS } = require('./credentialLibraryService.cjs');
 
 const TEMPLATE_FIELDS_OUTPUT_FILE = 'bid-template-fields.json';
 const TEMPLATE_FIELDS_VERSION = 2;
@@ -13,6 +14,15 @@ const TEMPLATE_CLASSIFICATION_FILE = '投标模版字段分类.json';
 const TEMPLATE_EXTRACTION_TOOLS = [...NATIVE_AGENT_TOOLS, 'openxml', 'report-failure'];
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validateClassification = ajv.compile(TEMPLATE_FIELD_CLASSIFICATION_SCHEMA);
+
+const CREDENTIAL_IMAGE_OWNER_LABELS = { profile: '企业资料', certificate: '资质证书', employee: '员工', project: '业绩', other: '其他资料' };
+
+// 附件可推荐范围取自资信库实际支持的图片栏目，不在提示词中写死。
+function formatCredentialImageCategories() {
+  return Object.entries(CREDENTIAL_IMAGE_FIELD_KEYS)
+    .map(([owner, keys]) => `${CREDENTIAL_IMAGE_OWNER_LABELS[owner] || owner}（${[...keys].map((key) => CREDENTIAL_IMAGE_FIELD_LABELS[key] || key).join('、')}）`)
+    .join('；');
+}
 
 // 明确分类文件与工具生成产物的职责，以及本阶段完成条件。
 function createTemplateExtractionPrompt(sourcePaths = []) {
@@ -43,18 +53,22 @@ ${sourceList}
    - table_id、row_number、column_number 标明表格候选所在的表格和行列。
 5. 候选必须全部来自已确认一级目录对应的章节。如果候选上下文明显属于未选择的表单或后续附件，说明抽章边界错误；不得把这些候选批量放入 ignored_candidate_ids 来掩盖范围错误，也不得继续应用字段。
 6. 对候选逐项分类，并将完整结果写入 ${TEMPLATE_CLASSIFICATION_FILE}，顶层包含 fields 数组和 ignored_candidate_ids 数组；内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。真实待填位置放入 fields，只有扫描误判、固定说明文字或无需填写的位置才能放入 ignored_candidate_ids。所有候选必须且只能归入其中一类。
-7. fields 每项只填写 candidate_id、name、fill_by，以及确有必要时的 instruction 和附件的 parts：
-   - fill_by 只能是 ai 或 manual。签字、签名、签章、手印、仅需盖章的位置使用 manual；企业名称、代码、地址、人员信息、日期、编号、勾选项等可由企业信息库或招标文件提供的内容使用 ai，即使旁边标有“（公章）”“（盖章）”。
-   - 附件类候选（attachment-slot、作为字段的 attachment-note）：资信库中常见的材料使用 ai，包括营业执照、开户许可证、基本存款账户信息、法定代表人或授权代表身份证人像面和国徽面、法定代表人授权委托书、信用报告与失信查询截图、纳税证明、财务审计报告、社保缴纳证明、资质证书、员工社保/身份证/劳动合同/学历证书/驾驶证/技能证书、业绩合同/中标通知书/验收证明/回款发票；投标保证金凭证、需另行办理的证明等资信库中没有的材料使用 manual。
-   - 一个附件位置只放一张图片。由多张图片组成的材料必须用 parts 拆分为多个连续位置，例如身份证拆为“法定代表人身份证人像面”“法定代表人身份证国徽面”；招标文件写明数量的同类材料按数量拆分并编号，例如“类似业绩合同（第1份）”“类似业绩合同（第2份）”；未写明数量的只保留一个位置，不使用 parts。parts 至少两项，每项填写 name（可选 instruction），各部分名称不同；使用 parts 时 name 写材料总称。部分名称尽量与上面的资信库材料名称一致。
-   - name 使用业务通用称谓。同一实体全文必须同名，例如“投标人名称”“投标单位”“企业名称”统一为“投标人名称”，法定代表人、被授权人的各项信息同理；不同语义不得仅因标题近似而合并。
-   - 日期被拆成年、月、日多个候选时，按“日期（年）”“成立时间（月）”等方式命名。
-   - 可重复行的清单表（如资料目录）同一列各行使用相同的列名作为 name，不加行号，程序按 table_id 和行号区分各行；键值型表格按单元格左侧标签命名。
-   - 勾选项按所属项目命名（如“企业类型”）；附件位置按材料命名（如“营业执照”）。
+7. fields 每项填写 candidate_id、name、subject、fill_by，以及确有必要时的 instruction 和附件的 parts：
+   - 命名标准：每个字段名称必须能脱离原文单独使用，只看名称，结合资信库和招标文件就能确定唯一应填写的信息。名称由“主体 + 属性”构成，属性是要填写的具体信息。
+   - subject 写该位置所描述对象（某个单位、人员、项目或文件等）的完整称谓，name 必须体现该主体。主体按就近优先判断：候选所在句子的主语和前文称谓、context 中【▢】前后的文字、group_title、table_title、chapter_name；同一表单内可沿用上文已确定的主体。suggested_name 只有属性、没有主体时不得直接采用。
+   - 同一主体的同一属性全文使用相同的 name 和 subject；属性相同但主体不同时，name 必须能够区分；不同语义不得仅因标签相似而合并。
+   - 一个位置要求填写多项信息时，name 写明全部属性，instruction 按原文的顺序和分隔方式规定填写格式。
+   - 可重复行的清单表：同一列各行使用相同的列名作为 name，不加行号，subject 写每行记录代表的对象，程序按 table_id 和行号区分各行；键值型表格按单元格标签结合主体命名。
+   - 勾选项按所勾选的事项命名，附件按材料命名，同样适用主体规则。
+   - 日期被拆成年、月、日多个候选时，在名称后分别加“（年）”“（月）”“（日）”。
+   - fill_by 只能是 ai 或 manual。签字、签名、签章、手印、仅需盖章的位置使用 manual；可由资信库或招标文件提供的内容使用 ai，即使旁边标有盖章提示。
+   - 附件类候选（attachment-slot、作为字段的 attachment-note）：资信库中有对应图片栏目的材料使用 ai，其余使用 manual。资信库图片栏目：${formatCredentialImageCategories()}。
+   - 一个附件位置只放一张图片。由多张图片组成的材料必须用 parts 拆分为多个连续位置，每张图片一个部分；招标文件写明数量的同类材料按数量拆分，部分名称后加“（第N份）”；未写明数量的只保留一个位置，不使用 parts。parts 至少两项，每项填写 name（可选 instruction），各部分名称不同；使用 parts 时 name 写材料总称，各部分沿用所在项的 subject。
    - attachment-note 之后已有对应附件位置（attachment-slot 或其他材料位置）时，放入 ignored_candidate_ids；否则作为附件字段。
-8. 同一项内容需要填入多处时，多个候选必须使用完全相同的 name、fill_by 和 instruction（拆分的附件按各部分名称判断）；同名候选的类型（文本、勾选项、附件）必须一致。
-9. 完成候选语义判断并用 write 或 edit 成功写入完整分类文件后，立即单独调用 openxml，只传 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}。工具会读取并校验文件中的完整 fields 和 ignored_candidate_ids，应用前无需再做机械检查。调用失败时，优先根据错误用 edit 或 write 修正同一个分类文件，再提交文件路径；错误信息不足以直接修正时，才用 read 查看相关部分。文件必须始终保留完整分类，不得在调用参数里再次输出字段清单，不得只增量补交错误中列出的候选，不得使用 * 等通配符。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}，也不要把分类文件写到 ${TEMPLATE_FIELDS_OUTPUT_FILE}。
-10. apply-template-fields 已内置分类校验、Word 校验及产物检查，成功后程序自动结束任务，无需 task_complete。失败时继续修复，不得结束任务；成功后不再检查文件、重复应用字段或输出总结。`;
+8. 同一项内容需要填入多处时，多个候选必须使用完全相同的 name、subject、fill_by 和 instruction（拆分的附件按各部分名称判断）；同名候选的类型（文本、勾选项、附件）必须一致。
+9. 写完分类文件后、调用 apply-template-fields 前自检一次：把全部字段按属性归组，逐组核对是否存在缺少主体的名称、主体不同却同名、主体相同却 name 或 subject 不一致的情况；有问题先修正分类文件。
+10. 自检完成后，立即单独调用 openxml，只传 {"action":"apply-template-fields","fields_file":"${TEMPLATE_CLASSIFICATION_FILE}"}。工具会读取并校验文件中的完整 fields 和 ignored_candidate_ids，应用前无需再做机械检查。调用失败时，优先根据错误用 edit 或 write 修正同一个分类文件，再提交文件路径；错误信息不足以直接修正时，才用 read 查看相关部分。文件必须始终保留完整分类，不得在调用参数里再次输出字段清单，不得只增量补交错误中列出的候选，不得使用 * 等通配符。不要直接编辑 DOCX、不要生成字段值、不要修改 ${TEMPLATE_OUTLINE_INPUT_FILE}，也不要把分类文件写到 ${TEMPLATE_FIELDS_OUTPUT_FILE}。
+11. apply-template-fields 已内置分类校验、Word 校验及产物检查，成功后程序自动结束任务，无需 task_complete。失败时继续修复，不得结束任务；成功后不再检查文件、重复应用字段或输出总结。`;
 }
 
 // 将模板工具绑定到当前业务工作区的原件和输出位置。

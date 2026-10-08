@@ -58,6 +58,8 @@ static class ApplyTemplateFieldsAction
                         {
                             Id = $"f{definitions.Fields.Count + 1:D4}",
                             Name = part.Name,
+                            Subject = item.Selection.Subject,
+                            Section = ResolveSection(item.Candidate),
                             FillBy = item.Selection.FillBy,
                             Instruction = part.Instruction,
                             Kind = kind,
@@ -178,6 +180,7 @@ static class ApplyTemplateFieldsAction
         {
             CandidateId = (item.CandidateId ?? "").Trim(),
             Name = (item.Name ?? "").Trim(),
+            Subject = (item.Subject ?? "").Trim(),
             FillBy = (item.FillBy ?? "").Trim().ToLowerInvariant(),
             Instruction = string.IsNullOrWhiteSpace(item.Instruction) ? null : item.Instruction.Trim(),
             Parts = item.Parts?.Select(part => new TemplateFieldPart
@@ -186,9 +189,9 @@ static class ApplyTemplateFieldsAction
                 Instruction = string.IsNullOrWhiteSpace(part.Instruction) ? null : part.Instruction.Trim(),
             }).ToList(),
         }).ToList();
-        if (selections.Any(item => item.CandidateId.Length == 0 || item.Name.Length == 0))
+        if (selections.Any(item => item.CandidateId.Length == 0 || item.Name.Length == 0 || item.Subject.Length == 0))
         {
-            throw new InvalidOperationException("模板字段缺少 candidate_id 或 name");
+            throw new InvalidOperationException("模板字段缺少 candidate_id、name 或 subject");
         }
         if (selections.Any(item => item.FillBy is not ("ai" or "manual")))
         {
@@ -254,6 +257,7 @@ static class ApplyTemplateFieldsAction
             .SelectMany(item => item.Fields.Select(field => (
                 field.Name,
                 field.Instruction,
+                item.Selection.Subject,
                 item.Selection.FillBy,
                 item.Selection.CandidateId,
                 Kind: TemplateFieldKinds.ToFieldKind(item.Candidate.Kind))))
@@ -261,10 +265,10 @@ static class ApplyTemplateFieldsAction
 
         var inconsistent = expanded
             .GroupBy(item => item.Name, StringComparer.Ordinal)
-            .FirstOrDefault(group => group.Select(item => $"{item.FillBy}\u0000{item.Instruction ?? ""}").Distinct(StringComparer.Ordinal).Count() > 1);
+            .FirstOrDefault(group => group.Select(item => $"{item.Subject}\u0000{item.FillBy}\u0000{item.Instruction ?? ""}").Distinct(StringComparer.Ordinal).Count() > 1);
         if (inconsistent is not null)
         {
-            throw new InvalidOperationException($"同名字段的 fill_by 和 instruction 必须一致：{inconsistent.Key}");
+            throw new InvalidOperationException($"同名字段的 subject、fill_by 和 instruction 必须一致：{inconsistent.Key}");
         }
 
         var mixedKinds = expanded
@@ -276,6 +280,16 @@ static class ApplyTemplateFieldsAction
         }
 
         return normalized;
+    }
+
+    /// <summary>章节名与表格标题以“ / ”连接，均为空时不写。</summary>
+    static string? ResolveSection(TemplateFieldCandidate candidate)
+    {
+        var parts = new[] { candidate.ChapterName, candidate.TableTitle }
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item!.Trim())
+            .ToList();
+        return parts.Count > 0 ? string.Join(" / ", parts) : null;
     }
 
     static bool TryReadRequest(string workspace, string jobId, out ApplyTemplateFieldsRequest request, out string error)

@@ -730,6 +730,7 @@ function createCredentialLibraryService({ app, db }) {
 }
 
 module.exports = {
+  CREDENTIAL_IMAGE_FIELD_KEYS: importImageFieldKeys,
   CREDENTIAL_IMAGE_FIELD_LABELS,
   createCredentialLibraryService,
 };

@@ -121,6 +121,8 @@ sealed class TemplateFieldSelection
     [JsonPropertyName("candidate_id")]
     public string CandidateId { get; set; } = "";
     public string Name { get; set; } = "";
+    /// <summary>字段描述的对象（单位、人员、项目、文件等）的完整称谓。</summary>
+    public string Subject { get; set; } = "";
     [JsonPropertyName("fill_by")]
     public string FillBy { get; set; } = "";
     public string? Instruction { get; set; }
@@ -147,6 +149,10 @@ sealed class TemplateFieldDefinition
 {
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
+    public string Subject { get; set; } = "";
+    /// <summary>字段所在章节与表格标题，供填写和确认时判断位置。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Section { get; set; }
     [JsonPropertyName("fill_by")]
     public string FillBy { get; set; } = "";
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

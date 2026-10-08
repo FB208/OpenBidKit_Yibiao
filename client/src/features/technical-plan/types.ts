@@ -286,6 +286,10 @@ export interface BusinessFillReviewUnit {
   name: string;
   kind: 'text' | 'choice' | 'attachment';
   fill_by: 'ai' | 'manual';
+  /** 字段描述的对象。 */
+  subject?: string;
+  /** 所在章节与表格标题。 */
+  section?: string;
   instruction?: string;
   options?: string[];
   table_id?: string;

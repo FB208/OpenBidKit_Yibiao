@@ -91,6 +91,8 @@ function groupFieldUnits(fields = []) {
         name: field.name,
         kind: FIELD_KINDS.has(field.kind) ? field.kind : 'text',
         fill_by: field.fill_by,
+        ...(field.subject ? { subject: field.subject } : {}),
+        ...(field.section ? { section: field.section } : {}),
         ...(field.instruction ? { instruction: field.instruction } : {}),
         ...(field.kind === 'choice' ? { options: field.options || [] } : {}),
         ...(perRow ? { table_id: field.table_id, row: field.row } : {}),
@@ -122,6 +124,7 @@ function readUnitState(unit, fieldsById) {
 function describeUnit(unit) {
   return {
     name: unit.name,
+    ...(unit.subject ? { subject: unit.subject } : {}),
     kind: unit.kind,
     ...(unit.instruction ? { instruction: unit.instruction } : {}),
     ...(unit.options ? { options: unit.options } : {}),
@@ -133,7 +136,7 @@ function groupTableUnits(units) {
   const tables = new Map();
   for (const unit of units) {
     if (!unit.table_id) continue;
-    if (!tables.has(unit.table_id)) tables.set(unit.table_id, { table_id: unit.table_id, columns: new Map(), rows: new Set(), cells: new Map() });
+    if (!tables.has(unit.table_id)) tables.set(unit.table_id, { table_id: unit.table_id, section: unit.section, columns: new Map(), rows: new Set(), cells: new Map() });
     const table = tables.get(unit.table_id);
     if (!table.columns.has(unit.name)) table.columns.set(unit.name, describeUnit(unit));
     table.rows.add(unit.row);
@@ -144,9 +147,10 @@ function groupTableUnits(units) {
 
 function buildFieldsInput(units) {
   return {
-    fields: units.filter(unit => !unit.table_id).map(unit => ({ ...describeUnit(unit), count: unit.field_ids.length })),
+    fields: units.filter(unit => !unit.table_id).map(unit => ({ ...describeUnit(unit), ...(unit.section ? { section: unit.section } : {}), count: unit.field_ids.length })),
     tables: [...groupTableUnits(units).values()].map(table => ({
       table_id: table.table_id,
+      ...(table.section ? { section: table.section } : {}),
       columns: [...table.columns.values()],
       rows: [...table.rows].sort((a, b) => a - b),
     })),
@@ -265,13 +269,13 @@ function createBusinessTemplateFillPrompt({ resume = false } = {}) {
 任务：为投标文件商务模版的待填字段取值，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
 
 输入文件：
-- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=attachment 为附件图片。
+- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=attachment 为附件图片。subject 是该字段所描述的对象（要填写谁或什么的信息），section 是字段或表格所在的章节和表格标题。
 - ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料；企业图片和各条记录下的“图片”列出可用图片的 id、栏目和名称。
 - ${TENDER_INPUT_FILE}：当前标段的招标文件全文。
 - ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。
 - ${GLOBAL_FACTS_INPUT_FILE}：本次投标已确定的全局事实。
 
-取值规则：
+取值规则（先按 subject 确定应填写哪个对象的信息，名称不足以判断时结合 section 和招标文件中该位置的上下文判断）：
 1. 企业信息（名称、统一社会信用代码、法定代表人、地址、电话、开户行、账号等）只取资信库，原样使用，不改写。
 2. 人员、证书、业绩只能选资信库中的真实记录，按招标文件的资格和评分要求选最匹配的。全局事实已指定的人员在资信库中存在时必须选同一人；不在资信库中时，相关字段列入 unresolved 并说明原因。
 3. tables 中同一行各列取自同一条记录，不同行取不同记录。只把有真实记录的行写入 rows，从该表格 rows 列出的第一行起按顺序连续使用；记录用完后剩余的行不要写入 rows 或 unresolved，程序会把它们留空。已使用的行中个别列没有依据时，按单元格列入 unresolved（写 table_id、row、name 和 reason）。一条可用记录都没有时，只把该表格的第一行整行列入 unresolved（只写 table_id、row 和 reason）。序号类列按行顺序填写。
@@ -590,6 +594,8 @@ function loadBusinessFillReview({ workspaceStore, credentialLibraryService }) {
       name: unit.name,
       kind: unit.kind,
       fill_by: unit.fill_by,
+      ...(unit.subject ? { subject: unit.subject } : {}),
+      ...(unit.section ? { section: unit.section } : {}),
       ...(unit.instruction ? { instruction: unit.instruction } : {}),
       ...(unit.options ? { options: unit.options } : {}),
       ...(unit.table_id ? { table_id: unit.table_id, row: unit.row } : {}),
