@@ -1,3 +1,12 @@
+<img src="./screenshots/banner2.webp" alt="易标使用演示视频" width="100%">
+
+## 🙏 赞助商
+
+| 赞助商 | 说明 |
+| --- | --- |
+| ![PackyCode](./screenshots/PackyCode.png) | PackyCode 是一家稳定、高效的 API 中转服务商，一句话接入主流大模型。统一域名、统一密钥、智能容灾切换，97% 可用性。人民币1:1充值，无汇率无手续费坑，新用户首充立享折扣 + $1免费体验额度，多分组折扣低至 2 折起，提供专属Codex/Claude Code高速通道。  [点此链接注册](https://s.markup.com.cn/packycode)，立即开始使用！ |
+| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | 感谢 JLaudeAPI 赞助了本项目！JLaudeAPI 是老牌 AI 聚合 API 平台，汇集 GPT、Claude、Gemini、Grok、国产大模型，同时覆盖主流生图、视频生成模型，全量模型稳定奔放。配备企业级管理面板，GPT‑pro 账号公示透明；支持开票、对公支付，面向企业开发与生产场景，让你花的每一分钱都发挥它的价值。通过此[注册链接](https://s.markup.com.cn/jl)开通使用。 |
+
 # 🙏致歉
 易标AI没有指使或暗示任何人到友商客户群刷存在感，均为用户个人行为，对受影响的友商深表歉意。  
 已经严令禁止。  
@@ -16,15 +25,6 @@ AI 标书还处于初级阶段，一片蓝海，友商团结起来，才能把 A
 </tr>
 </table>
  
-
-<img src="./screenshots/banner2.webp" alt="易标使用演示视频" width="100%">
-
-## 🙏 赞助商
-
-| 赞助商 | 说明 |
-| --- | --- |
-| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | 感谢 JLaudeAPI 赞助了本项目！JLaudeAPI 是老牌 AI 聚合 API 平台，汇集 GPT、Claude、Gemini、Grok、国产大模型，同时覆盖主流生图、视频生成模型，全量模型稳定奔放。配备企业级管理面板，GPT‑pro 账号公示透明；支持开票、对公支付，面向企业开发与生产场景，让你花的每一分钱都发挥它的价值。通过此[注册链接](https://s.markup.com.cn/jl)开通使用。 |
-
 
 # 易标投标工具箱 - AI智能标书写作助手
 
