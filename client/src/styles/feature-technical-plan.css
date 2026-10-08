@@ -3085,7 +3085,7 @@
 
 .business-fill-row {
   display: grid;
-  grid-template-columns: minmax(140px, 0.9fr) 56px minmax(220px, 2fr) minmax(100px, 0.8fr);
+  grid-template-columns: minmax(140px, 0.9fr) minmax(220px, 2fr) minmax(100px, 0.8fr);
   align-items: center;
   gap: 10px;
   min-height: 44px;
@@ -3134,21 +3134,6 @@
   color: var(--yb-text-muted);
   font-size: 12px;
   line-height: 1.4;
-}
-
-.business-fill-mode {
-  justify-self: start;
-  padding: 2px 8px;
-  color: var(--yb-primary);
-  background: rgba(33, 116, 253, 0.08);
-  border-radius: var(--yb-radius-pill);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.business-fill-mode.is-manual {
-  color: var(--yb-text-soft);
-  background: rgba(148, 163, 184, 0.14);
 }
 
 .business-fill-options {
@@ -3206,7 +3191,7 @@
     padding: 8px 10px;
   }
 
-  .business-fill-row > :nth-child(3),
+  .business-fill-row > :nth-child(2),
   .business-fill-row > small {
     grid-column: 1 / -1;
   }

@@ -186,7 +186,6 @@ function BusinessFillReviewDialog({
           <div className="outline-selection-table">
             <div className="business-fill-row is-header" aria-hidden="true">
               <span>字段名称</span>
-              <span>填写方式</span>
               <span>值</span>
               <span>说明</span>
             </div>
@@ -199,7 +198,6 @@ function BusinessFillReviewDialog({
                     {startsTable && <div className="business-fill-table-title">清单表 {tableNumbers.get(unit.table_id!)}</div>}
                     <div className="business-fill-row">
                       <strong title={unit.instruction || unit.name}>{unit.table_id ? `第${unit.row}行 · ${unit.name}` : unit.name}</strong>
-                      <span className={`business-fill-mode${unit.fill_by === 'manual' ? ' is-manual' : ''}`}>{unit.fill_by === 'manual' ? '人工' : 'AI'}</span>
                       {renderEditor(unit)}
                       <small>{describeNote(unit)}</small>
                     </div>
