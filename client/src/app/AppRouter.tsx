@@ -75,7 +75,7 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
     case 'developer-agent-test':
       return <AgentTestPage />;
     case 'settings':
-      return <SettingsPage onDeveloperModeChange={onDeveloperModeChange} request={settingsRequest} onRequestHandled={onSettingsRequestHandled} />;
+      return <SettingsPage onDeveloperModeChange={onDeveloperModeChange} request={settingsRequest} onRequestHandled={onSettingsRequestHandled} registerLeaveGuard={registerLeaveGuard} />;
     default:
       return null;
   }
