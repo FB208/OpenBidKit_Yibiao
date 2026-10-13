@@ -6,6 +6,7 @@ const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
 const { bindAiRequestActivity, notifyAiResponse, withAiResponseActivity } = require('../utils/aiRequestActivity.cjs');
+const { fetchWithRedirect } = require('../utils/fetchWithRedirect.cjs');
 const {
   copyAiHttpError,
   createAiHttpErrorFromResponse,
@@ -506,7 +507,7 @@ async function ensureOk(response, fallbackMessage, options = {}) {
 async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
   const sendRequest = async (body) => {
     try {
-      return await fetch(`${baseUrl}/images/generations`, {
+      return await fetchWithRedirect(`${baseUrl}/images/generations`, {
         method: 'POST',
         headers: createHeaders(apiKey),
         body: JSON.stringify(body),
@@ -964,7 +965,7 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
   const baseUrl = requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
   try {
-    return await fetch(`${baseUrl}/chat/completions`, {
+    return await fetchWithRedirect(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: createHeaders(config.api_key, config.text_model_provider),
       body: JSON.stringify(body),
@@ -1358,7 +1359,7 @@ async function requestGoogleImageData(baseUrl, imageConfig, requestBody, request
   return withAiResponseActivity(async () => {
     let response = null;
     try {
-      response = await fetch(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
+      response = await fetchWithRedirect(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
         method: 'POST',
         headers: createGoogleHeaders(imageConfig.api_key),
         body: JSON.stringify(requestBody),
@@ -2649,7 +2650,7 @@ function createAiService({ app, configStore }) {
         data = await runWithAiRetry(async () => {
           let response = null;
           try {
-            response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
+            response = await fetchWithRedirect(`${trimBaseUrl(config.base_url)}/models`, {
               method: 'GET',
               headers: createHeaders(config.api_key, config.text_model_provider),
             });

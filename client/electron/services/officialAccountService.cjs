@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { getOfficialApiSessionFilePath, getOfficialRechargeQrCachePath } = require('../utils/paths.cjs');
+const { fetchWithRedirect } = require('../utils/fetchWithRedirect.cjs');
 
 const SERVICE_BASE_URL = 'https://v3.yibiao.pro/qhp-yibiao';
 const API_BASE_URL = `${SERVICE_BASE_URL}/anonymous/yibiao/open`;
@@ -138,17 +139,19 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
       if (session.kind === 'email') headers.Authorization = `Bearer ${session.token}`;
       else headers['X-Yibiao-Open-Token'] = session.token;
     }
+    const signal = AbortSignal.any([
+      shutdown.signal,
+      AbortSignal.timeout(Math.max(1, Math.floor(authenticated ? Math.min(15000, remaining) : 15000))),
+    ]);
     let response;
     try {
-      response = await fetchImpl(`${baseUrl}${endpoint}`, {
+      // 服务端以 307 跳转到实际入口，需保留鉴权头。
+      response = await fetchWithRedirect(`${baseUrl}${endpoint}`, {
         method,
         headers,
         ...(body ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.any([
-          shutdown.signal,
-          AbortSignal.timeout(Math.max(1, Math.floor(authenticated ? Math.min(15000, remaining) : 15000))),
-        ]),
-      });
+        signal,
+      }, fetchImpl);
     } catch (error) {
       throw Object.assign(new Error('暂时无法连接官方账户服务，请稍后重试', { cause: error }), { retryable: true });
     }

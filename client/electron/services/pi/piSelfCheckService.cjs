@@ -10,6 +10,7 @@ const {
   NATIVE_AGENT_TOOLS,
 } = require('../agent/agentToolEnvironment.cjs');
 const { PI_RETRY_ERROR_NORMALIZER_PATH } = require('./piRetryErrorNormalizer.cjs');
+const { fetchWithRedirect } = require('../../utils/fetchWithRedirect.cjs');
 
 const EXPECTED_PI_TOOLS = [...NATIVE_AGENT_TOOLS, 'json-validation', 'ask-user', 'report-failure'];
 const CRITICAL_COMMANDS = new Set(['node', ...BUNDLED_COMMANDS]);
@@ -439,7 +440,7 @@ async function runTextModelProbe(config, options) {
       }];
     }
 
-    const response = await fetch(`${trimBaseUrl(config.base_url)}/chat/completions`, {
+    const response = await fetchWithRedirect(`${trimBaseUrl(config.base_url)}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
