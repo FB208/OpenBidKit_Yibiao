@@ -1182,6 +1182,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
             setGenerationSettingsInitialTab('appearance');
             void switchStep('generation-settings');
           }}
+          onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentGenerationReset={resetContentGeneration}
           onContentSaved={saveChapterContent}
         />
