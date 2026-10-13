@@ -896,15 +896,13 @@ async function collectJsonResponseWithConfig(app, config, request) {
   throw new Error(lastError?.message || failureMessage);
 }
 
-// 按文本模型设置统一输出上限，覆盖 Agent SDK 自带的长度参数；缓存预热等请求可单独指定上限。
+// 所有服务商统一使用 max_completion_tokens 设置输出上限，覆盖 Agent SDK 长度参数；请求可单独指定上限。
 function applyOutputTokenLimit(body, config, requestLimit = 0) {
   delete body.max_output_tokens;
   delete body.max_tokens;
   const limit = requestLimit > 0 ? requestLimit : config.output_token_limit;
   if (limit > 0) {
     body.max_completion_tokens = limit;
-    // 官方只接受新字段；其他服务商保留原有的双字段请求方式。
-    if (config.text_model_provider !== 'official') body.max_tokens = limit;
   } else {
     delete body.max_completion_tokens;
   }
