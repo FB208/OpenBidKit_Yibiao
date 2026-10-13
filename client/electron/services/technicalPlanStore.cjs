@@ -2795,6 +2795,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     readBidTemplateFields,
     ensureBidTemplateBlank,
     saveBidTemplateFieldValues,
+    readContentGenerationRuntime() {
+      return safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);
+    },
+    // 只替换正文运行时中的商务模版填写状态，其余运行时字段保持不变。
+    saveBusinessFillRuntime(businessFill) {
+      const runtime = { ...(safeJsonParse(readMetaRow().content_generation_runtime_json, {}) || {}), business_fill: businessFill };
+      updateMeta({ content_generation_runtime_json: JSON.stringify(runtime) });
+      return runtime;
+    },
     resetBusinessTemplateFill: createContentWordTransaction(changes => stageBusinessTemplateReset(changes)),
     hasBidTemplate() {
       return fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath);

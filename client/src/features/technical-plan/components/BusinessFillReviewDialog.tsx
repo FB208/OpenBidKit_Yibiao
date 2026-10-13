@@ -5,11 +5,13 @@ import type { BusinessFillReview, BusinessFillReviewImage, BusinessFillReviewUni
 
 interface BusinessFillReviewDialogProps {
   open: boolean;
+  // confirm：正文任务等待确认；edit：填写完成后编辑并重新回填 Word。
+  mode: 'confirm' | 'edit';
   review: BusinessFillReview | null;
   autoAnswerAt?: string;
   saving?: boolean;
   onDismiss: () => void;
-  onInteraction: () => void;
+  onInteraction?: () => void;
   onConfirm: (values: BusinessFillReviewValue[]) => void;
 }
 
@@ -29,9 +31,10 @@ function isFilled(unit: BusinessFillReviewUnit, draft: UnitDraft) {
   return Boolean(draft.value.trim());
 }
 
-// 展示副 Agent 填写的商务模版字段值，确认前允许修改文字、勾选项和附件图片。
+// 展示副 Agent 填写的商务模版字段值，确认前或填写完成后允许修改文字、勾选项和附件图片。
 function BusinessFillReviewDialog({
   open,
+  mode,
   review,
   autoAnswerAt,
   saving,
@@ -44,6 +47,7 @@ function BusinessFillReviewDialog({
   const interactionReportedRef = useRef(false);
   const { enabled: autoAnswerEnabled, saving: autoAnswerSaving, setEnabled: setAutoAnswerEnabled } = useAutoAnswer();
   const units = review?.units || [];
+  const editing = mode === 'edit';
 
   useEffect(() => {
     if (!open || !review) return;
@@ -88,7 +92,7 @@ function BusinessFillReviewDialog({
   const reportInteraction = () => {
     if (interactionReportedRef.current) return;
     interactionReportedRef.current = true;
-    onInteraction();
+    onInteraction?.();
   };
 
   const updateDraft = (key: string, patch: Partial<UnitDraft>) => {
@@ -175,8 +179,12 @@ function BusinessFillReviewDialog({
         <Dialog.Content className="outline-selection-dialog business-fill-review-dialog">
           <header className="outline-selection-head">
             <div>
-              <Dialog.Title>确认商务模版字段值</Dialog.Title>
-              <Dialog.Description>核对副 Agent 填写的内容，可修改文字、勾选项和附件图片；确认后回填商务模版 Word。</Dialog.Description>
+              <Dialog.Title>{editing ? '编辑商务模版字段值' : '确认商务模版字段值'}</Dialog.Title>
+              <Dialog.Description>
+                {editing
+                  ? '修改副 Agent 提取的文字、勾选项和附件图片；保存后以空白底稿重新回填商务模版 Word，在 Word 中的手工修改会被覆盖。'
+                  : '核对副 Agent 填写的内容，可修改文字、勾选项和附件图片；确认后回填商务模版 Word。'}
+              </Dialog.Description>
             </div>
             <span aria-live="polite">已填 {filledCount} / {units.length}</span>
           </header>
@@ -217,28 +225,30 @@ function BusinessFillReviewDialog({
           <footer className="outline-selection-actions">
             <div className="outline-selection-summary">
               <span>{units.length - filledCount ? `${units.length - filledCount} 项未填写，将保留占位` : '全部字段已填写'}</span>
-              <div className="outline-selection-auto-answer">
-                <label>
-                  <AppSwitch checked={autoAnswerEnabled} disabled={autoAnswerSaving || saving} onCheckedChange={(checked) => void setAutoAnswerEnabled(checked)} />
-                  <span>自动确认</span>
-                </label>
-                {autoAnswerAt && (
-                  <small>{countdownSeconds} 秒后自动采用副 Agent 的填写结果</small>
-                )}
-              </div>
+              {!editing && (
+                <div className="outline-selection-auto-answer">
+                  <label>
+                    <AppSwitch checked={autoAnswerEnabled} disabled={autoAnswerSaving || saving} onCheckedChange={(checked) => void setAutoAnswerEnabled(checked)} />
+                    <span>自动确认</span>
+                  </label>
+                  {autoAnswerAt && (
+                    <small>{countdownSeconds} 秒后自动采用副 Agent 的填写结果</small>
+                  )}
+                </div>
+              )}
             </div>
             <div className="outline-selection-buttons">
               <button type="button" className="secondary-action" onClick={() => {
                 reportInteraction();
                 onDismiss();
-              }} disabled={saving}>稍后处理</button>
+              }} disabled={saving}>{editing ? '取消' : '稍后处理'}</button>
               <button
                 type="button"
                 className="primary-action"
                 onClick={() => onConfirm(buildValues())}
                 disabled={saving || !review}
               >
-                {saving ? '正在保存...' : '确认填写'}
+                {saving ? '正在保存...' : editing ? '保存并回填' : '确认填写'}
               </button>
             </div>
           </footer>

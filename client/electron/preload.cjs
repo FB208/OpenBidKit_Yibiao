@@ -255,6 +255,7 @@ const bridge = {
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
     openBidTemplate: () => ipcRenderer.invoke('technical-plan:open-bid-template'),
     getBusinessFillReview: () => ipcRenderer.invoke('technical-plan:get-business-fill-review'),
+    saveBusinessFillReview: (payload) => ipcRenderer.invoke('technical-plan:save-business-fill-review', payload),
   },
   feasibilityReport: {
     loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),

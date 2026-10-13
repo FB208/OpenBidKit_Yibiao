@@ -769,6 +769,7 @@ export interface YibiaoBridge {
     clear: () => Promise<{ success: boolean; message?: string }>;
     openBidTemplate: () => Promise<{ success: boolean; message?: string }>;
     getBusinessFillReview: () => Promise<BusinessFillReview>;
+    saveBusinessFillReview: (payload: { values: BusinessFillReviewValue[] }) => Promise<Partial<TechnicalPlanState>>;
   };
   feasibilityReport: {
     loadState: () => Promise<FeasibilityReportState>;

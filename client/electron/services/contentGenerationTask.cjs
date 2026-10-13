@@ -1978,6 +1978,17 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     contentRuntime = normalizeContentGenerationRuntime({ ...contentRuntime, business_fill: next });
   }
 
+  // 填写完成后用户编辑字段值：Main 已回填 Word 并写库，这里只同步内存状态，随后续 checkpoint 一并保存。
+  if (taskControl) {
+    taskControl.businessFillEditor = {
+      getState: () => contentRuntime.business_fill,
+      apply(next) {
+        setBusinessFill(next);
+        logs = [...logs, `商务模版字段值已修改并重新回填 Word（已填 ${next.filled_count} 项，无法确定 ${next.unresolved.length} 项）。`];
+      },
+    };
+  }
+
   // 新一轮先把模版恢复为占位并清除旧会话；继续时沿用已保存的阶段和会话，已完成的不再执行。
   function prepareBusinessFill() {
     if (!hasBidTemplate || targetItemId || retryContentCorrection) return;

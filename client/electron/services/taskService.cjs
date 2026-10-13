@@ -14,7 +14,7 @@ const {
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
-const { loadBusinessFillReview } = require('./businessTemplateFillTask.cjs');
+const { loadBusinessFillReview, editBusinessFillValues } = require('./businessTemplateFillTask.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
@@ -1704,6 +1704,21 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     },
     getBusinessFillReview() {
       return loadBusinessFillReview({ workspaceStore: technicalPlanStore, credentialLibraryService });
+    },
+    // 商务模版填写完成后编辑字段值；与正文并行不冲突，正文任务运行中时同步任务内存中的状态，避免后续 checkpoint 覆盖。
+    async saveBusinessFillReview(payload = {}) {
+      const editor = activeTaskControls.get('content-generation')?.businessFillEditor;
+      const state = editor ? editor.getState() : technicalPlanStore.readContentGenerationRuntime()?.business_fill;
+      if (state?.phase !== 'completed') throw new Error('商务模版尚未填写完成，暂不能编辑');
+      const next = await editBusinessFillValues({
+        workspaceStore: technicalPlanStore,
+        credentialLibraryService,
+        openXmlHelperService,
+        state,
+        values: payload.values || [],
+      });
+      activeTaskControls.get('content-generation')?.businessFillEditor?.apply(next);
+      return { contentGenerationRuntime: technicalPlanStore.saveBusinessFillRuntime(next) };
     },
     async resetTechnicalPlan() {
       await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');

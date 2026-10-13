@@ -10,7 +10,7 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, BusinessFillReviewValue, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent, WordExportStructureIssue } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
@@ -778,6 +778,11 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     if (saved) setState((prev) => ({ ...prev, ...saved }));
   };
 
+  const saveBusinessFillReview = async (values: BusinessFillReviewValue[]) => {
+    const saved = await window.yibiao!.technicalPlan.saveBusinessFillReview({ values });
+    setState((prev) => ({ ...prev, ...saved }));
+  };
+
   // 无论操作成功或失败，都读取后台完整快照，让正文及 Word 缓存跟随实际状态。
   const runAndRefreshTechnicalPlan = async <T,>(action: () => Promise<T>): Promise<T> => {
     let operationFailed = false;
@@ -1186,6 +1191,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           }}
           onContentGenerationReset={resetContentGeneration}
           onContentSaved={saveChapterContent}
+          onBusinessFillReviewSave={saveBusinessFillReview}
         />
       )}
       {state.step === 'expand' && (

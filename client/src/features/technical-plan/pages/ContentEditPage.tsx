@@ -31,6 +31,7 @@ interface ContentEditPageProps {
   onOpenGenerationSettingsAppearance: () => void;
   onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
+  onBusinessFillReviewSave: (values: BusinessFillReviewValue[]) => Promise<void>;
 }
 
 type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning' | 'pending';
@@ -193,6 +194,7 @@ function ContentEditPage({
   onOpenGenerationSettingsAppearance,
   onContentGenerationReset,
   onContentSaved,
+  onBusinessFillReviewSave,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
   const allLeaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
@@ -219,7 +221,9 @@ function ContentEditPage({
   const generationStarting = useRef(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
-  const [businessReviewOpen, setBusinessReviewOpen] = useState(false);
+  // confirm：任务等待确认时打开；edit：填写完成后从“编辑提取结果”打开。
+  const [businessReviewMode, setBusinessReviewMode] = useState<'confirm' | 'edit' | null>(null);
+  const businessReviewOpen = businessReviewMode !== null;
   const [businessReview, setBusinessReview] = useState<BusinessFillReview | null>(null);
   const [businessReviewSaving, setBusinessReviewSaving] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
@@ -309,6 +313,8 @@ function ContentEditPage({
             : businessFill.phase === 'reviewing' ? '待确认' : businessFill.phase === 'rendering' ? '回填 Word 中' : '填写中';
   // 与一级目录确认相同：任务运行中等待确认时自动弹窗，关闭后可从命令栏重新打开。
   const awaitingBusinessReview = taskInFlight && businessFill?.phase === 'reviewing' && businessFill.status === 'running';
+  // 等待确认时打开确认弹窗；填写完成后可随时编辑，与正文生成并行不冲突。
+  const businessReviewEditable = awaitingBusinessReview || businessFill?.phase === 'completed';
   const businessFillTitle = businessFill?.status === 'error'
     ? `失败原因：${businessFill.error || '未知错误'}`
     : businessFill?.phase === 'completed' && businessFill.unresolved.length
@@ -433,10 +439,10 @@ function ContentEditPage({
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   useEffect(() => {
     if (!awaitingBusinessReview) {
-      setBusinessReviewOpen(false);
+      setBusinessReviewMode((current) => current === 'confirm' ? null : current);
       return;
     }
-    setBusinessReviewOpen(true);
+    setBusinessReviewMode('confirm');
   }, [awaitingBusinessReview, task?.task_id]);
 
   useEffect(() => {
@@ -454,10 +460,24 @@ function ContentEditPage({
     try {
       setBusinessReviewSaving(true);
       await window.yibiao.tasks.confirmBusinessFillReview({ taskId: task.task_id, values });
-      setBusinessReviewOpen(false);
+      setBusinessReviewMode(null);
       showToast('已确认商务模版字段值，正在回填 Word', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '确认商务模版字段值失败', 'error');
+    } finally {
+      setBusinessReviewSaving(false);
+    }
+  };
+
+  // 填写完成后编辑字段值：Main 按新值重新回填 Word 后保存。
+  const saveBusinessReviewEdit = async (values: BusinessFillReviewValue[]) => {
+    try {
+      setBusinessReviewSaving(true);
+      await onBusinessFillReviewSave(values);
+      setBusinessReviewMode(null);
+      showToast('商务模版字段值已保存，并重新回填 Word', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存商务模版字段值失败', 'error');
     } finally {
       setBusinessReviewSaving(false);
     }
@@ -927,9 +947,15 @@ function ContentEditPage({
           )}
         </div>
         <div className="content-generation-actions">
-          {awaitingBusinessReview && !businessReviewOpen && (
-            <button type="button" className="secondary-action" onClick={() => setBusinessReviewOpen(true)}>
-              确认商务模版
+          {bidTemplateExists && (
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setBusinessReviewMode(awaitingBusinessReview ? 'confirm' : 'edit')}
+              disabled={!businessReviewEditable}
+              title={businessReviewEditable ? undefined : '商务模版字段值填写完成或等待确认时可编辑'}
+            >
+              编辑提取结果
             </button>
           )}
           {bidTemplateExists && (
@@ -1101,12 +1127,13 @@ function ContentEditPage({
 
       <BusinessFillReviewDialog
         open={businessReviewOpen}
+        mode={businessReviewMode || 'confirm'}
         review={businessReview}
         autoAnswerAt={businessFill?.auto_answer_at}
         saving={businessReviewSaving}
-        onDismiss={() => setBusinessReviewOpen(false)}
-        onInteraction={suppressBusinessReviewAutoConfirmation}
-        onConfirm={(values) => { void confirmBusinessReview(values); }}
+        onDismiss={() => setBusinessReviewMode(null)}
+        onInteraction={businessReviewMode === 'confirm' ? suppressBusinessReviewAutoConfirmation : undefined}
+        onConfirm={(values) => { void (businessReviewMode === 'edit' ? saveBusinessReviewEdit(values) : confirmBusinessReview(values)); }}
       />
 
       <Dialog.Root

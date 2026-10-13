@@ -715,38 +715,65 @@ async function runBusinessTemplateFill({
 
   if (current.phase === 'rendering') {
     signal?.throwIfAborted();
-    const imagePaths = new Map((credentialLibraryService.load().images || []).map(image => [image.imageId, `credential-library/${image.relativePath}`]));
-    const missingImages = new Set();
-    const values = [];
-    for (const field of workspaceStore.readBidTemplateFields().fields || []) {
-      if (Object.hasOwn(field, 'image_id')) {
-        const image = imagePaths.get(field.image_id);
-        // 确认后图片已从资信库删除时保留占位。
-        if (image) values.push({ id: field.id, image });
-        else missingImages.add(field.name);
-      } else if (Object.hasOwn(field, 'selected')) values.push({ id: field.id, selected: field.selected });
-      else if (Object.hasOwn(field, 'blank')) values.push({ id: field.id, blank: true });
-      else if (Object.hasOwn(field, 'value')) values.push({ id: field.id, value: field.value });
-    }
-    await openXmlHelperService.runJob({
-      action: 'fill-template-fields',
-      request: {
-        input: workspaceStore.getBidTemplateBlankRelativePath(),
-        output: workspaceStore.getBidTemplateRelativePath(),
-        values,
-      },
-      timeoutMs: FILL_RENDER_TIMEOUT_MS,
+    const missingImages = await renderBusinessTemplate({
+      workspaceStore, credentialLibraryService, openXmlHelperService,
+      fields: workspaceStore.readBidTemplateFields().fields || [],
       signal,
     });
-    update({
-      phase: 'completed',
-      ...(missingImages.size ? {
-        filled_count: Math.max(0, (current.filled_count || 0) - missingImages.size),
-        unresolved: [...(current.unresolved || []), ...[...missingImages].map(label => ({ label, reason: '所选资信库图片已删除，保留占位' }))],
-      } : {}),
-    });
+    update({ phase: 'completed', ...excludeMissingImages(current, missingImages) });
   }
   return current;
+}
+
+// 以空白底稿按字段值重新生成商务模版 Word，返回所选图片已从资信库删除的字段名称。
+async function renderBusinessTemplate({ workspaceStore, credentialLibraryService, openXmlHelperService, fields, signal }) {
+  const imagePaths = new Map((credentialLibraryService.load().images || []).map(image => [image.imageId, `credential-library/${image.relativePath}`]));
+  const missingImages = new Set();
+  const values = [];
+  for (const field of fields) {
+    if (Object.hasOwn(field, 'image_id')) {
+      const image = imagePaths.get(field.image_id);
+      // 确认后图片已从资信库删除时保留占位。
+      if (image) values.push({ id: field.id, image });
+      else missingImages.add(field.name);
+    } else if (Object.hasOwn(field, 'selected')) values.push({ id: field.id, selected: field.selected });
+    else if (Object.hasOwn(field, 'blank')) values.push({ id: field.id, blank: true });
+    else if (Object.hasOwn(field, 'value')) values.push({ id: field.id, value: field.value });
+  }
+  await openXmlHelperService.runJob({
+    action: 'fill-template-fields',
+    request: {
+      input: workspaceStore.getBidTemplateBlankRelativePath(),
+      output: workspaceStore.getBidTemplateRelativePath(),
+      values,
+    },
+    timeoutMs: FILL_RENDER_TIMEOUT_MS,
+    signal,
+  });
+  return missingImages;
+}
+
+// 已删除图片的附件不计入已填，改记为无法确定。
+function excludeMissingImages(stats, missingImages) {
+  if (!missingImages.size) return {};
+  return {
+    filled_count: Math.max(0, (stats.filled_count || 0) - missingImages.size),
+    unresolved: [...(stats.unresolved || []), ...[...missingImages].map(label => ({ label, reason: '所选资信库图片已删除，保留占位' }))],
+  };
+}
+
+// 填写完成后编辑字段值：先按新值回填 Word，成功后再保存清单，Word 被占用等失败时清单保持原值。
+async function editBusinessFillValues({ workspaceStore, credentialLibraryService, openXmlHelperService, state, values }) {
+  const fields = workspaceStore.readBidTemplateFields().fields || [];
+  const entries = buildConfirmedEntries(fields, values);
+  const nextFields = fields.map(field => ({
+    ...Object.fromEntries(Object.entries(field).filter(([key]) => !UNIT_STATE_KEYS.includes(key))),
+    ...(entries[field.id] || {}),
+  }));
+  const missingImages = await renderBusinessTemplate({ workspaceStore, credentialLibraryService, openXmlHelperService, fields: nextFields });
+  workspaceStore.saveBidTemplateFieldValues(entries);
+  const stats = summarizeFillStats(nextFields);
+  return { ...state, ...stats, ...excludeMissingImages(stats, missingImages), confirmed_by: 'user', updated_at: new Date().toISOString() };
 }
 
 module.exports = {
@@ -759,6 +786,7 @@ module.exports = {
   buildConfirmedEntries,
   summarizeFillStats,
   loadBusinessFillReview,
+  editBusinessFillValues,
   buildCredentialLibraryInput,
   parseFillResult,
   validateBusinessTemplateFillResult,

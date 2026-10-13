@@ -161,6 +161,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:clear',
   'technical-plan:open-bid-template',
   'technical-plan:get-business-fill-review',
+  'technical-plan:save-business-fill-review',
   'feasibility-report:load-state',
   'feasibility-report:import-source-documents',
   'feasibility-report:remove-source-document',
