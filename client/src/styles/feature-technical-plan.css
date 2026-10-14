@@ -369,9 +369,17 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* 配图布局：组头占满一行，四类布局两列排列。 */
+/* 配图布局：外框与其他设置行一致，组头占满一行，四类布局以白底卡片两列排列。 */
 .generation-settings-illustration-section .generation-settings-image-layout-group {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 16px;
+  background: rgba(248, 250, 253, 0.82);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.generation-settings-image-layout-group .content-generation-config-row {
+  background: var(--yb-surface);
 }
 
 .generation-settings-image-layout-head {
