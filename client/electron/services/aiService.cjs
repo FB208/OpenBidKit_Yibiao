@@ -3,6 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { nativeImage } = require('electron');
 const { getGeneratedImagesDir } = require('../utils/paths.cjs');
+const { compressGeneratedImage } = require('../utils/imageCompression.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
 const { bindAiRequestActivity, notifyAiResponse, withAiResponseActivity } = require('../utils/aiRequestActivity.cjs');
@@ -482,17 +483,18 @@ async function downloadImage(url, options = {}) {
   };
 }
 
+// 生图结果落盘前压缩，后续正文、预览和 Word 均使用压缩后的文件。
 function saveGeneratedImage(app, image) {
   const imagesDir = getGeneratedImagesDir(app);
   fs.mkdirSync(imagesDir, { recursive: true });
-  const extension = imageExtensionFromMime(image.mime_type);
-  const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.${extension}`;
+  const compressed = compressGeneratedImage(image.buffer, imageExtensionFromMime(image.mime_type));
+  const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.${compressed.extension}`;
   const filePath = path.join(imagesDir, fileName);
-  fs.writeFileSync(filePath, image.buffer);
+  fs.writeFileSync(filePath, compressed.buffer);
   return {
     asset_url: `yibiao-asset://generated-images/${encodeURIComponent(fileName)}`,
     file_path: filePath,
-    mime_type: image.mime_type,
+    mime_type: compressed.extension === 'jpg' ? 'image/jpeg' : image.mime_type,
   };
 }
 
