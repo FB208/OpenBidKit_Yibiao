@@ -58,6 +58,11 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'enableOriginalPlanCoverageAudit' },
   { key: 'useMermaidImages' },
   { key: 'useAiImages' },
+  { key: 'imageQuantities' },
+  { key: 'imageLayoutSingle' },
+  { key: 'imageLayoutImageText' },
+  { key: 'imageLayoutThreeImages' },
+  { key: 'imageLayoutFourImages' },
 ];
 
 export const MODEL_USAGE_FIELDS = [

@@ -10,6 +10,10 @@ export const defaultContentGenerationOptions: ContentGenerationOptions = {
   htmlImageOptimization: false,
   wordCountRepair: false,
   layoutCheck: false,
+  useSingleImageLayout: true,
+  useImageTextLayout: true,
+  useThreeImagesLayout: true,
+  useFourImagesLayout: true,
   htmlImageTypes: DEFAULT_HTML_IMAGE_TYPES,
   tableRequirement: 'heavy',
 };
@@ -33,6 +37,10 @@ export function normalizeContentGenerationOptions(
     htmlImageOptimization: Boolean(options?.htmlImageOptimization ?? fallback.htmlImageOptimization),
     wordCountRepair: Boolean(options?.wordCountRepair ?? fallback.wordCountRepair),
     layoutCheck: Boolean(options?.layoutCheck ?? fallback.layoutCheck),
+    useSingleImageLayout: Boolean(options?.useSingleImageLayout ?? fallback.useSingleImageLayout),
+    useImageTextLayout: Boolean(options?.useImageTextLayout ?? fallback.useImageTextLayout),
+    useThreeImagesLayout: Boolean(options?.useThreeImagesLayout ?? fallback.useThreeImagesLayout),
+    useFourImagesLayout: Boolean(options?.useFourImagesLayout ?? fallback.useFourImagesLayout),
     htmlImageTypes: String(options?.htmlImageTypes ?? fallback.htmlImageTypes),
     tableRequirement: isContentTableRequirement(options?.tableRequirement) ? options.tableRequirement : fallback.tableRequirement,
   };

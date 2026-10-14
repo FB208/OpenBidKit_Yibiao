@@ -369,6 +369,36 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 配图布局：组头占满一行，四类布局两列排列。 */
+.generation-settings-illustration-section .generation-settings-image-layout-group {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.generation-settings-image-layout-head {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.generation-settings-image-layout-head strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.generation-settings-image-layout-head small {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.content-image-layout-share {
+  color: var(--yb-text);
+  font-size: 14px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
 .generation-settings-table-requirement .content-generation-config-row {
   grid-column: 1 / -1;
 }
@@ -442,7 +472,8 @@
 
   .generation-settings-page .outline-expansion-mode-switch,
   .generation-settings-page .outline-word-control-grid,
-  .generation-settings-illustration-section .content-generation-config-group {
+  .generation-settings-illustration-section .content-generation-config-group,
+  .generation-settings-illustration-section .generation-settings-image-layout-group {
     grid-template-columns: 1fr;
   }
 }

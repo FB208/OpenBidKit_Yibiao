@@ -13,6 +13,7 @@ import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+import { getDefaultImageLayoutShares, type ImageLayoutKey } from '../../../../electron/shared/imageLayout/index.mjs';
 
 interface ContentEditPageProps {
   stepNumber: string;
@@ -40,6 +41,18 @@ interface OutlineNodeMeta {
 }
 
 type ContentGenerationAction = 'start' | 'continue' | 'regenerate' | 'regenerate_section';
+
+// 布局开关只上报当前配图比例档位可用的布局，档位份额为 0 的布局不计入统计。
+function buildImageLayoutUsage(options: ContentGenerationOptions) {
+  const defaultShares = getDefaultImageLayoutShares(options.imageQuantity);
+  const usage = (key: ImageLayoutKey, enabled: boolean) => (defaultShares[key] > 0 ? enabled : undefined);
+  return {
+    image_layout_single: usage('single', options.useSingleImageLayout),
+    image_layout_image_text: usage('imageText', options.useImageTextLayout),
+    image_layout_three_images: usage('threeImages', options.useThreeImagesLayout),
+    image_layout_four_images: usage('fourImages', options.useFourImagesLayout),
+  };
+}
 
 const statusLabels: Record<TreeStatus, string> = {
   idle: '待生成',
@@ -582,6 +595,8 @@ function ContentEditPage({
       table_requirement: savedGenerationOptions.tableRequirement,
       use_mermaid_images: savedGenerationOptions.useMermaidImages,
       use_ai_images: savedGenerationOptions.useAiImages,
+      image_quantity: savedGenerationOptions.imageQuantity,
+      ...buildImageLayoutUsage(savedGenerationOptions),
       content_generation_action: contentGenerationAction,
       enable_consistency_audit: true,
       consistency_repair_mode: 'agent',

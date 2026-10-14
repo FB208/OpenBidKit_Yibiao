@@ -7,6 +7,7 @@ import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base
 import type { ContentGenerationOptions, ContentImageQuantity, ContentIllustrationKind, ContentTableRequirement, GlobalFactsMode, TechnicalPlanOriginalPlanFile, TechnicalPlanState } from '../types';
 import { DEFAULT_HTML_IMAGE_TYPES, normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import { generationSettingsTabs as tabs, type GenerationSettingsTab } from '../generationSettingsTabs';
+import { IMAGE_LAYOUTS, getDefaultImageLayoutShares, resolveImageLayoutShares, type ImageLayoutKey } from '../../../../electron/shared/imageLayout/index.mjs';
 import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
 import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
 import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
@@ -126,6 +127,12 @@ const imageModelStatusLabels: Record<ImageModelStatus, string> = {
   untested: '未测试',
   available: '可用',
   unavailable: '不可用',
+};
+const imageLayoutLabels: Record<ImageLayoutKey, string> = {
+  single: '单张图片',
+  imageText: '图片表格',
+  threeImages: '三列图片',
+  fourImages: '四宫格',
 };
 const imageGenerationExamples: Record<ContentIllustrationKind, { src: string; alt: string }> = {
   ai: { src: aiImageExampleUrl, alt: 'AI 生图示例' },
@@ -304,6 +311,10 @@ function GenerationSettingsPage({
     contentGenerationOptions,
     imageModelAvailable,
   );
+  // 布局份额与 Main 名额计算共用同一公式；档位默认份额为 0 的布局不可开启。
+  const defaultImageLayoutShares = getDefaultImageLayoutShares(draftIllustrationOptions.imageQuantity);
+  const imageLayoutShares = resolveImageLayoutShares(draftIllustrationOptions);
+  const enabledImageLayoutCount = IMAGE_LAYOUTS.filter(({ key }) => imageLayoutShares[key] > 0).length;
   const selectedExportTemplate = exportTemplates.find((template) => template.template_id === exportTemplateId) || null;
   // 页签第二行“功能词·当前值”只读取已保存配置，输入中的草稿不提前展示。
   const tabSummaries: Record<GenerationSettingsTab, string> = {
@@ -594,6 +605,24 @@ function GenerationSettingsPage({
     } finally {
       setContentOptionsBusy(false);
     }
+  };
+
+  // 配图比例不为 0 时至少保留一种生图方式；AI 生图仅在模型可用时允许开启，均只在前端校验。
+  const toggleImageGenerationType = (key: 'useAiImages' | 'useMermaidImages' | 'useHtmlImages', checked: boolean) => {
+    if (checked && key === 'useAiImages' && !imageModelAvailable) {
+      showToast('AI生图不可用，请前往设置中配置生图模型', 'info');
+      return;
+    }
+    const enabledCount = [draftIllustrationOptions.useAiImages, draftIllustrationOptions.useMermaidImages, draftIllustrationOptions.useHtmlImages].filter(Boolean).length;
+    if (!checked && draftIllustrationOptions.imageQuantity > 0 && enabledCount <= 1) {
+      showToast('配图比例不为 0 时，至少保留一种生图方式', 'info');
+      return;
+    }
+    void saveContentOptions({
+      ...draftIllustrationOptions,
+      tableRequirement: draftTableRequirement,
+      [key]: checked,
+    });
   };
 
   const openHtmlImageTypesDialog = () => {
@@ -998,6 +1027,10 @@ function GenerationSettingsPage({
                         useAiImages: Number(event.target.value) > 0 && imageModelAvailable,
                         useMermaidImages: Number(event.target.value) > 0,
                         useHtmlImages: Number(event.target.value) > 0,
+                        useSingleImageLayout: true,
+                        useImageTextLayout: true,
+                        useThreeImagesLayout: true,
+                        useFourImagesLayout: true,
                       })}
                     >
                       {Array.from({ length: 11 }, (_, index) => index * 10).map((ratio) => (
@@ -1005,6 +1038,36 @@ function GenerationSettingsPage({
                       ))}
                     </select>
                   </label>
+                </div>
+                <div className="content-generation-config-group generation-settings-image-layout-group">
+                  <div className="generation-settings-image-layout-head">
+                    <strong>配图布局</strong>
+                    <small>参与配图的小节按以下占比分配布局；关闭某类布局后，其占比均分给其他开启的布局。</small>
+                  </div>
+                  {IMAGE_LAYOUTS.map(({ key, optionKey }) => {
+                    const checked = imageLayoutShares[key] > 0;
+                    const available = defaultImageLayoutShares[key] > 0;
+                    const isLastEnabled = checked && enabledImageLayoutCount === 1;
+                    const hint = !available ? '当前配图比例下不使用' : isLastEnabled ? '至少保留一种布局' : '';
+                    return (
+                      <div className="content-generation-config-row" key={key}>
+                        <span><strong>{imageLayoutLabels[key]}</strong>{hint && <small>{hint}</small>}</span>
+                        <div className="content-generation-config-control">
+                          <em className="content-image-layout-share">{imageLayoutShares[key]}%</em>
+                          <AppSwitch
+                            checked={checked}
+                            disabled={contentConfigLocked || contentOptionsBusy || !available || isLastEnabled}
+                            onCheckedChange={(nextChecked) => void saveContentOptions({
+                              ...draftIllustrationOptions,
+                              tableRequirement: draftTableRequirement,
+                              [optionKey]: nextChecked,
+                            })}
+                            aria-label={`是否使用${imageLayoutLabels[key]}布局`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="content-generation-config-group">
                   <div className="content-generation-config-row">
@@ -1018,12 +1081,8 @@ function GenerationSettingsPage({
                       <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
                       <AppSwitch
                         checked={draftIllustrationOptions.useAiImages}
-                        disabled={contentConfigLocked || contentOptionsBusy || (!imageModelAvailable && !draftIllustrationOptions.useAiImages)}
-                        onCheckedChange={(checked) => void saveContentOptions({
-                          ...draftIllustrationOptions,
-                          tableRequirement: draftTableRequirement,
-                          useAiImages: checked,
-                        })}
+                        disabled={contentConfigLocked || contentOptionsBusy}
+                        onCheckedChange={(checked) => toggleImageGenerationType('useAiImages', checked)}
                         aria-label="是否使用 AI 生图"
                       />
                     </div>
@@ -1040,11 +1099,7 @@ function GenerationSettingsPage({
                     <AppSwitch
                       checked={draftIllustrationOptions.useMermaidImages}
                       disabled={contentConfigLocked || contentOptionsBusy}
-                      onCheckedChange={(checked) => void saveContentOptions({
-                        ...draftIllustrationOptions,
-                        tableRequirement: draftTableRequirement,
-                        useMermaidImages: checked,
-                      })}
+                      onCheckedChange={(checked) => toggleImageGenerationType('useMermaidImages', checked)}
                       aria-label="是否使用 Mermaid 生图"
                     />
                   </div>
@@ -1060,11 +1115,7 @@ function GenerationSettingsPage({
                     <AppSwitch
                       checked={draftIllustrationOptions.useHtmlImages}
                       disabled={contentConfigLocked || contentOptionsBusy}
-                      onCheckedChange={(checked) => void saveContentOptions({
-                        ...draftIllustrationOptions,
-                        tableRequirement: draftTableRequirement,
-                        useHtmlImages: checked,
-                      })}
+                      onCheckedChange={(checked) => toggleImageGenerationType('useHtmlImages', checked)}
                       aria-label="是否生成 HTML 图片"
                     />
                   </div>
