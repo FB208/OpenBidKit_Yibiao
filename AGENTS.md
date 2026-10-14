@@ -30,7 +30,7 @@
 - 技术方案除文件导入/展示外，标书分析、目录、全局事实和正文等耗时流程都在 Electron Main 后台任务中运行，并持续写入对应 SQLite Store；页面卸载不应取消任务。
 - 技术方案目录与正文以 `technical_plan_outline_nodes`（Renderer 对应 `outlineData.outline[*].content`）为权威。`saveOutline()` 的 `reason` 是持久化协议：`replace` 清空全部旧正文，`edit` / `delete` / `add-*` 只使受影响节点失效，`sort` 只改变顺序和显示编号，保持节点 ID、正文文件名和相关状态不变；不要在 Renderer 复制清理规则。
 - 技术方案节点 `id` 是程序分配的稳定 UUID；`number` 按目录树顺序计算，仅供展示和章节编号。数据库以 `node_id` 关联、`parent_node_id` 表示父子关系、`sort_order` 表示同级顺序；不得从 ID 推算编号、层级或顺序。
-- Mermaid 图以 Markdown `mermaid` 代码块保存；Renderer 本地渲染预览，Word 导出由 Main 本地转图片（不依赖外网）并通过 `window.yibiao.export.onWordExportProgress()` 报进度。
+- Mermaid 只用于技术方案正文生成：Agent 生成源码后，由 Main 的 `localImageRenderService.cjs` 立即在本地转成图片，正文以 figure 引用。Markdown 中的 `mermaid` 代码块不再预览或转图，按普通代码块处理。
 - `MarkdownRenderer` 当前默认允许原始 HTML；AI、Agent、远程公告等非本地可信内容必须显式传 `allowRawHtml={false}`，只有明确需要保留本地解析 HTML 时才开启。
 
 ## 聚焦验证

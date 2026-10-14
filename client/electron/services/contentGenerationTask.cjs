@@ -1446,9 +1446,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
   const fullRegenerate = regenerate && !targetItemId;
   const directGenerationIds = new Set(contentRuntime.direct_generation_item_ids);
-  if (fullRegenerate) {
-    workspaceStore.clearMermaidCache?.();
-  }
 
   let leaves = collectLeafContexts(outlineData.outline)
     .filter(({ item }) => item?.content_mode === 'ai-generate');

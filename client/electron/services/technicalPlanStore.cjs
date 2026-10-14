@@ -16,7 +16,6 @@ const {
   getWorkspaceTrashDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
-const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { forceRemoveSync, isFileLockError } = require('../utils/forceRemove.cjs');
@@ -121,10 +120,6 @@ function now() {
 
 function hasOwn(value, field) {
   return Object.prototype.hasOwnProperty.call(value || {}, field);
-}
-
-function isEmptyObject(value) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
 function safeJsonParse(value, fallback) {
@@ -533,25 +528,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
   function resolvePendingTenderMarkdownPath(filePath) {
     return path.resolve(resolveMarkdownPath(filePath));
-  }
-
-  function clearTechnicalPlanMermaidCache() {
-    try {
-      clearMermaidCache(app);
-    } catch (error) {
-      console.warn('[technical-plan] clear mermaid cache failed', error);
-    }
-  }
-
-  function shouldClearMermaidCacheForPartial(partial) {
-    if (!partial || typeof partial !== 'object') return false;
-    if (hasOwn(partial, 'outlineData') && (!partial.outlineData || !partial.outlineData?.outline?.length)) {
-      return true;
-    }
-    return hasOwn(partial, 'contentGenerationSections')
-      && hasOwn(partial, 'contentGenerationPlans')
-      && isEmptyObject(partial.contentGenerationSections)
-      && isEmptyObject(partial.contentGenerationPlans);
   }
 
   function isPendingTenderMarkdownPath(filePath) {
@@ -1593,7 +1569,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
     writeGenerationConfig(createDefaultGenerationConfig());
     updateMeta({
       step: 'document-analysis',
@@ -1626,7 +1601,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
     updateGenerationConfig({
       referenceKnowledgeDocumentIds: [],
       contentGenerationOptions: createDefaultGenerationConfig().contentGenerationOptions,
@@ -1649,7 +1623,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
-    clearTechnicalPlanMermaidCache();
     updateMeta({ content_generation_runtime_json: null });
   }
 
@@ -1975,7 +1948,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   // 应用技术方案局部更新，但不重新加载完整工作区状态。
   function updateTechnicalPlanWithoutReload(partial) {
-    const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
     // 正文与任务状态提交后再回收；普通进度和编排更新不扫描图片目录。
     const contentChanged = hasOwn(partial, 'outlineData') || partial.invalidateContentGeneration === true
@@ -1989,9 +1961,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (deletedAgentSessions) {
       deleteOutlineAgentTask();
       deleteGlobalFactsAgentTask();
-    }
-    if (shouldClearMermaidCache) {
-      clearTechnicalPlanMermaidCache();
     }
     if (deletedAgentSessions || contentPlanningChanged || hasOwn(partial, 'step') || hasOwn(partial, 'outlineData') || hasOwn(partial, 'globalFacts')) {
       notifyAgentWorkspaceChange({ force: deletedAgentSessions || contentPlanningChanged });
@@ -2147,7 +2116,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       restoreRetainedContentRows({ snapshot, affectedIds, nextIds, clearAll });
       if (invalidatesContentTask) {
         db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
-        clearTechnicalPlanMermaidCache();
         // 结构变化清除本轮进度，保留锁定及局部生成范围；完整替换则重置。
         const survivingIds = ids => (ids || []).filter(id => nextIds.has(id) && !affectedIds.has(id));
         const retainedRuntime = {
@@ -2626,7 +2594,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function clearTechnicalPlan() {
     removeWorkspacePathSync(getTechnicalPlanDir(app), undefined, { deferOnFailure: false });
     removeWorkspacePathSync(path.join(getGeneratedImagesDir(app), 'technical-plan'), undefined, { deferOnFailure: false });
-    clearTechnicalPlanMermaidCache();
     deleteImportedImageBatches(app, 'technical-plan');
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
@@ -2656,7 +2623,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveGenerationConfig,
     updateTechnicalPlan,
     updateTechnicalPlanWithoutReload,
-    clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearTechnicalPlan,
     importTenderDocument,
     removeTenderDocument,

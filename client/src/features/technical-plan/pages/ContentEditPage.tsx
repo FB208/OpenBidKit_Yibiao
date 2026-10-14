@@ -167,7 +167,6 @@ const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage 
     <MarkdownRenderer
       imageMode="preview"
       imageClassName="markdown-clickable-image"
-      renderMermaid
       onPreviewImage={onPreviewImage}
     >
       {content}

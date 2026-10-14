@@ -130,7 +130,7 @@ const developerMenuItems: AppMenuItem[] = [
       {
         id: 'developer-export-preview',
         label: '导出链路预演',
-        description: '预览 Word、Markdown、Mermaid 图片转换的导出检查路径。',
+        description: '预览 Word、Markdown、图片转换的导出检查路径。',
         icon: 'export',
       },
       {
