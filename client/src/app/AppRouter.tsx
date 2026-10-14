@@ -1,7 +1,6 @@
 import type { SectionId } from '../shared/types/navigation';
 import type { SettingsPageRequest } from '../features/settings/types';
 import { getAppMenuItemById } from './menuConfig';
-import BidOpportunityPage from '../features/bid-opportunity/pages/BidOpportunityPage';
 import ContentExpansionReplaceTestPage from '../features/developer/pages/ContentExpansionReplaceTestPage';
 import ContentLayoutBudgetTestPage from '../features/developer/pages/ContentLayoutBudgetTestPage';
 import DeveloperDemoPage, { isDeveloperDemoSection } from '../features/developer/pages/DeveloperDemoPage';
@@ -60,8 +59,6 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <RejectionCheckPage />;
     case 'template-settings':
       return <MyTemplatesPage />;
-    case 'bid-opportunity':
-      return <BidOpportunityPage />;
     case 'developer-test':
       return null;
     case 'developer-json-test':

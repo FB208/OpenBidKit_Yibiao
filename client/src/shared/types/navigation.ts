@@ -12,7 +12,6 @@ export type SectionId =
   | 'rejection-check'
   | 'ai-evaluation'
   | 'template-settings'
-  | 'bid-opportunity'
   | 'developer-test'
   | 'developer-json-test'
   | 'developer-multimodal-test'
