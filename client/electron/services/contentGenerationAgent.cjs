@@ -435,7 +435,7 @@ ${job.instructions.trim() || '无补充要求，未分配新增配图；已有�
 补充参考资料摘录：
 ${job.references || '未提供'}`),
             }), 'html'))).html;
-            assertHtmlStructure(html);
+            assertHtmlStructure(html, { checkSourceCompleteness: true });
             guard.signal.throwIfAborted();
             guard.success();
             const target = path.join(workspaceDir, section.file);
