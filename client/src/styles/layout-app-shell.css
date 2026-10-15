@@ -300,6 +300,23 @@
   min-width: 0;
 }
 
+.sidebar-footer-shortcut .nav-icon {
+  position: relative;
+}
+
+/* 更新日志有新内容时的红点，收起侧栏时同样显示在图标右上角 */
+.sidebar-unread-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  background: var(--yb-danger);
+  border: 2px solid #ffffff;
+  border-radius: var(--yb-radius-pill);
+  box-sizing: content-box;
+}
+
 .sidebar.is-collapsed .sidebar-footer-shortcuts {
   grid-template-columns: 1fr;
 }

@@ -2,7 +2,7 @@
 
 ## 范围
 - 当前有效产品代码在 `client/`。
-- `analytics/` 是独立 Cloudflare Worker API 与 Dashboard：除埋点采集、聚合和查看外，也承载客户端公告、资源、插件、模型信息、许可证和 Agent 失败诊断等在线服务；修改上述在线服务协议时同步检查两端。
+- `analytics/` 是独立 Cloudflare Worker API 与 Dashboard：除埋点采集、聚合和查看外，也承载客户端公告、更新日志、资源、插件、模型信息、许可证和 Agent 失败诊断等在线服务；修改上述在线服务协议时同步检查两端。
 
 ## Client
 - 开发 `client/` 前以及初次对话时，必须先完整阅读 `client/开发说明.md`，保持框架风格一致性。

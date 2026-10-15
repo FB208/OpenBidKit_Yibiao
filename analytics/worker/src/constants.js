@@ -20,6 +20,10 @@ export const NOTICE_KEY_PREFIX = 'project_notice:';
 export const LICENSE_CONFIG_KEY_PREFIX = 'project_license_config:';
 export const NOTICE_TITLE_MAX_LENGTH = 120;
 export const NOTICE_CONTENT_MAX_LENGTH = 20000;
+// 更新日志版本号只接受“x.y.z”纯数字格式，录入时去掉开头的 v。
+export const CHANGELOG_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+export const CHANGELOG_VERSION_MAX_LENGTH = 40;
+export const CHANGELOG_CONTENT_MAX_LENGTH = 20000;
 export const RESOURCE_TITLE_MAX_LENGTH = 160;
 export const RESOURCE_TAGS_MAX_LENGTH = 500;
 export const RESOURCE_DESCRIPTION_MAX_LENGTH = 1200;

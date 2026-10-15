@@ -1,6 +1,8 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
+import ChangelogDialog from '../features/changelog/components/ChangelogDialog';
+import { useChangelogUnread } from '../features/changelog/hooks/useChangelogUnread';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 import { AppDialog, useNoticeToast } from '../shared/ui';
 import logoUrl from '../../assets/icon_256.png';
@@ -47,6 +49,8 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
   const [collapsed, setCollapsed] = useState(false);
   const [groupChatOpen, setGroupChatOpen] = useState(false);
   const [groupChatQrSource, setGroupChatQrSource] = useState(groupChatQrUrl);
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const { hasUnread: changelogUnread, markSeen: markChangelogSeen } = useChangelogUnread();
   const showNotice = useNoticeToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
@@ -136,6 +140,9 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
         <div className="sidebar-footer-shortcuts">
           {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
           {collapsed ? wrapTooltip('加群', renderGroupChatButton(() => setGroupChatOpen(true))) : renderGroupChatButton(() => setGroupChatOpen(true))}
+          {collapsed
+            ? wrapTooltip('更新日志', renderChangelogButton(changelogUnread, () => setChangelogOpen(true)))
+            : renderChangelogButton(changelogUnread, () => setChangelogOpen(true))}
         </div>
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
       </div>
@@ -151,6 +158,8 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       >
         <img className="group-chat-qr" src={groupChatQrSource} alt="易标用户交流群二维码" />
       </AppDialog>
+
+      <ChangelogDialog open={changelogOpen} onOpenChange={setChangelogOpen} onLoaded={markChangelogSeen} />
     </aside>
   );
 }
@@ -219,6 +228,25 @@ function renderGroupChatButton(onClick: () => void) {
       </span>
       <span className="settings-copy">
         <strong>加群</strong>
+      </span>
+    </button>
+  );
+}
+
+function renderChangelogButton(hasUnread: boolean, onClick: () => void) {
+  return (
+    <button
+      type="button"
+      className="settings-trigger sidebar-footer-shortcut"
+      onClick={onClick}
+      aria-label="更新日志"
+    >
+      <span className="nav-icon" aria-hidden="true">
+        <ChangelogIcon />
+        {hasUnread ? <span className="sidebar-unread-dot" /> : null}
+      </span>
+      <span className="settings-copy">
+        <strong>日志</strong>
       </span>
     </button>
   );
@@ -366,6 +394,16 @@ function GroupChatIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M4.5 5.5h12v9H9l-4.5 3v-3z" />
       <path d="M16.5 9.5h3v7h-2v2l-3.2-2H12" />
       <path d="M8 9h.01M12 9h.01" />
+    </svg>
+  );
+}
+
+function ChangelogIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 7.5V12l3 2" />
+      <path d="M4.6 9.2A8 8 0 1 1 4 12" />
+      <path d="M4 5v4.2h4.2" />
     </svg>
   );
 }

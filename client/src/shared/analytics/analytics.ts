@@ -253,6 +253,11 @@ export function trackPageView(page: string) {
   sendAnalytics('page_view', normalizedPage);
 }
 
+// 更新日志弹窗每次打开都上报，不参与页面切换去重。
+export function trackChangelogOpen() {
+  sendAnalytics('page_view', 'changelog');
+}
+
 export function trackConfigUsage(payload: ConfigUsagePayload = {}, config?: ClientConfig | null) {
   const send = (loadedConfig?: ClientConfig | null) => {
     const usagePayload = normalizeUsagePayload({

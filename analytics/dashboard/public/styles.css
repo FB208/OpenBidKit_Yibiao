@@ -983,6 +983,16 @@ button:disabled {
   width: 120px;
 }
 
+.changelog-filter {
+  width: 180px;
+}
+
+.changelog-summary-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .notice-form {
   display: grid;
   grid-template-columns: 1fr 220px;

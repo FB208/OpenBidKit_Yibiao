@@ -67,6 +67,7 @@ const pageLabels = {
   'developer-expansion-replace-test': '测试页 - 扩写替换测试',
   'developer-layout-budget-test': '测试页 - 版面预算正文测试',
   settings: '设置',
+  changelog: '更新日志',
 };
 
 function getPageLabel(page) {

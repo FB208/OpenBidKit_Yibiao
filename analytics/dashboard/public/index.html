@@ -35,6 +35,7 @@
           <button class="nav-item" type="button" data-tab-button="system-settings">系统设置</button>
           <button class="nav-item" type="button" data-tab-button="ip-blocks">封禁规则</button>
           <button class="nav-item" type="button" data-tab-button="notice">公告管理</button>
+          <button class="nav-item" type="button" data-tab-button="changelog">更新日志</button>
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
           <button class="nav-item" type="button" data-tab-button="plugins">插件管理</button>
@@ -494,6 +495,54 @@
               </div>
             </form>
             <div id="noticeStatus" class="notice-status"></div>
+          </section>
+        </section>
+
+        <!-- 更新日志管理 -->
+        <section id="tab-changelog" class="tab-panel" data-tab-panel="changelog">
+          <section class="panel section notice-panel">
+            <div class="section-head">
+              <div>
+                <h2>更新日志管理</h2>
+                <p>更新日志永久保存在 D1，客户端“日志”按钮按版本号倒序展示；新增日志会触发客户端红点，修改已有日志不会。</p>
+              </div>
+              <div class="section-actions">
+                <input id="changelogFilter" class="changelog-filter" type="search" placeholder="按版本号筛选" aria-label="按版本号筛选" />
+                <button id="newChangelogButton" class="secondary-button" type="button">新增日志</button>
+                <button id="loadChangelogButton" type="button">刷新列表</button>
+              </div>
+            </div>
+            <div id="changelogsTable" class="notice-table-wrap"></div>
+            <form id="changelogForm">
+              <input id="changelogId" type="hidden" />
+              <div id="changelogMeta" class="notice-meta">新增日志，保存后客户端立即可见并显示红点。</div>
+              <div class="notice-form">
+                <label>
+                  版本号
+                  <input id="changelogVersion" maxlength="40" placeholder="例如：2.30.16" />
+                </label>
+                <div class="notice-field-wide notice-markdown-field">
+                  <span id="changelogContentLabel" class="notice-field-label">Markdown 内容</span>
+                  <div class="notice-editor-shell">
+                    <div class="notice-editor-tabs" role="tablist" aria-label="更新日志内容模式">
+                      <button id="changelogEditorTab" class="notice-editor-tab active" type="button" role="tab" aria-selected="true" aria-controls="changelogEditorPanel">编辑</button>
+                      <button id="changelogPreviewTab" class="notice-editor-tab" type="button" role="tab" aria-selected="false" aria-controls="changelogPreviewPanel">预览</button>
+                    </div>
+                    <div id="changelogEditorPanel" role="tabpanel" aria-labelledby="changelogEditorTab">
+                      <textarea id="changelogContent" maxlength="20000" aria-labelledby="changelogContentLabel" placeholder="输入 Markdown 更新内容。支持标题、列表、链接、加粗、图片等语法，不支持原始 HTML。"></textarea>
+                    </div>
+                    <div id="changelogPreviewPanel" class="notice-preview-panel" role="tabpanel" aria-labelledby="changelogPreviewTab" hidden>
+                      <div id="changelogPreviewContent" class="notice-preview-content"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="notice-actions">
+                <button id="deleteChangelogButton" class="danger-button" type="button" disabled>删除日志</button>
+                <button id="saveChangelogButton" type="submit">保存</button>
+              </div>
+            </form>
+            <div id="changelogStatus" class="notice-status"></div>
           </section>
         </section>
 

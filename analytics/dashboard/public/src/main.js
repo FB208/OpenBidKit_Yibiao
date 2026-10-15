@@ -1,6 +1,7 @@
 import { loadSettings, saveSettings } from './api.js';
 import { loadAgentRuntime } from './pages/agentRuntime.js';
 import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
+import { bindChangelogEvents, loadChangelogs } from './pages/changelog.js';
 import { loadClients, loadClientDetail, loadIpStats, setupIpStatsActions } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
@@ -29,6 +30,7 @@ const tabLoaders = {
   'system-settings': () => loadSystemSettings(),
   'ip-blocks': () => Promise.all([loadIpBlocks(), loadVersionBlocksSafely()]),
   notice: () => loadNotices(),
+  changelog: () => loadChangelogs(),
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),
   plugins: () => loadPlugins(),
@@ -132,6 +134,7 @@ function bindEvents() {
   state.refreshButton.addEventListener('click', () => refreshActiveTab({ resetClientsPage: true, resetLatestPage: true, resetIpPage: true, forceRefresh: true }));
   bindSystemSettingsEvents();
   bindNoticeEvents();
+  bindChangelogEvents();
   state.loadLicenseConfigButton.addEventListener('click', () => loadLicenseConfig().catch(() => undefined));
   state.saveLicenseConfigButton.addEventListener('click', saveLicenseConfig);
   state.generateOfflineLicenseButton.addEventListener('click', generateOfflineLicense);
