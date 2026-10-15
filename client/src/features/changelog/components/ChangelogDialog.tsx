@@ -73,10 +73,10 @@ function ChangelogDialog({ open, onOpenChange, onLoaded }: ChangelogDialogProps)
             <button
               type="button"
               className="changelog-nav-button"
-              aria-label="较旧版本"
-              title="较旧版本"
-              disabled={selectedIndex >= entries.length - 1}
-              onClick={() => setSelectedIndex((index) => Math.min(entries.length - 1, index + 1))}
+              aria-label="较新版本"
+              title="较新版本"
+              disabled={selectedIndex <= 0}
+              onClick={() => setSelectedIndex((index) => Math.max(0, index - 1))}
             >
               ‹
             </button>
@@ -93,10 +93,10 @@ function ChangelogDialog({ open, onOpenChange, onLoaded }: ChangelogDialogProps)
             <button
               type="button"
               className="changelog-nav-button"
-              aria-label="较新版本"
-              title="较新版本"
-              disabled={selectedIndex <= 0}
-              onClick={() => setSelectedIndex((index) => Math.max(0, index - 1))}
+              aria-label="较旧版本"
+              title="较旧版本"
+              disabled={selectedIndex >= entries.length - 1}
+              onClick={() => setSelectedIndex((index) => Math.min(entries.length - 1, index + 1))}
             >
               ›
             </button>
