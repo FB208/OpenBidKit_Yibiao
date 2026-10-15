@@ -3,6 +3,8 @@ import { useEffect, useState, type ComponentType, type ReactElement, type SVGPro
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
 import ChangelogDialog from '../features/changelog/components/ChangelogDialog';
 import { useChangelogUnread } from '../features/changelog/hooks/useChangelogUnread';
+import NoticeBoardDialog from '../features/notice/components/NoticeBoardDialog';
+import { useNoticeUnread } from '../features/notice/hooks/useNoticeUnread';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 import { AppDialog, useNoticeToast } from '../shared/ui';
 import logoUrl from '../../assets/icon_256.png';
@@ -51,6 +53,8 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
   const [groupChatQrSource, setGroupChatQrSource] = useState(groupChatQrUrl);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const { hasUnread: changelogUnread, markSeen: markChangelogSeen } = useChangelogUnread();
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const { hasUnread: noticeUnread, markSeen: markNoticeSeen } = useNoticeUnread();
   const showNotice = useNoticeToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
@@ -143,6 +147,9 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
           {collapsed
             ? wrapTooltip('更新日志', renderChangelogButton(changelogUnread, () => setChangelogOpen(true)))
             : renderChangelogButton(changelogUnread, () => setChangelogOpen(true))}
+          {collapsed
+            ? wrapTooltip('公告', renderNoticeButton(noticeUnread, () => setNoticeOpen(true)))
+            : renderNoticeButton(noticeUnread, () => setNoticeOpen(true))}
         </div>
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
       </div>
@@ -160,6 +167,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       </AppDialog>
 
       <ChangelogDialog open={changelogOpen} onOpenChange={setChangelogOpen} onLoaded={markChangelogSeen} />
+      <NoticeBoardDialog open={noticeOpen} onOpenChange={setNoticeOpen} onLoaded={markNoticeSeen} />
     </aside>
   );
 }
@@ -247,6 +255,25 @@ function renderChangelogButton(hasUnread: boolean, onClick: () => void) {
       </span>
       <span className="settings-copy">
         <strong>日志</strong>
+      </span>
+    </button>
+  );
+}
+
+function renderNoticeButton(hasUnread: boolean, onClick: () => void) {
+  return (
+    <button
+      type="button"
+      className="settings-trigger sidebar-footer-shortcut"
+      onClick={onClick}
+      aria-label="公告"
+    >
+      <span className="nav-icon" aria-hidden="true">
+        <NoticeIcon />
+        {hasUnread ? <span className="sidebar-unread-dot" /> : null}
+      </span>
+      <span className="settings-copy">
+        <strong>公告</strong>
       </span>
     </button>
   );
@@ -404,6 +431,16 @@ function ChangelogIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M12 7.5V12l3 2" />
       <path d="M4.6 9.2A8 8 0 1 1 4 12" />
       <path d="M4 5v4.2h4.2" />
+    </svg>
+  );
+}
+
+function NoticeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4.5 10v4h3l6 4V6l-6 4z" />
+      <path d="M17 9.5a3.5 3.5 0 0 1 0 5" />
+      <path d="M19.5 7a7 7 0 0 1 0 10" />
     </svg>
   );
 }

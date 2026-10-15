@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
-import { dismissRemoteNotice, fetchRemoteNotice, hasDismissedRemoteNotice, reportRemoteNoticeDelivered, type RemoteNotice } from '../shared/remoteNotice';
-import { MarkdownFullscreenViewer, MarkdownRenderer, useToast } from '../shared/ui';
+import { dismissRemoteNotice, fetchRemoteNotice, hasDismissedRemoteNotice, markNoticeSeen, reportRemoteNoticeDelivered, type RemoteNotice } from '../shared/remoteNotice';
+import { ImagePreviewDialog, MarkdownFullscreenViewer, MarkdownRenderer, useToast, type PreviewImage } from '../shared/ui';
 import type { PluginUpdateInfo } from '../shared/types/ipc';
 import { hasPromptedUpdate, showUpdateReadyToast } from '../shared/updateToast';
 
@@ -28,7 +28,7 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
   const promptedPluginUpdatesRef = useRef(new Set<string>());
   const [remoteNotice, setRemoteNotice] = useState<RemoteNotice | null>(null);
   const [remainingNoticeCloseSeconds, setRemainingNoticeCloseSeconds] = useState(noticeCloseDelaySeconds);
-  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+  const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
   const canCloseRemoteNotice = remainingNoticeCloseSeconds === 0;
   const visibleNoticeId = noticeEnabled ? remoteNotice?.id || '' : '';
 
@@ -36,6 +36,8 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
     if (!canCloseRemoteNotice) return;
     if (remoteNotice?.id) {
       dismissRemoteNotice(remoteNotice.id);
+      // 自动弹窗点“知道了”也视为已读，侧栏“公告”红点随之消失。
+      markNoticeSeen(remoteNotice.updatedAt);
     }
     activeNoticeIdRef.current = '';
     setPreviewImage(null);
@@ -246,17 +248,7 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
           </div>
         </Dialog.Content>
       </Dialog.Portal>
-      <Dialog.Root open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="remote-notice-preview-modal" />
-          <Dialog.Content className="remote-notice-preview-card">
-            <Dialog.Title className="sr-only">{previewImage?.alt || '公告图片预览'}</Dialog.Title>
-            <Dialog.Description className="sr-only">查看公告中的图片大图。</Dialog.Description>
-            <button className="remote-notice-preview-close" type="button" aria-label="关闭图片预览" onClick={() => setPreviewImage(null)}>×</button>
-            {previewImage ? <img src={previewImage.src} alt={previewImage.alt} /> : null}
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <ImagePreviewDialog image={previewImage} onClose={() => setPreviewImage(null)} />
     </Dialog.Root>
   );
 }

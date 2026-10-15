@@ -11,7 +11,7 @@ import { handleAdminVersionBlocks } from './routes/versionBlocks.js';
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
 import { handleAdminModelInfoCache, handleAdminModelInfoOverride, handlePublicModelInfo } from './routes/modelInfo.js';
-import { handleAdminNotice, handlePublicNotice, handlePublicNoticeDelivered } from './routes/notice.js';
+import { handleAdminNotice, handlePublicNotice, handlePublicNoticeDelivered, handlePublicNoticeLatest, handlePublicNotices } from './routes/notice.js';
 import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
 import { handleRetention } from './routes/retention.js';
@@ -38,6 +38,8 @@ const routes = new Map([
   ['/license/activate', handleLicenseActivate],
   ['/notice', handlePublicNotice],
   ['/notice/delivered', handlePublicNoticeDelivered],
+  ['/notices', handlePublicNotices],
+  ['/notices/latest', handlePublicNoticeLatest],
   ['/changelogs', handlePublicChangelogs],
   ['/changelogs/latest', handlePublicChangelogLatest],
   ['/model-info', handlePublicModelInfo],

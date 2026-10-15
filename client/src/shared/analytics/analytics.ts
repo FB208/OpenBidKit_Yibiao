@@ -291,3 +291,8 @@ export function trackResourceClick(resourceKey: string) {
 
   sendAnalytics('resource_click', 'resources', { resource_key: key });
 }
+
+// 公告弹窗每次打开都上报，不参与页面切换去重。
+export function trackNoticeBoardOpen() {
+  sendAnalytics('page_view', 'notice');
+}

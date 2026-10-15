@@ -49,6 +49,8 @@
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
 | `GET /notice` | KV | 无 | 客户端公告 |
+| `GET /notices` | `RESOURCE_DB` | 无 | 客户端“公告”按钮列表，只含启用的公告，按更新时间倒序 |
+| `GET /notices/latest` | `RESOURCE_DB` | 无 | 最新启用公告的更新时间，供客户端红点轮询；修改公告也会改变 |
 | `GET /model-info` | KV | 无 | 按 `modelName` 返回最终生效的思考强度、最大 context/output 和缓存时间，人工覆盖优先 |
 | `GET/POST/DELETE /api/notice` | KV | `ADMIN_TOKEN` | 公告后台管理 |
 | `GET /changelogs` | `RESOURCE_DB` | 无 | 客户端更新日志列表，按版本号倒序 |

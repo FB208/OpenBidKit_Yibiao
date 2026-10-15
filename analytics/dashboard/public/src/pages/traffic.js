@@ -68,6 +68,7 @@ const pageLabels = {
   'developer-layout-budget-test': '测试页 - 版面预算正文测试',
   settings: '设置',
   changelog: '更新日志',
+  notice: '公告',
 };
 
 function getPageLabel(page) {

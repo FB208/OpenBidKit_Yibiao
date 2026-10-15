@@ -4,7 +4,9 @@ import {
   buildNoticeKey,
   deleteStoredNotice,
   incrementDeliveredUserCount,
+  listEnabledNotices,
   listProjectNotices,
+  readLatestEnabledNoticeUpdatedAt,
   readProjectNotice,
   readStoredNotice,
   saveStoredNotice,
@@ -31,6 +33,46 @@ export async function handlePublicNotice(request, env, url) {
   } catch (error) {
     console.error('[analytics] public notice failed', error?.message || String(error));
     return json({ code: 0, notice: null }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+}
+
+// 客户端"公告"按钮读取全部启用的公告，已按更新时间倒序。
+export async function handlePublicNotices(request, env, url) {
+  if (request.method !== 'GET') {
+    return methodNotAllowed();
+  }
+
+  const projectName = normalizeText(url.searchParams.get('projectName'), 80);
+  if (!isValidProjectName(projectName)) {
+    return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  }
+
+  try {
+    const notices = await listEnabledNotices(env, projectName);
+    return json({ code: 0, notices }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[analytics] public notices failed', error?.message || String(error));
+    return json({ code: 500, message: 'notices query failed' }, { status: 500 });
+  }
+}
+
+// 客户端轮询红点时只读取最新启用公告的更新时间。
+export async function handlePublicNoticeLatest(request, env, url) {
+  if (request.method !== 'GET') {
+    return methodNotAllowed();
+  }
+
+  const projectName = normalizeText(url.searchParams.get('projectName'), 80);
+  if (!isValidProjectName(projectName)) {
+    return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  }
+
+  try {
+    const latestUpdatedAt = await readLatestEnabledNoticeUpdatedAt(env, projectName);
+    return json({ code: 0, latestUpdatedAt }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[analytics] public notice latest failed', error?.message || String(error));
+    return json({ code: 500, message: 'notice latest query failed' }, { status: 500 });
   }
 }
 
