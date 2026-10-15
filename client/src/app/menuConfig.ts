@@ -80,14 +80,23 @@ export const appMenuItems: AppMenuItem[] = [
     ],
   },
   {
-    id: 'plugin-manager',
-    label: '插件管理',
-    description: '安装和管理插件，扩展软件功能',
-  },
-  {
-    id: 'resources',
+    id: 'resource-download',
     label: '资源下载',
-    description: '投标相关资料、工具下载',
+    description: '插件扩展与投标资料下载',
+    children: [
+      {
+        id: 'plugin-manager',
+        label: '插件管理',
+        description: '安装和管理插件，扩展软件功能',
+        icon: 'code',
+      },
+      {
+        id: 'resources',
+        label: '精选资源',
+        description: '投标相关资料、工具下载',
+        icon: 'export',
+      },
+    ],
   },
 ];
 

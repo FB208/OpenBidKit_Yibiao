@@ -20,6 +20,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'document-knowledge-base': ArchiveIcon,
   'credential-library': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
+  'resource-download': ResourcesIcon,
   resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,

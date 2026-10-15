@@ -6,6 +6,7 @@ export type SectionId =
   | 'document-knowledge-base'
   | 'credential-library'
   | 'image-knowledge-base'
+  | 'resource-download'
   | 'resources'
   | 'bid-check'
   | 'duplicate-check'
