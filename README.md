@@ -5,8 +5,9 @@
 | 赞助商 | 说明 |
 | --- | --- |
 | ![PackyCode](./screenshots/PackyCode.png) | PackyCode 是一家稳定、高效的 API 中转服务商，一句话接入主流大模型。统一域名、统一密钥、智能容灾切换，97% 可用性。人民币1:1充值，无汇率无手续费坑，新用户首充立享折扣 + $1免费体验额度，多分组折扣低至 2 折起，提供专属Codex/Claude Code高速通道。  [点此链接注册](https://s.markup.com.cn/packycode)，立即开始使用！ |
-| ![ProdClub](./screenshots/prodclub.webp) | 感谢 ProdClub 赞助本项目！ProdClub 专注 ChatGPT 会员原号直充，源头接单，日成交千单，充值稳定靠谱。支持 Plus、Pro 5X 20X多档套餐，扫码付款后自动开通，直接充入你自己的账号。同时支持 plus 升级 pro 退差价服务，提供 7×24 小时在线客服，售前售后随时可联系，并支持开具发票，购买有凭证、服务有着落。另提供 ChatGPT/Codex 接码服务。[欢迎访问https://prodclub.xyz/r/SP7CGN](https://prodclub.xyz/r/SP7CGN)，使用优惠码 SP7CGN 享优惠，具体价格以下单页为准。 |
-| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | 感谢 JLaudeAPI 赞助了本项目！JLaudeAPI 是老牌 AI 聚合 API 平台，汇集 GPT、Claude、Gemini、Grok、国产大模型，同时覆盖主流生图、视频生成模型，全量模型稳定奔放。配备企业级管理面板，GPT‑pro 账号公示透明；支持开票、对公支付，面向企业开发与生产场景，让你花的每一分钱都发挥它的价值。通过此[注册链接](https://s.markup.com.cn/jl)开通使用。 |
+| ![ProdClub](./screenshots/prodclub.webp) | ProdClub 专注 ChatGPT 会员原号直充，源头接单，日成交千单，充值稳定靠谱。支持 Plus、Pro 5X 20X多档套餐，扫码付款后自动开通，直接充入你自己的账号。同时支持 plus 升级 pro 退差价服务，提供 7×24 小时在线客服，售前售后随时可联系，并支持开具发票，购买有凭证、服务有着落。另提供 ChatGPT/Codex 接码服务。[欢迎访问https://prodclub.xyz/r/SP7CGN](https://s.markup.com.cn/prodclub)，使用优惠码 SP7CGN 享优惠，具体价格以下单页为准。 |
+| ![SJBG](./screenshots/sjbg.webp) | 四川利翔会计师事务所有限责任公司成立于1995年1月25日。专注各种审计报告，企业合并、分立、清算；决算审计；民办非；企业年报；验资；绩效评价；任中、离任审计；会计顾问；司法会计鉴证；提供会计、税务、管理咨询；会计培训；科技项目验收；企业投资项目可行性研究方案等。业务全国可接！联系电话：18782234757，微信同号。邮箱：18782234757@163.com。网址：[https://bidpower.cc.cd](https://s.markup.com.cn/sjbg) |
+| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | JLaudeAPI 是老牌 AI 聚合 API 平台，汇集 GPT、Claude、Gemini、Grok、国产大模型，同时覆盖主流生图、视频生成模型，全量模型稳定奔放。配备企业级管理面板，GPT‑pro 账号公示透明；支持开票、对公支付，面向企业开发与生产场景，让你花的每一分钱都发挥它的价值。通过此[注册链接](https://s.markup.com.cn/jl)开通使用。 |
 | ![DianBiaoCha](./screenshots/dianbiaocha.webp) | 电标查是一款专注国网招投标信息查询的微信小程序，永久免费使用。公告与中标信息持续更新，支持按地区、时间及关键词检索，查看企业中标项目、包数、金额与排名。关注地区或企业后，可在订阅中查看新增动态；企业也可一键分享中标业绩，方便客户与合作伙伴了解。微信扫码即可使用，欢迎体验。 |
 
 # 🙏致歉
