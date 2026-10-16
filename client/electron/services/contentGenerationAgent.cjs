@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const { NATIVE_AGENT_TOOLS } = require('./agent/agentToolEnvironment.cjs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 const Ajv = require('ajv');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
@@ -85,20 +86,23 @@ function writingInstructions(hasKnowledgeBase) {
   return `根据项目背景、章节描述和编排重点编写投标正文。明确说明与本节相关的实施措施、执行条件、责任分工或交付成果。内容应准确、具体、可执行，使用正式、简洁的书面语言，避免宣传性表述、缺少具体内容的概括和重复表达。\n使用参考资料时，应将适用内容整理为当前项目的方案表述，不在正文中提及${hasKnowledgeBase ? '知识库、' : ''}历史文档或素材来源。全局事实设定用于统一项目事实口径，不是本节必须逐项覆盖的写作清单。本节内容范围以标题、章节描述和编排重点为准。仅在说明本节内容确有需要时使用相关事实，不为覆盖全局事实增加无关段落，也不在各节重复罗列项目概况、人员、设备或制度。写作内容和全局事实不冲突即可，不要求完全引用全局事实。全局事实未明确的信息，按本次事实缺失处理要求执行。\n只输出受限 HTML 正文，不输出 Markdown、代码围栏、外层章节标题或解释。除 img 等空元素外，每个元素都写出对应的结束标签；每个 figure 以 </figure> 结束并直接包含一个 img，figure 不放在段落、列表项或加粗、链接等行内元素中。篇幅较长时也要先保证 HTML 结构完整。内部层次用普通段落、列表或无编号加粗引导语；有序列表仅用于步骤、流程和时间顺序。\n正文禁止使用 LaTeX 语法，包括 $...$、$$...$$、\\(...\\)、\\[...\\] 及 \\frac、\\text、\\circ 等命令。公式、参数和单位使用普通文字、Unicode 数学符号及受限 HTML 的 <sup>、<sub> 表达，例如 22 ℃ ± 2 ℃、40%～65%、≥30 m<sup>3</sup>/(h·人)。参考材料中的 LaTeX 在写入正文时也须转换为上述表达，保持数值、单位和含义不变。`;
 }
 
-// 按本轮可配图目标分配布局组数；整数余数避免浮点误差改变同分顺序。
-function buildImageLayoutQuota(sections, options) {
-  const total = options.imageQuantity > 0 && (options.useAiImages || options.useHtmlImages || options.useMermaidImages)
+let imageLayoutModulePromise = null;
+
+// 布局份额公式与 Step02 展示共用 ESM 共享模块，主进程侧走动态 import（与 chromeAssetService.cjs 同一模式）。
+function loadImageLayoutModule() {
+  if (!imageLayoutModulePromise) {
+    imageLayoutModulePromise = import(pathToFileURL(path.join(__dirname, '..', 'shared', 'imageLayout', 'index.mjs')).href);
+  }
+  return imageLayoutModulePromise;
+}
+
+// 按本轮可配图目标分配布局组数；用户关闭的布局份额已在共享公式中均分，全部关闭时等同无图。
+function buildImageLayoutQuota(sections, options, imageLayout) {
+  const shares = imageLayout.resolveImageLayoutShares(options);
+  const hasLayout = Object.values(shares).some(share => share > 0);
+  const total = options.imageQuantity > 0 && hasLayout && (options.useAiImages || options.useHtmlImages || options.useMermaidImages)
     ? sections.filter(section => section.content_plan?.image_needed === true).length : 0;
-  const layouts = ['single', 'imageText', 'threeImages', 'fourImages'];
-  const weights = options.imageQuantity >= 60 ? [4, 3, 2, 1]
-    : options.imageQuantity >= 40 ? [5, 3, 2, 0]
-      : options.imageQuantity >= 20 ? [8, 2, 0, 0] : [10, 0, 0, 0];
-  const groups = weights.map(weight => Math.floor(total * weight / 10));
-  const remaining = total - groups.reduce((sum, count) => sum + count, 0);
-  const order = weights.map((weight, index) => ({ index, remainder: total * weight % 10 }))
-    .sort((left, right) => right.remainder - left.remainder || left.index - right.index);
-  for (const { index } of order.slice(0, remaining)) groups[index] += 1;
-  return { total_groups: total, ...Object.fromEntries(layouts.map((layout, index) => [layout, groups[index]])) };
+  return { total_groups: total, ...imageLayout.allocateImageLayoutGroups(total, shares) };
 }
 
 // 共用配图规则说明布局分工；全局名额只供主 Agent 分配，不交给各并发小节重复承担。
@@ -122,8 +126,9 @@ function restorationInstructions(control, existingTotalWords) {
 }
 
 // 每轮新目标更新输入快照；暂停恢复不重写，已有小节 HTML 和图片始终保留。
-function buildContentGenerationFiles({ outline, targets, plans, sectionStates = {}, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, hasOriginalPlan, restoredContents, existingTotalWords, requirement, template, knowledgeBaseService, documentIds, checkTotalWords = true }) {
+async function buildContentGenerationFiles({ outline, targets, plans, sectionStates = {}, projectOverview, globalFacts, globalFactsMode, wordControl, generationOptions, hasOriginalPlan, restoredContents, existingTotalWords, requirement, template, knowledgeBaseService, documentIds, checkTotalWords = true }) {
   if (!template) throw new Error('请先在“长嘛样”选择有效的正文模板');
+  const imageLayout = await loadImageLayoutModule();
   const targetIds = new Set(targets.map(({ item }) => item.id));
   const sections = [];
   const completedSections = [];
@@ -179,7 +184,7 @@ function buildContentGenerationFiles({ outline, targets, plans, sectionStates = 
   const files = [
     { path: INPUT_FILES.outline, content: JSON.stringify({ outline: tree }, null, 2) },
     { path: INPUT_FILES.overview, content: projectOverview || '未提供项目概述。' },
-    { path: INPUT_FILES.decisions, content: JSON.stringify({ execution_summary: executionSummary, image_layout_quota: buildImageLayoutQuota(sections, generationOptions), table_requirement: generationOptions.tableRequirement, word_requirements: wordInstructions(wordControl, checkTotalWords), word_control: { minimumWords: wordControl.minimumWords, maximumWords: wordControl.maximumWords, checkTotalWords }, image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, global_facts_requirements: globalFactsInstructions(globalFactsMode), user_requirement: requirement || '', has_knowledge_base: documentIds.length > 0, reference_files: referenceFiles, completed_sections: completedSections, targets: sections }, null, 2) },
+    { path: INPUT_FILES.decisions, content: JSON.stringify({ execution_summary: executionSummary, image_layout_quota: buildImageLayoutQuota(sections, generationOptions, imageLayout), table_requirement: generationOptions.tableRequirement, word_requirements: wordInstructions(wordControl, checkTotalWords), word_control: { minimumWords: wordControl.minimumWords, maximumWords: wordControl.maximumWords, checkTotalWords }, image_requirements: imageInstructions(generationOptions), ...(hasOriginalPlan ? { restoration_requirements: restorationInstructions(wordControl, existingTotalWords) } : {}), global_facts_mode: globalFactsMode, global_facts_requirements: globalFactsInstructions(globalFactsMode), user_requirement: requirement || '', has_knowledge_base: documentIds.length > 0, reference_files: referenceFiles, completed_sections: completedSections, targets: sections }, null, 2) },
     { path: INPUT_FILES.rules, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.rules), 'utf8') },
     { path: INPUT_FILES.imageTypes, content: fs.readFileSync(path.join(RESOURCE_DIR, INPUT_FILES.imageTypes), 'utf8') },
     // 与模板预览共用样张，只移除示例图片引用，保留图组结构和配图提示词。
@@ -435,7 +440,7 @@ ${job.instructions.trim() || '无补充要求，未分配新增配图；已有�
 补充参考资料摘录：
 ${job.references || '未提供'}`),
             }), 'html'))).html;
-            assertHtmlStructure(html);
+            assertHtmlStructure(html, { checkSourceCompleteness: true });
             guard.signal.throwIfAborted();
             guard.success();
             const target = path.join(workspaceDir, section.file);

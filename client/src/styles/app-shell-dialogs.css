@@ -677,6 +677,24 @@
   cursor: zoom-in;
 }
 
+.remote-notice-content table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.remote-notice-content th,
+.remote-notice-content td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+.remote-notice-content td img,
+.remote-notice-content td .remote-notice-image {
+  max-height: 140px;
+  margin: 0;
+}
+
 .remote-notice-content code {
   padding: 2px 6px;
   color: var(--yb-primary-deep);

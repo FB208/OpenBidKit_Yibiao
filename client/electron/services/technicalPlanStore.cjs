@@ -17,7 +17,6 @@ const {
   getWorkspaceTrashDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
-const { clearMermaidCache } = require('../utils/mermaidCache.cjs');
 const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { forceRemoveSync, isFileLockError } = require('../utils/forceRemove.cjs');
@@ -59,6 +58,10 @@ const defaultContentGenerationOptions = Object.freeze({
   htmlImageOptimization: false,
   wordCountRepair: false,
   layoutCheck: false,
+  useSingleImageLayout: true,
+  useImageTextLayout: true,
+  useThreeImagesLayout: true,
+  useFourImagesLayout: true,
   htmlImageTypes: defaultHtmlImageTypes,
   tableRequirement: 'heavy',
 });
@@ -126,10 +129,6 @@ function now() {
 
 function hasOwn(value, field) {
   return Object.prototype.hasOwnProperty.call(value || {}, field);
-}
-
-function isEmptyObject(value) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
 function safeJsonParse(value, fallback) {
@@ -362,6 +361,10 @@ function normalizeContentGenerationOptions(options) {
     htmlImageOptimization: Boolean(source.htmlImageOptimization),
     wordCountRepair: Boolean(source.wordCountRepair),
     layoutCheck: Boolean(source.layoutCheck),
+    useSingleImageLayout: hasOwn(source, 'useSingleImageLayout') ? Boolean(source.useSingleImageLayout) : defaultContentGenerationOptions.useSingleImageLayout,
+    useImageTextLayout: hasOwn(source, 'useImageTextLayout') ? Boolean(source.useImageTextLayout) : defaultContentGenerationOptions.useImageTextLayout,
+    useThreeImagesLayout: hasOwn(source, 'useThreeImagesLayout') ? Boolean(source.useThreeImagesLayout) : defaultContentGenerationOptions.useThreeImagesLayout,
+    useFourImagesLayout: hasOwn(source, 'useFourImagesLayout') ? Boolean(source.useFourImagesLayout) : defaultContentGenerationOptions.useFourImagesLayout,
     htmlImageTypes: String(source.htmlImageTypes || defaultContentGenerationOptions.htmlImageTypes),
     tableRequirement: ['none', 'light', 'moderate', 'heavy'].includes(source.tableRequirement) ? source.tableRequirement : defaultContentGenerationOptions.tableRequirement,
   };
@@ -542,25 +545,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return path.resolve(resolveMarkdownPath(filePath));
   }
 
-  function clearTechnicalPlanMermaidCache() {
-    try {
-      clearMermaidCache(app);
-    } catch (error) {
-      console.warn('[technical-plan] clear mermaid cache failed', error);
-    }
-  }
-
-  function shouldClearMermaidCacheForPartial(partial) {
-    if (!partial || typeof partial !== 'object') return false;
-    if (hasOwn(partial, 'outlineData') && (!partial.outlineData || !partial.outlineData?.outline?.length)) {
-      return true;
-    }
-    return hasOwn(partial, 'contentGenerationSections')
-      && hasOwn(partial, 'contentGenerationPlans')
-      && isEmptyObject(partial.contentGenerationSections)
-      && isEmptyObject(partial.contentGenerationPlans);
-  }
-
   function isPendingTenderMarkdownPath(filePath) {
     const resolvedPath = resolvePendingTenderMarkdownPath(filePath);
     const expectedDir = path.resolve(path.dirname(tenderMarkdownPath));
@@ -683,12 +667,14 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         minimum_words, maximum_words, section_words, global_facts_mode, export_template_id, export_template_scope,
         use_ai_images, use_mermaid_images,
         use_html_images, html_image_types, table_requirement, image_quantity, html_image_optimization, word_count_repair, layout_check,
+        use_single_image_layout, use_image_text_layout, use_three_images_layout, use_four_images_layout,
         created_at, updated_at
       ) VALUES (
         1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
         @minimum_words, @maximum_words, @section_words, @global_facts_mode, @export_template_id, @export_template_scope,
         @use_ai_images, @use_mermaid_images,
         @use_html_images, @html_image_types, @table_requirement, @image_quantity, @html_image_optimization, @word_count_repair, @layout_check,
+        @use_single_image_layout, @use_image_text_layout, @use_three_images_layout, @use_four_images_layout,
         @created_at, @updated_at
       )
     `).run({
@@ -711,6 +697,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       html_image_optimization: toDbBool(content.htmlImageOptimization),
       word_count_repair: toDbBool(content.wordCountRepair),
       layout_check: toDbBool(content.layoutCheck),
+      use_single_image_layout: toDbBool(content.useSingleImageLayout),
+      use_image_text_layout: toDbBool(content.useImageTextLayout),
+      use_three_images_layout: toDbBool(content.useThreeImagesLayout),
+      use_four_images_layout: toDbBool(content.useFourImagesLayout),
       created_at: timestamp,
       updated_at: timestamp,
     });
@@ -759,6 +749,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         htmlImageOptimization: fromDbBool(row.html_image_optimization),
         wordCountRepair: fromDbBool(row.word_count_repair),
         layoutCheck: fromDbBool(row.layout_check),
+        useSingleImageLayout: fromDbBool(row.use_single_image_layout),
+        useImageTextLayout: fromDbBool(row.use_image_text_layout),
+        useThreeImagesLayout: fromDbBool(row.use_three_images_layout),
+        useFourImagesLayout: fromDbBool(row.use_four_images_layout),
       },
     });
   }
@@ -789,6 +783,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         html_image_optimization = @html_image_optimization,
         word_count_repair = @word_count_repair,
         layout_check = @layout_check,
+        use_single_image_layout = @use_single_image_layout,
+        use_image_text_layout = @use_image_text_layout,
+        use_three_images_layout = @use_three_images_layout,
+        use_four_images_layout = @use_four_images_layout,
         updated_at = @updated_at
       WHERE id = 1
     `).run({
@@ -811,6 +809,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       html_image_optimization: toDbBool(content.htmlImageOptimization),
       word_count_repair: toDbBool(content.wordCountRepair),
       layout_check: toDbBool(content.layoutCheck),
+      use_single_image_layout: toDbBool(content.useSingleImageLayout),
+      use_image_text_layout: toDbBool(content.useImageTextLayout),
+      use_three_images_layout: toDbBool(content.useThreeImagesLayout),
+      use_four_images_layout: toDbBool(content.useFourImagesLayout),
       updated_at: now(),
     });
     replaceGenerationList('technical_plan_generation_bid_tasks', 'task_id', normalized.bidAnalysisSelectedTaskIds);
@@ -1664,7 +1666,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
     writeGenerationConfig(createDefaultGenerationConfig());
     updateMeta({
       step: 'document-analysis',
@@ -1697,7 +1698,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
-    clearTechnicalPlanMermaidCache();
     updateGenerationConfig({
       referenceKnowledgeDocumentIds: [],
       contentGenerationOptions: createDefaultGenerationConfig().contentGenerationOptions,
@@ -1722,7 +1722,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
-    clearTechnicalPlanMermaidCache();
     updateMeta({ content_generation_runtime_json: null });
   }
 
@@ -2056,7 +2055,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   // 应用技术方案局部更新，但不重新加载完整工作区状态。
   function updateTechnicalPlanWithoutReload(partial) {
-    const shouldClearMermaidCache = shouldClearMermaidCacheForPartial(partial);
     updateTechnicalPlanTransaction(partial || {});
     // 正文与任务状态提交后再回收；普通进度和编排更新不扫描图片目录。
     const contentChanged = hasOwn(partial, 'outlineData') || partial.invalidateContentGeneration === true
@@ -2070,9 +2068,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (deletedAgentSessions) {
       deleteOutlineAgentTask();
       deleteGlobalFactsAgentTask();
-    }
-    if (shouldClearMermaidCache) {
-      clearTechnicalPlanMermaidCache();
     }
     if (deletedAgentSessions || contentPlanningChanged || hasOwn(partial, 'step') || hasOwn(partial, 'outlineData') || hasOwn(partial, 'globalFacts')) {
       notifyAgentWorkspaceChange({ force: deletedAgentSessions || contentPlanningChanged });
@@ -2229,7 +2224,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       restoreRetainedContentRows({ snapshot, affectedIds, nextIds, clearAll });
       if (invalidatesContentTask) {
         db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
-        clearTechnicalPlanMermaidCache();
         // 结构变化清除本轮进度，保留锁定及局部生成范围；完整替换则重置。
         const survivingIds = ids => (ids || []).filter(id => nextIds.has(id) && !affectedIds.has(id));
         const retainedRuntime = {
@@ -2713,7 +2707,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function clearTechnicalPlan() {
     removeWorkspacePathSync(getTechnicalPlanDir(app), undefined, { deferOnFailure: false });
     removeWorkspacePathSync(path.join(getGeneratedImagesDir(app), 'technical-plan'), undefined, { deferOnFailure: false });
-    clearTechnicalPlanMermaidCache();
     deleteImportedImageBatches(app, 'technical-plan');
     deleteOutlineAgentTask();
     deleteGlobalFactsAgentTask();
@@ -2743,7 +2736,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveGenerationConfig,
     updateTechnicalPlan,
     updateTechnicalPlanWithoutReload,
-    clearMermaidCache: clearTechnicalPlanMermaidCache,
     clearTechnicalPlan,
     importTenderDocument,
     removeTenderDocument,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { useMemo, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { renderMarkdownHtml } from '../markdown/renderMarkdownHtml';
 
 type MarkdownImageMode = 'default' | 'preview' | 'lazy';
@@ -12,7 +12,6 @@ interface MarkdownRendererProps {
   imageClassName?: string;
   linkMode?: MarkdownLinkMode;
   linkTextClassName?: string;
-  renderMermaid?: boolean;
   previewImageTitle?: string;
   onPreviewImage?: (src: string, alt: string) => void;
 }
@@ -34,66 +33,6 @@ function openExternal(url: string) {
   }
 
   window.open(url, '_blank', 'noopener,noreferrer');
-}
-
-// 预览阶段直接渲染 Mermaid，不做语法白名单拦截。
-function MermaidPreview({ code }: { code: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
-  const [errorMessage, setErrorMessage] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const container = containerRef.current;
-    const trimmedCode = String(code || '').trim();
-
-    if (!trimmedCode) {
-      setStatus('error');
-      setErrorMessage('Mermaid 图代码为空');
-      if (container) container.innerHTML = '';
-      return undefined;
-    }
-
-    setStatus('loading');
-    setErrorMessage('');
-    if (container) container.innerHTML = '';
-
-    import('mermaid')
-      .then((module) => {
-        const mermaid = module.default;
-        mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
-        return mermaid.render(`mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`, trimmedCode);
-      })
-      .then(({ svg }) => {
-        if (cancelled || !containerRef.current) return;
-        containerRef.current.innerHTML = svg;
-        setStatus('success');
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setStatus('error');
-        setErrorMessage(error instanceof Error ? error.message : 'Mermaid 图渲染失败');
-      });
-
-    return () => {
-      cancelled = true;
-      if (container) container.innerHTML = '';
-    };
-  }, [code]);
-
-  return (
-    <figure className={`mermaid-preview-card is-${status}`}>
-      {status === 'loading' && <span>正在渲染 Mermaid 图...</span>}
-      {status === 'error' && (
-        <div className="mermaid-preview-error">
-          <strong>Mermaid 图渲染失败</strong>
-          <small>{errorMessage}</small>
-          <pre>{code}</pre>
-        </div>
-      )}
-      <div ref={containerRef} className="mermaid-preview-canvas" aria-hidden={status !== 'success'} />
-    </figure>
-  );
 }
 
 function getElementClassName(element: Element) {
@@ -125,7 +64,6 @@ function MarkdownRenderer({
   imageClassName,
   linkMode = 'external',
   linkTextClassName,
-  renderMermaid = false,
   previewImageTitle = '点击放大查看',
   onPreviewImage,
 }: MarkdownRendererProps) {
@@ -208,13 +146,6 @@ function MarkdownRenderer({
         );
       }
 
-      if (tag === 'pre' && renderMermaid) {
-        const code = element.querySelector('code');
-        if (code && /\blanguage-mermaid\b/i.test(code.getAttribute('class') || '')) {
-          return <MermaidPreview key={key} code={(code.textContent || '').replace(/\n$/, '')} />;
-        }
-      }
-
       if (tag === 'input' && (element.getAttribute('type') || '').toLowerCase() === 'checkbox') {
         return (
           <input
@@ -279,7 +210,7 @@ function MarkdownRenderer({
     };
 
     return Array.from(root?.childNodes || []).map((node, index) => renderNode(node, index));
-  }, [enableGfm, html, imageClassName, imageMode, linkMode, linkTextClassName, onPreviewImage, previewImageTitle, renderMermaid]);
+  }, [enableGfm, html, imageClassName, imageMode, linkMode, linkTextClassName, onPreviewImage, previewImageTitle]);
 
   return <>{content}</>;
 }

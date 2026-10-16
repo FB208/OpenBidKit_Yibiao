@@ -7,6 +7,7 @@ import OutlineEditPage from './OutlineEditPage';
 import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
+import { generationSettingsTabs, type GenerationSettingsTab } from '../generationSettingsTabs';
 import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
@@ -188,7 +189,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const [installingPetPlugin, setInstallingPetPlugin] = useState(false);
   const [bidAnalysisFocusRequest, setBidAnalysisFocusRequest] = useState<{ taskId: string } | null>(null);
   const [globalFactsFocusRequest, setGlobalFactsFocusRequest] = useState<{ groupId: string } | null>(null);
-  const [generationSettingsInitialTab, setGenerationSettingsInitialTab] = useState<'content' | 'appearance'>('content');
+  const [generationSettingsTab, setGenerationSettingsTab] = useState<GenerationSettingsTab>('content');
   const [isResetting, setIsResetting] = useState(false);
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
@@ -365,7 +366,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     return () => registerLeaveGuard(null);
   }, [confirmPendingSortLeave, registerLeaveGuard]);
 
-  const switchStep = async (step: TechnicalPlanStep) => {
+  const switchStep = async (step: TechnicalPlanStep, options?: { generationSettingsTab?: GenerationSettingsTab }) => {
     if (step === state.step) {
       return;
     }
@@ -399,8 +400,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       }
     }
 
-    if (state.step === 'generation-settings') {
-      setGenerationSettingsInitialTab('content');
+    // 进入生成设置时决定落在哪个页签：默认第一项，从后一步退回时落在最后一项。
+    if (step === 'generation-settings') {
+      setGenerationSettingsTab(options?.generationSettingsTab ?? 'content');
     }
 
     setState((prev) => ({ ...prev, step }));
@@ -412,7 +414,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const goToOffset = async (offset: number) => {
     const nextStep = steps[activeIndex + offset];
     if (nextStep) {
-      await switchStep(nextStep);
+      await switchStep(nextStep, offset < 0 && nextStep === 'generation-settings'
+        ? { generationSettingsTab: generationSettingsTabs[generationSettingsTabs.length - 1].id }
+        : undefined);
     }
   };
 
@@ -975,6 +979,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       setInstallingPetPlugin(false);
     }
   }, [openPetAiChat, showToast]);
+  // 生成设置页内，上一步/下一步先在页签间逐项移动，到首尾页签再切换步骤。
+  // “跳过设置”始终保留、上一项按钮固定最小宽度，保证连续点击时“下一项”位置不变。
+  const isGenerationSettingsStep = state.step === 'generation-settings';
+  const generationSettingsTabIndex = generationSettingsTabs.findIndex((tab) => tab.id === generationSettingsTab);
+  const previousGenerationSettingsTab = isGenerationSettingsStep ? generationSettingsTabs[generationSettingsTabIndex - 1] : undefined;
+  const nextGenerationSettingsTab = isGenerationSettingsStep ? generationSettingsTabs[generationSettingsTabIndex + 1] : undefined;
+  const previousActionClassName = isGenerationSettingsStep ? 'generation-settings-previous-action' : undefined;
   const navigationActions = state.step === 'content-edit'
     ? [
       {
@@ -996,15 +1007,37 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       },
     ]
     : [
-      {
+      previousGenerationSettingsTab ? {
+        id: 'previous-step',
+        label: `上一项：${previousGenerationSettingsTab.label}`,
+        icon: <ToolbarArrowLeftIcon />,
+        tooltip: `返回“${previousGenerationSettingsTab.label}”设置`,
+        className: previousActionClassName,
+        onClick: () => setGenerationSettingsTab(previousGenerationSettingsTab.id),
+      } : {
         id: 'previous-step',
         label: '上一步',
         icon: <ToolbarArrowLeftIcon />,
         disabled: activeIndex <= 0,
         tooltip: activeIndex <= 0 ? '当前已经是第一步' : `返回${stepLabels[steps[activeIndex - 1]]}`,
+        className: previousActionClassName,
         onClick: () => { void goToOffset(-1); },
       },
-      {
+      ...(isGenerationSettingsStep ? [{
+        id: 'skip-generation-settings',
+        label: '跳过设置',
+        variant: 'secondary' as const,
+        tooltip: `不再逐项查看，直接进入${stepLabels[steps[activeIndex + 1]]}`,
+        onClick: () => { void goToOffset(1); },
+      }] : []),
+      nextGenerationSettingsTab ? {
+        id: 'next-step',
+        label: `下一项：${nextGenerationSettingsTab.label}`,
+        icon: <ToolbarArrowRightIcon />,
+        variant: 'primary' as const,
+        tooltip: `查看“${nextGenerationSettingsTab.label}”设置`,
+        onClick: () => setGenerationSettingsTab(nextGenerationSettingsTab.id),
+      } : {
         id: 'next-step',
         label: '下一步',
         icon: <ToolbarArrowRightIcon />,
@@ -1072,7 +1105,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
       {state.step === 'generation-settings' && (
         <GenerationSettingsPage
-          initialTab={generationSettingsInitialTab}
+          activeTab={generationSettingsTab}
+          onActiveTabChange={setGenerationSettingsTab}
           originalPlanFile={state.originalPlanFile}
           outlineMode={state.outlineMode}
           outlineModeRequiresRegeneration={outlineModeRequiresRegeneration}
@@ -1186,9 +1220,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           bidTemplateExists={Boolean(state.bidTemplateExists)}
           onOpenBidTemplate={openBidTemplate}
           onOpenGenerationSettingsAppearance={() => {
-            setGenerationSettingsInitialTab('appearance');
-            void switchStep('generation-settings');
+            void switchStep('generation-settings', { generationSettingsTab: 'appearance' });
           }}
+          onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentGenerationReset={resetContentGeneration}
           onContentSaved={saveChapterContent}
           onBusinessFillReviewSave={saveBusinessFillReview}

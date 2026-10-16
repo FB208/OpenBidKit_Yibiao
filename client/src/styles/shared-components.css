@@ -658,3 +658,65 @@
 .tooltip-arrow {
   fill: #172033;
 }
+
+/* 侧栏远程内容浏览弹窗（shared/ui/EntryBrowserDialog.tsx） */
+.entry-browser-nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.entry-browser-nav-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  padding: 0 0 2px;
+  color: var(--yb-text-soft);
+  font-size: 22px;
+  line-height: 1;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  transition: color var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    background var(--yb-duration-fast) ease;
+}
+
+.entry-browser-nav-button:hover:not(:disabled) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.06);
+  border-color: rgba(33, 116, 253, 0.24);
+}
+
+.entry-browser-nav-button:disabled {
+  color: var(--yb-text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.entry-browser-select {
+  height: 38px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0 42px 0 14px;
+  color: var(--yb-text);
+  background-color: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+}
+
+.entry-browser-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--yb-text-soft);
+}
+
+.entry-browser-empty {
+  flex: 1 1 auto;
+  align-content: center;
+}

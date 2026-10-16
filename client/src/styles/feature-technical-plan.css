@@ -124,6 +124,43 @@
   box-shadow: 0 4px 12px rgba(27, 50, 92, 0.1), inset 0 0 0 1px rgba(33, 116, 253, 0.12);
 }
 
+/* 生成设置页签显示“功能词·当前值”第二行；资信库、模版设置复用同一页签类，不受影响。 */
+.generation-settings-page .document-switch-tab.generation-settings-tab {
+  flex-direction: column;
+  gap: 3px;
+  min-height: 58px;
+  padding: 8px 12px;
+}
+
+.generation-settings-tab-label {
+  color: var(--yb-text);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.generation-settings-tab-summary {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 上一项按钮按最长文案“上一项：我有方案”（8 字）固定最小宽度：图标 18 + 间距 7 + 内边距 30 + 边框 2。 */
+.floating-toolbar-button.generation-settings-previous-action {
+  min-width: calc(8em + 57px);
+  justify-content: center;
+}
+
+.document-switch-tab.generation-settings-tab:hover:not(.is-active) .generation-settings-tab-label,
+.document-switch-tab.generation-settings-tab.is-active .generation-settings-tab-label,
+.document-switch-tab.generation-settings-tab.is-active .generation-settings-tab-summary {
+  color: var(--yb-primary);
+}
+
 .bid-analysis-workspace.generation-settings-panel {
   display: block;
   min-height: 0;
@@ -317,6 +354,44 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 配图布局：外框与其他设置行一致，组头占满一行，四类布局以白底卡片两列排列。 */
+.generation-settings-illustration-section .generation-settings-image-layout-group {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 16px;
+  background: rgba(248, 250, 253, 0.82);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.generation-settings-image-layout-group .content-generation-config-row {
+  background: var(--yb-surface);
+}
+
+.generation-settings-image-layout-head {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.generation-settings-image-layout-head strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.generation-settings-image-layout-head small {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.content-image-layout-share {
+  color: var(--yb-text);
+  font-size: 14px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
 .generation-settings-table-requirement .content-generation-config-row {
   grid-column: 1 / -1;
 }
@@ -390,7 +465,8 @@
 
   .generation-settings-page .outline-expansion-mode-switch,
   .generation-settings-page .outline-word-control-grid,
-  .generation-settings-illustration-section .content-generation-config-group {
+  .generation-settings-illustration-section .content-generation-config-group,
+  .generation-settings-illustration-section .generation-settings-image-layout-group {
     grid-template-columns: 1fr;
   }
 }

@@ -1,0 +1,95 @@
+/* 更新日志弹窗（features/changelog/components/ChangelogDialog.tsx） */
+.changelog-dialog {
+  width: min(720px, calc(100vw - 40px));
+  height: min(640px, calc(100vh - 40px));
+}
+
+.changelog-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 4px 0 0;
+  color: #243048;
+  line-height: 1.72;
+}
+
+.changelog-content > *:first-child {
+  margin-top: 0;
+}
+
+.changelog-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.changelog-content h1,
+.changelog-content h2,
+.changelog-content h3,
+.changelog-content h4 {
+  margin: 1.2em 0 0.55em;
+  color: var(--yb-text);
+  line-height: 1.35;
+}
+
+.changelog-content h1 {
+  font-size: 20px;
+}
+
+.changelog-content h2 {
+  padding-bottom: 8px;
+  font-size: 18px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.changelog-content h3 {
+  font-size: 16px;
+}
+
+.changelog-content p,
+.changelog-content ul,
+.changelog-content ol,
+.changelog-content blockquote,
+.changelog-content table,
+.changelog-content pre {
+  margin: 0 0 14px;
+}
+
+.changelog-content ul,
+.changelog-content ol {
+  padding-left: 1.4em;
+}
+
+.changelog-content blockquote {
+  padding: 10px 14px;
+  color: var(--yb-text-soft);
+  background: rgba(33, 116, 253, 0.06);
+  border-left: 4px solid var(--yb-primary);
+  border-radius: 0 12px 12px 0;
+}
+
+.changelog-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
+  border-radius: var(--yb-radius-md);
+}
+
+.changelog-content code {
+  padding: 2px 6px;
+  color: var(--yb-primary-deep);
+  background: rgba(33, 116, 253, 0.08);
+  border-radius: var(--yb-radius-sm);
+}
+
+.changelog-content pre {
+  overflow: auto;
+  padding: 14px;
+  background: #101828;
+  border-radius: var(--yb-radius-md);
+}
+
+.changelog-content pre code {
+  padding: 0;
+  color: #e5e7eb;
+  background: transparent;
+}

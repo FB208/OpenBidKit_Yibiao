@@ -20,6 +20,10 @@ export { default as RestrictedHtmlEditor } from './RestrictedHtmlEditor';
 export type { RestrictedHtmlEditorProps } from './RestrictedHtmlEditor';
 export { default as MarkdownFullscreenViewer } from './MarkdownFullscreenViewer';
 export type { MarkdownFullscreenViewerProps } from './MarkdownFullscreenViewer';
+export { default as EntryBrowserDialog } from './EntryBrowserDialog';
+export type { EntryBrowserDialogProps } from './EntryBrowserDialog';
+export { default as ImagePreviewDialog } from './ImagePreviewDialog';
+export type { ImagePreviewDialogProps, PreviewImage } from './ImagePreviewDialog';
 export type {
   FloatingToolbarAction,
   FloatingToolbarActionVariant,

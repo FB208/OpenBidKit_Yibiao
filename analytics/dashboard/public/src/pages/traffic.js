@@ -29,7 +29,8 @@ const pageLabels = {
   'feasibility-report/content': '可行性研究报告 - 正文生成',
   'business-bid': '商务标（历史）',
   'knowledge-base': '知识库',
-  resources: '资源下载',
+  'resource-download': '资源下载',
+  resources: '精选资源',
   'knowledge-base/library': '知识库 - 文档列表',
   'knowledge-base/viewer/items': '知识库 - 知识条目',
   'knowledge-base/viewer/markdown': '知识库 - Markdown 原文',
@@ -66,6 +67,8 @@ const pageLabels = {
   'developer-expansion-replace-test': '测试页 - 扩写替换测试',
   'developer-layout-budget-test': '测试页 - 版面预算正文测试',
   settings: '设置',
+  changelog: '更新日志',
+  notice: '公告',
 };
 
 function getPageLabel(page) {

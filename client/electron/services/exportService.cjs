@@ -6,11 +6,8 @@ const cheerio = require('cheerio');
 const { imageSize } = require('image-size');
 const mime = require('mime-types');
 const { compactLogError, createDeveloperLogger, textMetrics } = require('../utils/developerLog.cjs');
-const { getMermaidCacheEntry, saveMermaidCacheImage } = require('../utils/mermaidCache.cjs');
 const { getGeneratedImagesDir, getImportedImagesDir } = require('../utils/paths.cjs');
-const { REMOTE_IMAGE_RETRY_ATTEMPTS, REMOTE_IMAGE_RETRY_DELAY_MS } = require('../utils/remoteImageRetry.cjs');
 const { renderMarkdownHtml } = require('../utils/renderMarkdownHtml.cjs');
-const { getLocalImageRenderService } = require('./localImageRenderService.cjs');
 const {
   renderChromePngs,
   loadChromeModule,
@@ -142,8 +139,8 @@ function reportProgress(context, progress, message, extra = {}) {
 
 function reportConversionProgress(context, message) {
   const stats = context?.stats || {};
-  const total = Math.max(1, (stats.leafCount || 0) + (stats.mermaidCount || 0));
-  const done = Math.min(total, (context.convertedLeafCount || 0) + (context.convertedMermaidCount || 0));
+  const total = Math.max(1, stats.leafCount || 0);
+  const done = Math.min(total, context.convertedLeafCount || 0);
   reportProgress(context, 10 + (done / total) * 78, message);
 }
 
@@ -178,26 +175,19 @@ function compactText(value, maxLength = 140) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-function countMermaidBlocks(content) {
-  return (String(content || '').match(/```mermaid[\s\S]*?```/gi) || []).length;
-}
-
 function countOutlineStats(items = []) {
   let leafCount = 0;
-  let mermaidCount = 0;
 
   for (const item of items || []) {
     if (item.children?.length) {
       const childStats = countOutlineStats(item.children);
       leafCount += childStats.leafCount;
-      mermaidCount += childStats.mermaidCount;
     } else {
       leafCount += 1;
-      mermaidCount += countMermaidBlocks(item.content);
     }
   }
 
-  return { leafCount, mermaidCount };
+  return { leafCount };
 }
 
 /** 生成待填写提示；仅在当前节点应用模板时接续章节页框。 */
@@ -1627,84 +1617,6 @@ async function loadImageWithRetry(source, context = {}, options = {}) {
   return null;
 }
 
-async function resolveMermaidImageForExport(code, context = {}, options = {}) {
-  const cacheEntry = options.cacheEntry || getMermaidCacheEntry(app, code);
-  if (cacheEntry.exists) {
-    return {
-      source: cacheEntry.assetUrl,
-      cacheHit: true,
-      cacheHash: cacheEntry.hash,
-    };
-  }
-
-  const retryAttempts = Math.max(0, Number(options.loadRetry?.retryAttempts ?? REMOTE_IMAGE_RETRY_ATTEMPTS) || 0);
-  const retryDelayMs = Math.max(0, Number(options.loadRetry?.retryDelayMs ?? REMOTE_IMAGE_RETRY_DELAY_MS) || 0);
-  let attempt = 0;
-  let lastError = null;
-  let loaded = null;
-
-  while (attempt <= retryAttempts) {
-    try {
-      const rendered = await getLocalImageRenderService().renderMermaidToPng(cacheEntry.code);
-      if (!rendered?.buffer?.length) {
-        throw new Error('Mermaid 本地转换未生成有效图片');
-      }
-      loaded = {
-        buffer: rendered.buffer,
-        type: 'png',
-        width: rendered.width,
-        height: rendered.height,
-      };
-      lastError = null;
-      break;
-    } catch (error) {
-      lastError = error;
-      attempt += 1;
-      if (attempt > retryAttempts) break;
-      if (typeof options.loadRetry?.onRetry === 'function') {
-        options.loadRetry.onRetry(attempt, error);
-      }
-      if (retryDelayMs > 0) await delay(retryDelayMs);
-    }
-  }
-
-  if (!loaded?.buffer?.length) {
-    throw lastError || new Error('Mermaid 本地转换失败');
-  }
-
-  try {
-    saveMermaidCacheImage(app, cacheEntry.hash, loaded.buffer);
-  } catch (error) {
-    writeExportLog(context, 'export.mermaid.cache_write_failed', {
-      cache_hash: cacheEntry.hash,
-      error: compactLogError(error),
-    });
-  }
-
-  return {
-    source: cacheEntry.assetUrl,
-    loaded,
-    cacheHit: false,
-    cacheHash: cacheEntry.hash,
-  };
-}
-
-// 读取高分辨率截图携带的像素密度，版面尺寸仍按设计像素计算。
-function getImagePixelDensity(source) {
-  try {
-    const url = new URL(String(source || ''));
-    const isInternalRenderAsset = url.protocol === 'yibiao-asset:'
-      && url.hostname === 'generated-images'
-      && (url.pathname.startsWith('/mermaid-cache/')
-        || url.pathname.startsWith('/technical-plan/illustrations/'));
-    if (!isInternalRenderAsset) return 1;
-    const value = Number(url.searchParams.get('pixel-density'));
-    return Number.isFinite(value) && value >= 1 ? value : 1;
-  } catch {
-    return 1;
-  }
-}
-
 async function imageRunFromNode(node, context, options = {}) {
   let loaded = null;
   const imageLabel = compactText(node.alt || node.url || '未知图片');
@@ -1716,9 +1628,7 @@ async function imageRunFromNode(node, context, options = {}) {
     source: describeImageSourceForLog(node.url),
   });
   try {
-    loaded = Object.prototype.hasOwnProperty.call(options, 'loadedImage')
-      ? options.loadedImage
-      : await loadImageWithRetry(node.url, context, options.loadRetry);
+    loaded = await loadImageWithRetry(node.url, context, options.loadRetry);
   } catch (error) {
     const message = `图片无法导出：${imageLabel}，${compactText(error.message || '下载失败', 120)}`;
     addWarning(context, message);
@@ -1773,9 +1683,8 @@ async function imageRunFromNode(node, context, options = {}) {
     });
     return textRun(`[${message}]`, { color: 'C83220' });
   }
-  const pixelDensity = getImagePixelDensity(node.url);
-  const sourceWidth = (size.width || MAX_IMAGE_WIDTH) / pixelDensity;
-  const sourceHeight = (size.height || Math.round(MAX_IMAGE_WIDTH * 0.62)) / pixelDensity;
+  const sourceWidth = size.width || MAX_IMAGE_WIDTH;
+  const sourceHeight = size.height || Math.round(MAX_IMAGE_WIDTH * 0.62);
   const maxWidth = getImageMaxWidth(context);
   const maxHeight = getImageMaxHeight(context);
   const ratio = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight);
@@ -1789,7 +1698,6 @@ async function imageRunFromNode(node, context, options = {}) {
     bytes: loaded.buffer.length,
     source_width: sourceWidth,
     source_height: sourceHeight,
-    pixel_density: pixelDensity,
     max_width: maxWidth,
     max_height: maxHeight,
     scale_ratio: ratio,
@@ -1811,12 +1719,6 @@ async function imageRunFromNode(node, context, options = {}) {
 
 async function imageParagraphFromSource(source, alt, context, options = {}) {
   return paragraph([await imageRunFromNode({ url: source, alt }, context, options)], getImageParagraphOptions(context));
-}
-
-async function imageParagraphFromLoadedImage(source, alt, loadedImage, context, options = {}) {
-  return paragraph([
-    await imageRunFromNode({ url: source, alt }, context, { ...options, loadedImage }),
-  ], getImageParagraphOptions(context));
 }
 
 function isHtmlBrNode(node) {
@@ -2044,69 +1946,6 @@ function buildHtmlBodyParaOpts(context) {
   return opts;
 }
 
-async function mermaidCodeToDocxBlocks(code, context) {
-  const value = String(code || '').trim();
-  if (!value) return [];
-
-  const nextIndex = (context.convertedMermaidCount || 0) + 1;
-  const total = context.stats?.mermaidCount || nextIndex;
-  let cacheEntry = null;
-
-  try {
-    // 导出阶段不拦截语法：正文已有代码块则直接尝试本地渲染。
-    cacheEntry = getMermaidCacheEntry(app, value);
-    writeExportLog(context, 'export.mermaid.started', {
-      mermaid_index: nextIndex,
-      total,
-      cache_hash: cacheEntry.hash,
-      cache_hit: cacheEntry.exists,
-      code_metrics: textMetrics(value),
-    });
-    reportConversionProgress(context, cacheEntry.exists
-      ? `Mermaid 图 ${nextIndex}/${total} 已命中本地缓存。`
-      : `正在本地转换 Mermaid 图 ${nextIndex}/${total}。`);
-    const loadRetry = {
-      retryAttempts: REMOTE_IMAGE_RETRY_ATTEMPTS,
-      retryDelayMs: REMOTE_IMAGE_RETRY_DELAY_MS,
-      onRetry: (attempt) => {
-        reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败，3 秒后第 ${attempt} 次重试。`);
-      },
-    };
-    const mermaidImage = await resolveMermaidImageForExport(value, context, { cacheEntry, loadRetry });
-    const block = mermaidImage.loaded === undefined
-      ? await imageParagraphFromSource(mermaidImage.source, 'Mermaid 图', context)
-      : await imageParagraphFromLoadedImage(mermaidImage.source, 'Mermaid 图', mermaidImage.loaded, context);
-    writeExportLog(context, 'export.mermaid.completed', {
-      mermaid_index: nextIndex,
-      total,
-      cache_hash: mermaidImage.cacheHash,
-      cache_hit: mermaidImage.cacheHit,
-    });
-    reportConversionProgress(context, mermaidImage.cacheHit
-      ? `Mermaid 图 ${nextIndex}/${total} 已使用本地缓存。`
-      : `Mermaid 图 ${nextIndex}/${total} 已转换并缓存。`);
-    return [block];
-  } catch (error) {
-    const message = `Mermaid 图无法导出：${compactText(error.message || '转换失败', 120)}`;
-    addWarning(context, message);
-    writeExportLog(context, 'export.mermaid.error', {
-      mermaid_index: nextIndex,
-      total,
-      cache_hash: cacheEntry?.hash || '',
-      error: compactLogError(error),
-    });
-    reportConversionProgress(context, `Mermaid 图 ${nextIndex}/${total} 转换失败。`);
-    return [paragraph([textRun(`[${message}]`, { color: 'C83220' })], { alignment: AlignmentType.CENTER })];
-  } finally {
-    context.convertedMermaidCount = nextIndex;
-  }
-}
-
-function isMermaidCodeElement($, codeNode) {
-  const className = String($(codeNode).attr('class') || '').toLowerCase();
-  return /\blanguage-mermaid\b/.test(className) || /\bmermaid\b/.test(className);
-}
-
 /** 转换正文内标题，并接续当前章节的页框。 */
 async function htmlHeadingToDocxBlocks($, node, context) {
   const mdLevel = Math.min(Math.max(parseInt(htmlTagName(node).slice(1), 10) || 1, 1), 6);
@@ -2184,10 +2023,6 @@ async function htmlNodeToDocxBlocks($, node, context, options = {}) {
     })];
   }
   if (tag === 'pre') {
-    const codeNode = $(node).children('code').first();
-    if (codeNode.length && isMermaidCodeElement($, codeNode[0])) {
-      return mermaidCodeToDocxBlocks(codeNode.text(), context);
-    }
     // 同引用块：页框内的代码块靠底纹区分，左右缩进交给页框留白，免得竖线在这里错位。
     const framedPre = chapterFrameParagraphOptions(context);
     return [paragraph([new TextRun({ text: cleanText($(node).text()), font: 'Consolas', size: 21, color: '243048' })], {
@@ -2766,7 +2601,6 @@ async function buildDocxResult(payload, options = {}) {
     warnings: options.warnings || [],
     stats,
     convertedLeafCount: 0,
-    convertedMermaidCount: 0,
     imageCount: 0,
     imageSuccessCount: 0,
     numberingReferences: [],
@@ -2807,9 +2641,7 @@ async function buildDocxResult(payload, options = {}) {
     children.push(...buildFeasibilityNotesParagraphs(payload, feasibility));
   }
 
-  reportProgress(context, 10, stats.mermaidCount
-    ? `准备导出正文，并转换 ${stats.mermaidCount} 张 Mermaid 图。`
-    : '准备导出正文。');
+  reportProgress(context, 10, '准备导出正文。');
   await addOutlineItems(ranges, payload.outline || [], context);
   if (feasibility?.includeAppendix) {
     ranges[ranges.length - 1].children.push(...buildFeasibilityAppendixParagraphs(feasibility));
@@ -2894,7 +2726,6 @@ async function buildDocxResult(payload, options = {}) {
     stats,
     warning_count: context.warnings.length,
     converted_leaf_count: context.convertedLeafCount,
-    converted_mermaid_count: context.convertedMermaidCount,
     image_count: context.imageCount,
     image_success_count: context.imageSuccessCount,
     image_failure_count: Math.max(0, context.imageCount - context.imageSuccessCount),
@@ -2916,17 +2747,11 @@ function imageExtensionFromSource(source) {
 }
 
 /**
- * 非 AI 节点仍读取已有 Markdown；复用现有图片解析和本地 Mermaid 渲染。
+ * 非 AI 节点仍读取已有 Markdown；复用现有图片解析。
  * 单张图片读取失败时原位改为文字提示，原因写入 context.imageFailures，其余正文照常导出。
  */
 async function renderMarkdownForRestrictedHtml(content, assets, context) {
   const $ = cheerio.load(await renderMarkdownHtml(content, { allowRawHtml: true, enableGfm: true }), null, false);
-  for (const code of $('pre > code').toArray()) {
-    if (!isMermaidCodeElement($, code)) continue;
-    const rendered = await resolveMermaidImageForExport($(code).text(), context);
-    const img = $('<img>').attr('src', rendered.source).attr('alt', '流程图');
-    $(code).parent().replaceWith(img);
-  }
   for (const img of $('img').toArray()) {
     const source = $(img).attr('src') || '';
     const alt = $(img).attr('alt') || '';
@@ -2986,9 +2811,7 @@ function createExportService({ configStore, openXmlHelperService, getTechnicalPl
       }
 
       const progressContext = { onProgress, warnings: [], stats };
-      reportProgress(progressContext, 2, stats.mermaidCount
-        ? `检测到 ${stats.mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片。`
-        : '正在准备 Word 导出。');
+      reportProgress(progressContext, 2, '正在准备 Word 导出。');
       // 结构不完整会导致转换报错或后续小节丢失：先交给用户决定，不直接阻止导出。
       if (technicalExport && !structureConfirmed) {
         const issues = technicalExport.inspect(payload);

@@ -7,6 +7,7 @@ const { extractAiSource } = require('../utils/aiSourceExtraction.cjs');
 const { AI_IMAGE_STYLES } = require('./aiImageStyles.cjs');
 const { TASK_DIR, LIST_DIR, TASK_FILE_WRITING, taskFilePath, readTaskFile, writeListFile, compactResults } = require('./contentGenerationTaskFiles.cjs');
 const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
+const { compressGeneratedImage } = require('../utils/imageCompression.cjs');
 
 const AI_IMAGE_STYLE_OPTIONS = Object.entries(AI_IMAGE_STYLES).map(([key, { label, usage }]) => `${key}=${label}（${usage}）`).join('；');
 
@@ -201,8 +202,10 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       ? await renderer.renderHtmlToPng(source, { ...pauseOptions, frameSize: result.frame_size, checkLayout: htmlImageOptimization })
       : await renderer.renderMermaidToPng(source, pauseOptions);
     combinedSignal.throwIfAborted();
+    // 转图结果落盘前压缩，Word 转换和格式自检直接使用压缩后的图片。
+    const compressed = compressGeneratedImage(rendered.buffer, 'png');
     Object.assign(result, {
-      asset_ref: saveImage(rendered.buffer, '.png'), width: rendered.width, height: rendered.height,
+      asset_ref: saveImage(compressed.buffer, `.${compressed.extension}`), width: compressed.width, height: compressed.height,
       ...(result.kind === 'html' ? { layout_issues: rendered.layout_issues } : {}),
       status: result.kind === 'html' && rendered.layout_issues?.length ? 'needs_repair' : 'success',
     });

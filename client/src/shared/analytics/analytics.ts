@@ -29,6 +29,11 @@ interface ConfigUsagePayload {
   table_requirement?: string;
   use_mermaid_images?: boolean;
   use_ai_images?: boolean;
+  image_quantity?: number;
+  image_layout_single?: boolean;
+  image_layout_image_text?: boolean;
+  image_layout_three_images?: boolean;
+  image_layout_four_images?: boolean;
   content_concurrency?: number;
   content_generation_action?: string;
   word_control_enabled?: boolean;
@@ -51,6 +56,11 @@ const configUsageFields: Array<[keyof ConfigUsagePayload, string]> = [
   ['table_requirement', 'tableRequirements'],
   ['use_mermaid_images', 'useMermaidImages'],
   ['use_ai_images', 'useAiImages'],
+  ['image_quantity', 'imageQuantities'],
+  ['image_layout_single', 'imageLayoutSingle'],
+  ['image_layout_image_text', 'imageLayoutImageText'],
+  ['image_layout_three_images', 'imageLayoutThreeImages'],
+  ['image_layout_four_images', 'imageLayoutFourImages'],
   ['content_concurrency', 'contentConcurrencies'],
   ['content_generation_action', 'contentGenerationActions'],
   ['word_control_enabled', 'wordControlEnabled'],
@@ -188,6 +198,10 @@ function normalizeUsagePayload(payload: ConfigUsagePayload) {
     ...payload,
     use_mermaid_images: booleanText(payload.use_mermaid_images),
     use_ai_images: booleanText(payload.use_ai_images),
+    image_layout_single: booleanText(payload.image_layout_single),
+    image_layout_image_text: booleanText(payload.image_layout_image_text),
+    image_layout_three_images: booleanText(payload.image_layout_three_images),
+    image_layout_four_images: booleanText(payload.image_layout_four_images),
     word_control_enabled: booleanText(payload.word_control_enabled),
     enable_consistency_audit: booleanText(payload.enable_consistency_audit),
     enable_original_plan_coverage_audit: booleanText(payload.enable_original_plan_coverage_audit),
@@ -239,6 +253,11 @@ export function trackPageView(page: string) {
   sendAnalytics('page_view', normalizedPage);
 }
 
+// 更新日志弹窗每次打开都上报，不参与页面切换去重。
+export function trackChangelogOpen() {
+  sendAnalytics('page_view', 'changelog');
+}
+
 export function trackConfigUsage(payload: ConfigUsagePayload = {}, config?: ClientConfig | null) {
   const send = (loadedConfig?: ClientConfig | null) => {
     const usagePayload = normalizeUsagePayload({
@@ -271,4 +290,9 @@ export function trackResourceClick(resourceKey: string) {
   if (!/^[a-zA-Z0-9._:-]{1,80}$/.test(key)) return;
 
   sendAnalytics('resource_click', 'resources', { resource_key: key });
+}
+
+// 公告弹窗每次打开都上报，不参与页面切换去重。
+export function trackNoticeBoardOpen() {
+  sendAnalytics('page_view', 'notice');
 }

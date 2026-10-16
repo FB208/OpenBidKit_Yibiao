@@ -1544,9 +1544,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
             && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
               || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
       }
-      function hasAiSections(items) {
-        return items.some(item => item.children?.length ? hasAiSections(item.children) : item.content_mode === 'ai-generate');
-      }
       // 商务模版尚未填写完成时同样需要启动，由正文任务按需只执行副 Agent。
       const businessFillPending = technicalPlanStore.hasBidTemplate()
         && technicalPlan.contentGenerationRuntime?.business_fill?.phase !== 'completed';
@@ -1557,13 +1554,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         const task = technicalPlan.contentGenerationTask;
         emit(task, { technicalPlanPatch: technicalPlan });
         return task;
-      }
-      // 只读取用户已保存的测试状态，在落库和清理会话前提示，不重新请求生图测试。
-      const imageOptions = technicalPlan.contentGenerationOptions;
-      if (imageOptions?.imageQuantity > 0 && imageOptions?.useAiImages
-        && hasAiSections(technicalPlan.outlineData?.outline || [])
-        && aiService.getConfig().image_model?.status !== 'available') {
-        throw new Error('已开启 AI 生图，但当前生图模型不可用。请去设置-生图模型中点击测试，并配置可用渠道。');
       }
       const initialState = sectionRegeneration || continuing
         ? { contentGenerationRuntime: { ...technicalPlan.contentGenerationRuntime, generation_started: true } }

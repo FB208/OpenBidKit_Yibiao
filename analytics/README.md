@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | Analytics Engine `agnet_analytics` | `ANALYTICS` | 详细事件、今天/7天/30天查询、最近事件、Cron 汇总来源 |
 | D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表和全局 IP 封禁状态 |
-| D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理元数据 |
+| D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理、公告、更新日志元数据 |
 | R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、系统设置图片、插件当前版与上一版安装包 |
 | R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
 | KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引；旧 IP 封禁列表仅用于一次性迁移 |
@@ -49,8 +49,13 @@
 | `GET /api/retention` | D1 | `ADMIN_TOKEN` | 留存概览，读取 Cron 生成的最新 30 天快照 |
 | `GET /api/github-repo-stats` | GitHub + KV | `ADMIN_TOKEN` | GitHub stats |
 | `GET /notice` | KV | 无 | 客户端公告 |
+| `GET /notices` | `RESOURCE_DB` | 无 | 客户端“公告”按钮列表，只含启用的公告，按更新时间倒序 |
+| `GET /notices/latest` | `RESOURCE_DB` | 无 | 最新启用公告的更新时间，供客户端红点轮询；修改公告也会改变 |
 | `GET /model-info` | KV | 无 | 按 `modelName` 返回最终生效的思考强度、最大 context/output 和缓存时间，人工覆盖优先 |
 | `GET/POST/DELETE /api/notice` | KV | `ADMIN_TOKEN` | 公告后台管理 |
+| `GET /changelogs` | `RESOURCE_DB` | 无 | 客户端更新日志列表，按版本号倒序 |
+| `GET /changelogs/latest` | `RESOURCE_DB` | 无 | 最新一条更新日志的首次发布时间，供客户端红点轮询；修改旧日志不改变 |
+| `GET/POST/DELETE /api/changelogs` | `RESOURCE_DB` | `ADMIN_TOKEN` | 更新日志管理；版本号只接受 `x.y.z`，同项目内唯一 |
 | `GET/POST /api/model-info-cache` | KV + models.dev | `ADMIN_TOKEN` | 分页查看模型详细索引或手动同步，GET 支持 `q/scope/page/pageSize` |
 | `POST/DELETE /api/model-info-cache/override` | KV | `ADMIN_TOKEN` | 保存单条模型人工覆盖，或按 `modelName` 恢复自动同步值 |
 | `POST /license/activate` | KV + Worker Secret | 无 | 客户端免费授权签发，返回带签名 license |

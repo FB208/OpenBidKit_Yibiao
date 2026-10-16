@@ -1,6 +1,10 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
+import ChangelogDialog from '../features/changelog/components/ChangelogDialog';
+import { useChangelogUnread } from '../features/changelog/hooks/useChangelogUnread';
+import NoticeBoardDialog from '../features/notice/components/NoticeBoardDialog';
+import { useNoticeUnread } from '../features/notice/hooks/useNoticeUnread';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 import { AppDialog, useNoticeToast } from '../shared/ui';
 import logoUrl from '../../assets/icon_256.png';
@@ -20,13 +24,13 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'document-knowledge-base': ArchiveIcon,
   'credential-library': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
+  'resource-download': ResourcesIcon,
   resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,
   'rejection-check': ShieldIcon,
   'ai-evaluation': BidCheckIcon,
   'template-settings': DocumentIcon,
-  'bid-opportunity': RadarIcon,
   'developer-test': FlaskIcon,
   'developer-json-test': FlaskIcon,
   'developer-multimodal-test': FlaskIcon,
@@ -47,6 +51,10 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
   const [collapsed, setCollapsed] = useState(false);
   const [groupChatOpen, setGroupChatOpen] = useState(false);
   const [groupChatQrSource, setGroupChatQrSource] = useState(groupChatQrUrl);
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const { hasUnread: changelogUnread, markSeen: markChangelogSeen } = useChangelogUnread();
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const { hasUnread: noticeUnread, markSeen: markNoticeSeen } = useNoticeUnread();
   const showNotice = useNoticeToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
@@ -136,6 +144,12 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
         <div className="sidebar-footer-shortcuts">
           {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
           {collapsed ? wrapTooltip('加群', renderGroupChatButton(() => setGroupChatOpen(true))) : renderGroupChatButton(() => setGroupChatOpen(true))}
+          {collapsed
+            ? wrapTooltip('更新日志', renderChangelogButton(changelogUnread, () => setChangelogOpen(true)))
+            : renderChangelogButton(changelogUnread, () => setChangelogOpen(true))}
+          {collapsed
+            ? wrapTooltip('公告', renderNoticeButton(noticeUnread, () => setNoticeOpen(true)))
+            : renderNoticeButton(noticeUnread, () => setNoticeOpen(true))}
         </div>
         {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
       </div>
@@ -151,6 +165,9 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       >
         <img className="group-chat-qr" src={groupChatQrSource} alt="易标用户交流群二维码" />
       </AppDialog>
+
+      <ChangelogDialog open={changelogOpen} onOpenChange={setChangelogOpen} onLoaded={markChangelogSeen} />
+      <NoticeBoardDialog open={noticeOpen} onOpenChange={setNoticeOpen} onLoaded={markNoticeSeen} />
     </aside>
   );
 }
@@ -219,6 +236,44 @@ function renderGroupChatButton(onClick: () => void) {
       </span>
       <span className="settings-copy">
         <strong>加群</strong>
+      </span>
+    </button>
+  );
+}
+
+function renderChangelogButton(hasUnread: boolean, onClick: () => void) {
+  return (
+    <button
+      type="button"
+      className="settings-trigger sidebar-footer-shortcut"
+      onClick={onClick}
+      aria-label="更新日志"
+    >
+      <span className="nav-icon" aria-hidden="true">
+        <ChangelogIcon />
+        {hasUnread ? <span className="sidebar-unread-dot" /> : null}
+      </span>
+      <span className="settings-copy">
+        <strong>日志</strong>
+      </span>
+    </button>
+  );
+}
+
+function renderNoticeButton(hasUnread: boolean, onClick: () => void) {
+  return (
+    <button
+      type="button"
+      className="settings-trigger sidebar-footer-shortcut"
+      onClick={onClick}
+      aria-label="公告"
+    >
+      <span className="nav-icon" aria-hidden="true">
+        <NoticeIcon />
+        {hasUnread ? <span className="sidebar-unread-dot" /> : null}
+      </span>
+      <span className="settings-copy">
+        <strong>公告</strong>
       </span>
     </button>
   );
@@ -318,17 +373,6 @@ function ShieldIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function RadarIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-      <path d="M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17Z" />
-      <path d="M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z" />
-      <path d="M12 12 18 6" />
-      <path d="M12 12h.01" />
-    </svg>
-  );
-}
-
 function FlaskIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
@@ -377,6 +421,26 @@ function GroupChatIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M4.5 5.5h12v9H9l-4.5 3v-3z" />
       <path d="M16.5 9.5h3v7h-2v2l-3.2-2H12" />
       <path d="M8 9h.01M12 9h.01" />
+    </svg>
+  );
+}
+
+function ChangelogIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 7.5V12l3 2" />
+      <path d="M4.6 9.2A8 8 0 1 1 4 12" />
+      <path d="M4 5v4.2h4.2" />
+    </svg>
+  );
+}
+
+function NoticeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4.5 10v4h3l6 4V6l-6 4z" />
+      <path d="M17 9.5a3.5 3.5 0 0 1 0 5" />
+      <path d="M19.5 7a7 7 0 0 1 0 10" />
     </svg>
   );
 }

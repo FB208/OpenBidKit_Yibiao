@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 36;
+const schemaVersion = 37;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -1166,6 +1166,14 @@ function addTechnicalPlanLayoutCheckOption(db) {
   addColumnIfMissing(db, 'technical_plan_generation_config', 'layout_check', 'INTEGER NOT NULL DEFAULT 0');
 }
 
+/** 保存四类配图布局开关；默认均未手动关闭，实际份额由配图比例档位决定。 */
+function addTechnicalPlanImageLayoutOptions(db) {
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'use_single_image_layout', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'use_image_text_layout', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'use_three_images_layout', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing(db, 'technical_plan_generation_config', 'use_four_images_layout', 'INTEGER NOT NULL DEFAULT 1');
+}
+
 function createExportTemplatesSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS export_templates (
@@ -1541,6 +1549,16 @@ const schemaHealthColumnGroups = [
       layout_check: 'INTEGER NOT NULL DEFAULT 0',
     },
   },
+  {
+    version: 37,
+    table: 'technical_plan_generation_config',
+    columns: {
+      use_single_image_layout: 'INTEGER NOT NULL DEFAULT 1',
+      use_image_text_layout: 'INTEGER NOT NULL DEFAULT 1',
+      use_three_images_layout: 'INTEGER NOT NULL DEFAULT 1',
+      use_four_images_layout: 'INTEGER NOT NULL DEFAULT 1',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -1780,6 +1798,11 @@ const migrations = [
     version: 36,
     description: '技术方案配图比例字段升级为整数并恢复默认 30%',
     up: migrateTechnicalPlanImageQuantity,
+  },
+  {
+    version: 37,
+    description: '技术方案新增配图布局开关',
+    up: addTechnicalPlanImageLayoutOptions,
   },
 ];
 

@@ -33,6 +33,11 @@ function labelConfigValue(groupKey, value) {
     tableRequirements: { none: '不要', light: '少量', moderate: '适中', heavy: '大量' },
     useMermaidImages: { true: '开启', false: '关闭' },
     useAiImages: { true: '开启', false: '关闭' },
+    imageQuantities: Object.fromEntries(Array.from({ length: 11 }, (_, index) => index * 10).map((ratio) => [String(ratio), ratio ? `${ratio}%` : '0%（无图）'])),
+    imageLayoutSingle: { true: '开启', false: '关闭' },
+    imageLayoutImageText: { true: '开启', false: '关闭' },
+    imageLayoutThreeImages: { true: '开启', false: '关闭' },
+    imageLayoutFourImages: { true: '开启', false: '关闭' },
     enableConsistencyAudit: { true: '开启', false: '关闭' },
     consistencyRepairModes: { normal: '普通修复', agent: 'Agent 修复' },
     enableOriginalPlanCoverageAudit: { true: '开启', false: '关闭' },
@@ -72,6 +77,11 @@ const configUsageGroups = [
     ['enableOriginalPlanCoverageAudit', '原方案覆盖审计'],
     ['useMermaidImages', 'Mermaid 图片'],
   ['useAiImages', 'AI 生图'],
+  ['imageQuantities', '配图比例'],
+  ['imageLayoutSingle', '布局·单张图片'],
+  ['imageLayoutImageText', '布局·图片表格'],
+  ['imageLayoutThreeImages', '布局·三列图片'],
+  ['imageLayoutFourImages', '布局·四宫格'],
 ];
 
 const modelUsageGroups = [

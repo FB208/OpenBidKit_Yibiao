@@ -1,0 +1,12 @@
+/* 公告浏览弹窗（features/notice/components/NoticeBoardDialog.tsx） */
+.notice-board-dialog {
+  width: min(720px, calc(100vw - 40px));
+  height: min(640px, calc(100vh - 40px));
+}
+
+.notice-board-time {
+  flex: 0 0 auto;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

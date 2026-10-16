@@ -78,6 +78,34 @@ export async function listProjectNotices(env, projectName) {
   return (result.results || []).map(normalizeAdminNoticeRow).filter(Boolean);
 }
 
+// 客户端"公告"按钮读取全部启用的公告，按更新时间倒序。
+export async function listEnabledNotices(env, projectName) {
+  const result = await requireResourceDb(env).prepare(
+    `SELECT id, title, content, updated_at
+     FROM notices
+     WHERE project_name = ? AND enabled = 1
+     ORDER BY updated_at DESC, id DESC`,
+  ).bind(projectName).all();
+
+  return (result.results || []).map((row) => ({
+    id: normalizeText(row.id, 120),
+    title: normalizeText(row.title, NOTICE_TITLE_MAX_LENGTH),
+    content: normalizeText(row.content, NOTICE_CONTENT_MAX_LENGTH),
+    updatedAt: normalizeText(row.updated_at, 40),
+  }));
+}
+
+// 客户端红点轮询只读取最新启用公告的更新时间，无公告时返回空串。
+export async function readLatestEnabledNoticeUpdatedAt(env, projectName) {
+  const row = await requireResourceDb(env).prepare(
+    `SELECT MAX(updated_at) AS latest
+     FROM notices
+     WHERE project_name = ? AND enabled = 1`,
+  ).bind(projectName).first();
+
+  return normalizeText(row?.latest, 40);
+}
+
 // 按管理端稳定 ID 读取一条公告。
 export async function readStoredNotice(env, projectName, id) {
   const row = await requireResourceDb(env).prepare(

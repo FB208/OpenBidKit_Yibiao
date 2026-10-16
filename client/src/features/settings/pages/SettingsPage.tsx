@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
+import { AppDialog, AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
@@ -634,9 +634,11 @@ interface SettingsPageProps {
   onDeveloperModeChange?: (developerMode: boolean) => void;
   request?: SettingsPageRequest | null;
   onRequestHandled?: () => void;
+  registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
 }
 
-function SettingsPage({ onDeveloperModeChange, request, onRequestHandled }: SettingsPageProps) {
+// 管理设置草稿，并在离开文本模型设置时提示尚未填写的上下文长度。
+function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, registerLeaveGuard }: SettingsPageProps) {
   const [state, setState] = useState<SettingsPageState>(initialState);
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => request?.tab ?? 'general');
   const [rechargeRequested, setRechargeRequested] = useState(false);
@@ -662,8 +664,39 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled }: Sett
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const [agentAutoAnswerDraft, setAgentAutoAnswerDraft] = useState(false);
+  const [contextLengthDialogOpen, setContextLengthDialogOpen] = useState(false);
+  const contextLengthLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const { showToast } = useToast();
   const { enabled: agentAutoAnswerEnabled } = useAutoAnswer();
+
+  // 上下文长度为空时等待用户确认建议，不要求填写或修改配置。
+  const confirmContextLengthLeave = useCallback(async () => {
+    if (activeTab !== 'text-model' || state.textModel.context_length_limit !== '') return true;
+    setContextLengthDialogOpen(true);
+    return new Promise<boolean>((resolve) => {
+      contextLengthLeaveResolverRef.current = resolve;
+    });
+  }, [activeTab, state.textModel.context_length_limit]);
+
+  // 按用户选择继续离开，或取消跳转并留在文本模型设置页。
+  const resolveContextLengthReminder = (allowed: boolean) => {
+    const resolve = contextLengthLeaveResolverRef.current;
+    contextLengthLeaveResolverRef.current = null;
+    setContextLengthDialogOpen(false);
+    resolve?.(allowed);
+  };
+
+  // 切换分类先等待离页确认，重复点击当前分类不提示。
+  const changeSettingsTab = useCallback(async (tab: SettingsTab) => {
+    if (tab === activeTab) return;
+    if (await confirmContextLengthLeave()) setActiveTab(tab);
+  }, [activeTab, confirmContextLengthLeave]);
+
+  // 侧栏页面切换与设置分类切换共用同一确认弹窗。
+  useEffect(() => {
+    registerLeaveGuard?.(confirmContextLengthLeave);
+    return () => registerLeaveGuard?.(null);
+  }, [registerLeaveGuard, confirmContextLengthLeave]);
 
   useEffect(() => {
     void loadTextConfig();
@@ -735,10 +768,10 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled }: Sett
   // 应用级跳转请求只消费一次，之后重新进入设置页或切换分类不会再次触发。
   useEffect(() => {
     if (!request) return;
-    setActiveTab(request.tab);
+    void changeSettingsTab(request.tab);
     if (request.openRecharge) setRechargeRequested(true);
     onRequestHandled?.();
-  }, [request, onRequestHandled]);
+  }, [request, onRequestHandled, changeSettingsTab]);
 
   // 充值只在官方文本模型页打开；已切走或当前不是官方服务商时放弃本次请求。
   useEffect(() => {
@@ -1677,7 +1710,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled }: Sett
               key={tab.id}
               type="button"
               className={`settings-tab ${activeTab === tab.id ? 'is-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { void changeSettingsTab(tab.id); }}
               role="tab"
               aria-selected={activeTab === tab.id}
             >
@@ -2639,6 +2672,22 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled }: Sett
         </section>
       )}
       </div>
+      <AppDialog
+        open={contextLengthDialogOpen}
+        title="上下文长度设置提醒"
+        description={<>建议设置文本模型的<strong>上下文长度限制</strong>；如果不清楚如何设置，可点击“<strong>自动填充高级参数</strong>”。</>}
+        preventClose
+        actions={
+          <>
+            <button type="button" className="secondary-action" onClick={() => resolveContextLengthReminder(true)}>
+              继续离开
+            </button>
+            <button type="button" className="primary-action" onClick={() => resolveContextLengthReminder(false)}>
+              前往设置
+            </button>
+          </>
+        }
+      />
       <OfflineLicenseActivationDialog
         open={offlineLicenseDialogOpen}
         onOpenChange={setOfflineLicenseDialogOpen}

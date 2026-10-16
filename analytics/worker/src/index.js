@@ -1,5 +1,6 @@
 import { corsHeaders, json } from './http.js';
 import { handleAgentRuntime } from './routes/agentRuntime.js';
+import { handleAdminChangelogs, handlePublicChangelogLatest, handlePublicChangelogs } from './routes/changelog.js';
 import { handleAdminAgentErrorConfig, handleAdminAgentErrorDownload, handleAdminAgentErrors, handleAgentErrorIngest } from './routes/agentErrors.js';
 import { handleClients, handleClientDetail, handleIpStats } from './routes/clients.js';
 import { handleConfigUsage, handleModelUsage } from './routes/configUsage.js';
@@ -10,7 +11,7 @@ import { handleAdminVersionBlocks } from './routes/versionBlocks.js';
 import { handleLatest } from './routes/latest.js';
 import { handleLicenseActivate, handleLicenseConfig, handleOfflineLicense } from './routes/license.js';
 import { handleAdminModelInfoCache, handleAdminModelInfoOverride, handlePublicModelInfo } from './routes/modelInfo.js';
-import { handleAdminNotice, handlePublicNotice, handlePublicNoticeDelivered } from './routes/notice.js';
+import { handleAdminNotice, handlePublicNotice, handlePublicNoticeDelivered, handlePublicNoticeLatest, handlePublicNotices } from './routes/notice.js';
 import { handleOverview } from './routes/overview.js';
 import { handleProjects } from './routes/projects.js';
 import { handleRetention } from './routes/retention.js';
@@ -37,6 +38,10 @@ const routes = new Map([
   ['/license/activate', handleLicenseActivate],
   ['/notice', handlePublicNotice],
   ['/notice/delivered', handlePublicNoticeDelivered],
+  ['/notices', handlePublicNotices],
+  ['/notices/latest', handlePublicNoticeLatest],
+  ['/changelogs', handlePublicChangelogs],
+  ['/changelogs/latest', handlePublicChangelogLatest],
   ['/model-info', handlePublicModelInfo],
   ['/resources', handlePublicResources],
   ['/resource-image', handleResourceImage],
@@ -45,6 +50,7 @@ const routes = new Map([
   ['/plugins/download', handlePublicPluginDownload],
   ['/api/projects', handleProjects],
   ['/api/notice', handleAdminNotice],
+  ['/api/changelogs', handleAdminChangelogs],
   ['/api/model-info-cache', handleAdminModelInfoCache],
   ['/api/model-info-cache/override', handleAdminModelInfoOverride],
   ['/api/resources', handleAdminResources],

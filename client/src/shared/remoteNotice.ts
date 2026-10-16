@@ -1,7 +1,27 @@
 const NOTICE_ENDPOINT = 'https://analytics.agnet.top/notice';
+const NOTICE_LIST_ENDPOINT = 'https://analytics.agnet.top/notices';
 const PROJECT_NAME = 'yibiao-client';
 const DISMISSED_NOTICE_ID_KEY = 'remote_notice_dismissed_id';
+const SEEN_NOTICE_UPDATED_AT_KEY = 'remote_notice_seen_updated_at';
+export const NOTICE_SEEN_EVENT = 'yibiao:remote-notice-seen';
 const LOG_PREFIX = '[remote-notice]';
+
+export interface NoticeEntry {
+  id: string;
+  title: string;
+  content: string;
+  updatedAt: string;
+}
+
+interface NoticeListResponse {
+  code?: number;
+  notices?: NoticeEntry[];
+}
+
+interface NoticeLatestResponse {
+  code?: number;
+  latestUpdatedAt?: string;
+}
 
 export interface RemoteNotice {
   id: string;
@@ -102,4 +122,69 @@ export async function fetchRemoteNotice() {
   const notice = normalizeNotice(data.notice);
   console.info(LOG_PREFIX, 'normalized notice', notice?.id || null);
   return notice;
+}
+
+async function requestNoticeList<T>(path = '') {
+  const url = new URL(`${NOTICE_LIST_ENDPOINT}${path}`);
+  url.searchParams.set('projectName', PROJECT_NAME);
+  const response = await fetch(url.toString(), {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`公告请求失败：${response.status}`);
+  }
+  return await response.json() as T;
+}
+
+// 读取全部启用的公告，服务端已按更新时间倒序；失败时抛错，由弹窗展示重试。
+export async function fetchNoticeList() {
+  const data = await requestNoticeList<NoticeListResponse>();
+  if (data?.code !== 0 || !Array.isArray(data.notices)) {
+    throw new Error('公告响应无效');
+  }
+
+  return data.notices.map((item) => ({
+    id: String(item.id || ''),
+    title: String(item.title || '公告'),
+    content: String(item.content || ''),
+    updatedAt: String(item.updatedAt || ''),
+  }));
+}
+
+// 读取最新启用公告的更新时间，供红点轮询；失败返回 null，保持原红点状态。
+export async function fetchLatestNoticeUpdatedAt() {
+  try {
+    const data = await requestNoticeList<NoticeLatestResponse>('/latest');
+    if (data?.code !== 0) return null;
+    return String(data.latestUpdatedAt || '');
+  } catch (error) {
+    console.info(LOG_PREFIX, 'latest check failed', error);
+    return null;
+  }
+}
+
+export function readSeenNoticeUpdatedAt() {
+  try {
+    return localStorage.getItem(SEEN_NOTICE_UPDATED_AT_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+// 记录已读的公告更新时间（只前进不后退），并通知侧栏红点重新判断。
+export function markNoticeSeen(updatedAt: string) {
+  if (!updatedAt || updatedAt <= readSeenNoticeUpdatedAt()) return;
+
+  try {
+    localStorage.setItem(SEEN_NOTICE_UPDATED_AT_KEY, updatedAt);
+  } catch {
+    // 已读记录写入失败不影响主流程；下次检查可能再次显示红点。
+  }
+  window.dispatchEvent(new Event(NOTICE_SEEN_EVENT));
+}
+
+// 更新时间为服务端固定格式 YYYY-MM-DD HH:mm:ss，可直接按字符串比较；无已读记录视为未读。
+export function isNoticeUnread(latestUpdatedAt: string) {
+  return Boolean(latestUpdatedAt) && latestUpdatedAt > readSeenNoticeUpdatedAt();
 }

@@ -53,6 +53,10 @@ export interface ContentGenerationOptions {
   htmlImageOptimization: boolean;
   wordCountRepair: boolean;
   layoutCheck: boolean;
+  useSingleImageLayout: boolean;
+  useImageTextLayout: boolean;
+  useThreeImagesLayout: boolean;
+  useFourImagesLayout: boolean;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
 }
@@ -223,7 +227,6 @@ export interface ContentGenerationSectionState {
 
 export type ContentGenerationSections = Record<string, ContentGenerationSectionState>;
 
-export type ContentMermaidDiagramType = 'process' | 'hierarchy' | 'responsibility';
 export type ContentIllustrationKind = 'ai' | 'mermaid' | 'html';
 
 export interface ContentGenerationPlanData {

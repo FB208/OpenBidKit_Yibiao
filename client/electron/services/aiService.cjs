@@ -3,9 +3,11 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { nativeImage } = require('electron');
 const { getGeneratedImagesDir } = require('../utils/paths.cjs');
+const { compressGeneratedImage } = require('../utils/imageCompression.cjs');
 const { createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { createAiRequestQueue } = require('../utils/aiRequestQueue.cjs');
 const { bindAiRequestActivity, notifyAiResponse, withAiResponseActivity } = require('../utils/aiRequestActivity.cjs');
+const { fetchWithRedirect } = require('../utils/fetchWithRedirect.cjs');
 const {
   copyAiHttpError,
   createAiHttpErrorFromResponse,
@@ -31,11 +33,6 @@ const AI_REQUEST_TIMEOUT_MS = 600000;
 const MULTIMODAL_IMAGE_MAX_EDGE = 2048;
 const MULTIMODAL_IMAGE_JPEG_QUALITY = 85;
 
-// 金龙中转站废弃模型映射：使用这些模型时自动切换到替代模型
-const JINLONG_DEPRECATED_MODEL_MAP = {
-  'codex-auto-review': 'gpt-5.6-terra',
-  'gpt-5.6-luna': 'gpt-5.6-terra',
-};
 const IMAGE_MODEL_TEST_TIMEOUT_MESSAGE = '生图模型测试超时，请检查 Base URL、API Key 或模型名称';
 const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
@@ -486,17 +483,18 @@ async function downloadImage(url, options = {}) {
   };
 }
 
+// 生图结果落盘前压缩，后续正文、预览和 Word 均使用压缩后的文件。
 function saveGeneratedImage(app, image) {
   const imagesDir = getGeneratedImagesDir(app);
   fs.mkdirSync(imagesDir, { recursive: true });
-  const extension = imageExtensionFromMime(image.mime_type);
-  const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.${extension}`;
+  const compressed = compressGeneratedImage(image.buffer, imageExtensionFromMime(image.mime_type));
+  const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.${compressed.extension}`;
   const filePath = path.join(imagesDir, fileName);
-  fs.writeFileSync(filePath, image.buffer);
+  fs.writeFileSync(filePath, compressed.buffer);
   return {
     asset_url: `yibiao-asset://generated-images/${encodeURIComponent(fileName)}`,
     file_path: filePath,
-    mime_type: image.mime_type,
+    mime_type: compressed.extension === 'jpg' ? 'image/jpeg' : image.mime_type,
   };
 }
 
@@ -511,7 +509,7 @@ async function ensureOk(response, fallbackMessage, options = {}) {
 async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
   const sendRequest = async (body) => {
     try {
-      return await fetch(`${baseUrl}/images/generations`, {
+      return await fetchWithRedirect(`${baseUrl}/images/generations`, {
         method: 'POST',
         headers: createHeaders(apiKey),
         body: JSON.stringify(body),
@@ -896,15 +894,13 @@ async function collectJsonResponseWithConfig(app, config, request) {
   throw new Error(lastError?.message || failureMessage);
 }
 
-// 按文本模型设置统一输出上限，覆盖 Agent SDK 自带的长度参数；缓存预热等请求可单独指定上限。
+// 所有服务商统一使用 max_completion_tokens 设置输出上限，覆盖 Agent SDK 长度参数；请求可单独指定上限。
 function applyOutputTokenLimit(body, config, requestLimit = 0) {
   delete body.max_output_tokens;
   delete body.max_tokens;
   const limit = requestLimit > 0 ? requestLimit : config.output_token_limit;
   if (limit > 0) {
     body.max_completion_tokens = limit;
-    // 官方只接受新字段；其他服务商保留原有的双字段请求方式。
-    if (config.text_model_provider !== 'official') body.max_tokens = limit;
   } else {
     delete body.max_completion_tokens;
   }
@@ -913,11 +909,8 @@ function applyOutputTokenLimit(body, config, requestLimit = 0) {
 
 // 构造普通、流式及 JSON 文本请求。
 function createChatRequestBody(config, request, options = {}) {
-  const modelName = config.text_model_provider === 'jinlong'
-    ? (JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name)
-    : config.model_name;
   const body = {
-    model: modelName,
+    model: config.model_name,
     messages: request.messages,
   };
 
@@ -974,7 +967,7 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
   const baseUrl = requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
   try {
-    return await fetch(`${baseUrl}/chat/completions`, {
+    return await fetchWithRedirect(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: createHeaders(config.api_key, config.text_model_provider),
       body: JSON.stringify(body),
@@ -1368,7 +1361,7 @@ async function requestGoogleImageData(baseUrl, imageConfig, requestBody, request
   return withAiResponseActivity(async () => {
     let response = null;
     try {
-      response = await fetch(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
+      response = await fetchWithRedirect(createGoogleImageUrl(baseUrl, imageConfig.model_name, requestMode), {
         method: 'POST',
         headers: createGoogleHeaders(imageConfig.api_key),
         body: JSON.stringify(requestBody),
@@ -2659,7 +2652,7 @@ function createAiService({ app, configStore }) {
         data = await runWithAiRetry(async () => {
           let response = null;
           try {
-            response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
+            response = await fetchWithRedirect(`${trimBaseUrl(config.base_url)}/models`, {
               method: 'GET',
               headers: createHeaders(config.api_key, config.text_model_provider),
             });
@@ -2683,9 +2676,7 @@ function createAiService({ app, configStore }) {
       return {
         success: true,
         message: '模型列表已更新',
-        models: config.text_model_provider === 'jinlong'
-          ? models.filter((id) => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
-          : models,
+        models,
       };
     },
 

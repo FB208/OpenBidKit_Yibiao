@@ -54,19 +54,19 @@ const demoConfigs: Record<DeveloperDemoSectionId, DeveloperDemoConfig> = {
   'developer-export-preview': {
     kicker: 'Export Preview',
     title: '导出链路预演',
-    description: '预演正文、Markdown、Mermaid 和图片资产进入 Word 导出的完整路径，提前发现样式和资源缺失问题。',
+    description: '预演正文、Markdown 和图片资产进入 Word 导出的完整路径，提前发现样式和资源缺失问题。',
     accent: '导出前检查',
     metrics: [
       { label: '导出目标', value: '3', detail: 'Word、Markdown、图片' },
-      { label: '图表转换', value: 'Mermaid', detail: 'Renderer 预览 / Main 转图' },
+      { label: '图片来源', value: '2', detail: '导入图片、生成图片' },
       { label: '检查项', value: '16', detail: '目录、正文、图片、表格' },
     ],
     steps: [
       { title: '读取权威正文', text: '以 outlineData.outline[*].content 作为导出内容来源。' },
-      { title: '转换图表资源', text: '把 Mermaid 和导入图片统一转换为 Word 可用资源。' },
+      { title: '转换图片资源', text: '把导入图片和生成图片统一转换为 Word 可用资源。' },
       { title: '输出检查报告', text: '展示缺图、空章节、转换失败和导出耗时。' },
     ],
-    preview: ['章节正文', 'Mermaid 图表', '图片资源', '导出进度事件'],
+    preview: ['章节正文', '生成图片', '图片资源', '导出进度事件'],
   },
 };
 

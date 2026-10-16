@@ -11,6 +11,7 @@ export interface FloatingToolbarAction {
   tooltip?: string;
   disabled?: boolean;
   variant?: FloatingToolbarActionVariant;
+  className?: string;
   onClick: () => void;
 }
 
@@ -152,7 +153,7 @@ function ToolbarButton({ action }: { action: FloatingToolbarAction }) {
   const button = (
     <button
       type="button"
-      className={`floating-toolbar-button is-${action.variant || 'secondary'}`}
+      className={`floating-toolbar-button is-${action.variant || 'secondary'}${action.className ? ` ${action.className}` : ''}`}
       onClick={action.onClick}
       disabled={action.disabled}
     >

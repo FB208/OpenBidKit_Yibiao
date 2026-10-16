@@ -97,6 +97,11 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   html_image_optimization INTEGER NOT NULL DEFAULT 0,
   word_count_repair INTEGER NOT NULL DEFAULT 0,
   layout_check INTEGER NOT NULL DEFAULT 0,
+  -- v37 配图布局开关：1 表示用户未手动关闭；实际是否生效还取决于配图比例档位默认份额。
+  use_single_image_layout INTEGER NOT NULL DEFAULT 1,
+  use_image_text_layout INTEGER NOT NULL DEFAULT 1,
+  use_three_images_layout INTEGER NOT NULL DEFAULT 1,
+  use_four_images_layout INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

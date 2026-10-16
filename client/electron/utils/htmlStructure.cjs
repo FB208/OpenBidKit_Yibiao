@@ -21,12 +21,23 @@ function describe(node) {
   return `${at ? `第 ${at} 行` : ''}<${node.name}${id ? ` id="${id}"` : ''}>`;
 }
 
-// 找出会让整本 Word 导出报错或丢失内容的结构问题：元素未闭合，以及 figure 与 img 不符合转换要求。
-function findHtmlStructureIssues(html) {
+// 找出元素闭合和图片结构问题；正文生成保存时可同时检查源码是否在标签或注释中途结束。
+function findHtmlStructureIssues(html, { checkSourceCompleteness = false } = {}) {
   const source = String(html || '');
-  const $ = load(source, { sourceCodeLocationInfo: true }, false);
   // 解析器补建的格式元素沿用原标签位置，按源码位置去重，不同元素分别报告。
   const issues = new Map();
+  const $ = load(source, {
+    sourceCodeLocationInfo: true,
+    // 复用本次解析，只将 EOF 类错误作为源码未结束，普通文本比较符等容错提示不拦截。
+    onParseError(error) {
+      if (!checkSourceCompleteness || !error.code.startsWith('eof-')) return;
+      const reason = error.code === 'eof-in-comment' ? '注释尚未结束'
+        : error.code === 'eof-in-tag' ? '标签尚未结束'
+          : error.code === 'eof-before-tag-name' ? '标签尚未写完' : '元素源码尚未结束';
+      issues.set(`${error.startOffset}|${error.code}`,
+        `第 ${error.startLine} 行第 ${error.startCol} 列：${reason}（${error.code}）`);
+    },
+  }, false);
   const add = (node, message) => issues.set(`${node.sourceCodeLocation?.startOffset}|${message}`, message);
   // 异常标记通常是其后未闭合问题的起因，排在最前，便于在截取的说明中看到。
   for (const match of invalidEndTags(source)) {
@@ -78,8 +89,8 @@ function closeOpenTemplates(html) {
 }
 
 // 保存前校验：有问题时抛出可直接交给 Agent 修复的说明。
-function assertHtmlStructure(html) {
-  const issues = findHtmlStructureIssues(html);
+function assertHtmlStructure(html, options) {
+  const issues = findHtmlStructureIssues(html, options);
   if (issues.length) {
     throw new Error(`HTML 结构不完整，请修正后重新保存：${issues.slice(0, 8).join('；')}${issues.length > 8 ? `；另有 ${issues.length - 8} 处` : ''}。除 img 等空元素外，每个元素都要写出结束标签；每个 figure 以 </figure> 结束，并直接包含一个 img。`);
   }
