@@ -1145,6 +1145,7 @@ function progressFor(leaves, sections) {
 }
 
 const CONTENT_PHASE_LABELS = {
+  'export-repair': '导出修复',
   planning: '正文编排',
   restoring: '原方案还原',
   generating: '正文生成',
@@ -1389,7 +1390,90 @@ function withSection(sections, item, partial) {
   };
 }
 
+// 执行正文任务；导出修复直接续接原会话，结束后不进入生成和转换流程。
 async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState, layoutDocument = readWordLayout }) {
+  const repairContinuing = Boolean(payload.resume || payload.retryFailedSections || payload.retry_failed_sections);
+  if (payload.exportRepair || (repairContinuing && previousState?.contentGenerationRuntime?.phase === 'export-repair')) {
+    const stored = workspaceStore.loadTechnicalPlan();
+    const runtime = { ...stored.contentGenerationRuntime };
+    const previousStats = previousState?.contentGenerationTask?.stats || {};
+    let agentState;
+    let logs = [repairContinuing ? '继续导出修复，沿用原正文 Agent 会话。' : '开始导出修复，问题已交给原正文 Agent 会话。'];
+    const controller = new AbortController();
+    const signal = AbortSignal.any([taskControl.signal, controller.signal]);
+    // 沿用正文任务的暂停信号，停止本次会话请求后保留当前阶段。
+    const checkPause = () => {
+      if (taskControl.isPauseRequested() && !controller.signal.aborted) controller.abort(createContentGenerationPausedError());
+    };
+    const watcher = setInterval(checkPause, 500);
+
+    // 只报告任务与 Agent 活动，不以文件数量推断修复是否通过检查。
+    function publish(status, error, persist = true) {
+      const completed = status === 'success';
+      const detail = {
+        ...buildContentPhaseProgress({ phase: 'export-repair' }, logs.at(-1), 'html'),
+        phase_progress: completed ? 100 : 0, indeterminate: !completed,
+      };
+      const patch = {
+        status, progress: completed ? 100 : 0, progress_detail: detail, logs, error, pause_requested: false,
+        stats: { ...previousStats, agent: agentState,
+          content: { ...previousStats.content, phase: 'export-repair', workflow_progress: undefined, output_progress: detail } },
+      };
+      if (persist) {
+        runtime.updated_at = now();
+        checkpointManagedTask(patch, { contentGenerationRuntime: runtime });
+      } else {
+        updateManagedTask(patch);
+      }
+    }
+
+    try {
+      publish('running');
+      checkPause();
+      signal.throwIfAborted();
+      const sections = collectLeafContexts(stored.outlineData?.outline || [])
+        .filter(({ item }) => item.content_mode === 'ai-generate')
+        .map(({ item }) => ({ ...item, file: '正文/' + encodeURIComponent(item.id) + '.html' }));
+      await runContentGenerationAgent({
+        agentService, aiService, exportRepair: runtime.regenerate_requirement, sections,
+        generationOptions: stored.contentGenerationOptions, resume: repairContinuing, signal,
+        // 配图服务故障沿当前任务取消信号结束，不另行调度修复。
+        failTask(error) {
+          if (!controller.signal.aborted) controller.abort(error);
+        },
+        // Agent 高频状态只推送，阶段结束时统一持久化。
+        onCheckpoint(checkpoint) {
+          agentState = checkpoint;
+          publish('running', undefined, false);
+        },
+        // 将现有工具活动显示在正文任务日志中。
+        onActivity(event) {
+          const message = event.message || event.progress?.label;
+          if (event.visible === false || !message) return;
+          logs = [...logs, message];
+          publish('running', undefined, false);
+        },
+      });
+      checkPause();
+      signal.throwIfAborted();
+      logs.push('导出修复已结束，请重新点击导出。');
+      publish('success');
+    } catch (error) {
+      if (taskControl.signal.aborted) throw error;
+      if (controller.signal.reason?.code === AI_UPSTREAM_UNAVAILABLE) error = controller.signal.reason;
+      const paused = taskControl.isPauseRequested() || isPauseLikeError(error);
+      if (agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
+        agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
+          status: paused ? 'paused' : 'error', agent_connection: 'idle', error: paused ? null : error.message,
+        });
+      }
+      logs.push(paused ? '导出修复已暂停，继续时沿用原正文会话。' : error.message);
+      publish(paused ? 'paused' : 'error', paused ? undefined : error.message);
+    } finally {
+      clearInterval(watcher);
+    }
+    return;
+  }
   const resume = Boolean(payload.resume);
   const loadedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const continuing = resume || ['retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections'].some(field => payload[field]);

@@ -2780,10 +2780,9 @@ async function renderMarkdownForRestrictedHtml(content, assets, context) {
 
 function createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport } = {}) {
   return {
+    // 导出前检查技术方案正文，问题交给原正文任务后结束本次导出。
     async exportWord(payload = {}, onProgress) {
       const technicalExport = payload.source === 'technical-plan' ? getTechnicalPlanExport?.() : null;
-      // 用户确认正文结构问题后再次调用时直接导出，问题小节在转换前自动修复。
-      const structureConfirmed = payload.confirmStructureIssues === true;
       if (payload.source === 'technical-plan') {
         if (!technicalExport) throw new Error('本地数据库尚未就绪');
         payload = technicalExport.prepare({ exportFormat: payload.export_format });
@@ -2812,15 +2811,16 @@ function createExportService({ configStore, openXmlHelperService, getTechnicalPl
 
       const progressContext = { onProgress, warnings: [], stats };
       reportProgress(progressContext, 2, '正在准备 Word 导出。');
-      // 结构不完整会导致转换报错或后续小节丢失：先交给用户决定，不直接阻止导出。
-      if (technicalExport && !structureConfirmed) {
+      // 问题交给原正文任务修复，本次不继续打开保存对话框或转换 Word。
+      if (technicalExport) {
         const issues = technicalExport.inspect(payload);
         if (issues.length) {
           developerLogger.write('export.word.structure_issues', {
             section_count: issues.length,
             issue_count: issues.reduce((sum, item) => sum + item.problems.length, 0),
           });
-          return { success: false, needsConfirmation: true, issues, message: `${issues.length} 个小节的正文结构不完整` };
+          technicalExport.repair(issues);
+          return { success: false, message: `发现 ${issues.length} 个问题小节，已交给正文 Agent 修复。请在正文任务结束后重新导出。` };
         }
       }
       const defaultFilename = `${sanitizeFilename(payload.project_name || (payload.feasibility_options ? '可行性研究报告' : '标书文档'))}_${formatExportTimestamp()}.docx`;

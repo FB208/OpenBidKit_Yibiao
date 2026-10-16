@@ -516,12 +516,41 @@ ${planningHandoff ? '基础编排已由程序处理并保存：字数已校正�
 }
 
 // 基础编排、正文与后处理共用一次主调用；暂停后仍从持久 Session 和已保存阶段恢复。
-async function runContentGenerationAgent({ agentService, aiService, generationOptions = {}, resume, hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath,
+// 正文各阶段沿用原持久会话；导出修复只追加要求，不触发提交验收或后续阶段。
+async function runContentGenerationAgent({ agentService, aiService, generationOptions = {}, resume, exportRepair, sections = [], hasKnowledgeBase, hasOriginalPlan, resolveOriginalImagePath,
   signal, planning, prepareGeneration, buildFiles, checkLayout, onLayoutProgress = () => {}, onCheckpoint = () => {}, onActivity, onProgress,
   onWordAdjustProgress = () => {}, onConsistencyProgress = () => {}, onTableCleanupProgress = () => {}, onWorkspaceReady = () => {}, failTask = () => {} }) {
   const reuseSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
   const persistent = reuseSession ? agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY) : null;
   const persistentState = persistent?.state || {};
+  if (exportRepair) {
+    if (!reuseSession) throw new Error('原正文 Agent 会话不存在，无法执行导出修复');
+    const runId = crypto.randomUUID();
+    const prompted = resume && wasStagePrompted(persistentState, 'export-repair');
+    agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
+      run_id: runId, status: 'running', phase: 'export-repair', agent_connection: 'running', error: null,
+      ...(!resume ? { prompted_stage: null } : {}),
+    });
+    return agentService.runTask({
+      task_id: runId, title: '投标文件正文导出修复', primary_session: true, summary_enabled: false,
+      persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: 'resume' },
+      initial_stage: 'export-repair', output_file: RESULT_FILE,
+      prompt: prompted ? CONTINUE_PROMPT : exportRepair, signal,
+      max_retries: 0, timeout_ms: 30 * 60 * 1000,
+      json_validation_schemas: taskFileSchemas(),
+      active_tools: [...NATIVE_AGENT_TOOLS, 'ask-user', 'report-failure', 'list-section-images', 'apply-section-images', 'generate-section-images', 'render-html-image', 'render-mermaid-image'],
+      // 旧阶段登记的正文需允许编辑，否则 Runtime 收尾会将本次修复还原。
+      create_tools(context) {
+        context.baseline?.release(BASELINE_GROUPS.sections, sections.map(section => section.file));
+        return createContentGenerationImageTools({
+          aiService, signal, sections, onActivity, failTask,
+          htmlImageOptimization: generationOptions.htmlImageOptimization === true,
+        }, context);
+      },
+      onCheckpoint: checkpoint => onCheckpoint({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: runId }),
+      onActivity,
+    });
+  }
   const planningHandoff = Boolean(planning) || ['content-planning', 'restoring'].includes(persistentState.phase);
   const resuming = Boolean(resume && reuseSession && !planningHandoff);
   // 同一轮编排暂停或失败后继续，不属于新一轮任务。

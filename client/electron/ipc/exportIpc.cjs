@@ -1,22 +1,16 @@
 const { ipcMain, shell } = require('electron');
 
+// 每次导出操作记录一次计数；转入正文修复也结束本次导出并显示原有提醒。
 function registerExportIpc({ exportService, donationService }) {
-  // 确认正文结构问题后继续导出属于同一次点击：不重复计数，导出提醒留到真正导出结束后显示。
-  const deferredPrompts = new Map();
   ipcMain.handle('export:word', async (event, payload = {}) => {
     const requestId = payload.requestId || payload.request_id;
-    const donationPrompt = payload.confirmStructureIssues === true
-      ? deferredPrompts.get(requestId) ?? null
-      : donationService.recordWordExport({ deferPrompt: true });
-    deferredPrompts.delete(requestId);
+    const donationPrompt = donationService.recordWordExport({ deferPrompt: true });
     const sendProgress = (progress) => {
       event.sender.send('export:word-progress', { requestId, ...progress });
     };
 
-    let result;
     try {
-      result = await exportService.exportWord(payload, sendProgress);
-      return result;
+      return await exportService.exportWord(payload, sendProgress);
     } catch (error) {
       sendProgress({
         phase: 'error',
@@ -25,16 +19,8 @@ function registerExportIpc({ exportService, donationService }) {
       });
       throw error;
     } finally {
-      if (result?.needsConfirmation) deferredPrompts.set(requestId, donationPrompt);
-      else donationService.showPrompt(donationPrompt);
+      donationService.showPrompt(donationPrompt);
     }
-  });
-
-  // 用户取消结构确认即结束本次导出：清理待处理请求，与保存对话框取消一致照常显示导出提醒。
-  ipcMain.handle('export:cancel-word-confirmation', (_event, requestId) => {
-    const donationPrompt = deferredPrompts.get(requestId) ?? null;
-    deferredPrompts.delete(requestId);
-    donationService.showPrompt(donationPrompt);
   });
 
   ipcMain.handle('export:open-file', async (_event, filePath) => {

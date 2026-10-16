@@ -47,7 +47,7 @@ import {
   SIZE_OPTIONS,
 } from '../../../shared/types/exportFormat';
 import { formatOutlineNumber } from '../../../shared/utils/outlineNumbering';
-import type { OutlineItem, WordExportProgressEvent, WordExportStructureIssue } from '../../../shared/types';
+import type { OutlineItem, WordExportProgressEvent } from '../../../shared/types';
 import {
   EXPORT_LAYOUT_PRESETS,
   EXPORT_THEME_PRESETS,
@@ -332,7 +332,6 @@ function ExportFormatPage({
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const [exportSourceOpen, setExportSourceOpen] = useState(false);
   const [exportSource, setExportSource] = useState<'template' | 'bid'>('template');
-  const [exportStructureConfirm, setExportStructureConfirm] = useState<{ requestId: string; issues: WordExportStructureIssue[] } | null>(null);
   const [previewFullscreenOpen, setPreviewFullscreenOpen] = useState(false);
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -598,7 +597,8 @@ function ExportFormatPage({
    * 按所选来源导出模板样张或已有投标文件，共用进度和保存流程。
    * 投标文件与技术方案页走同一条整本导出，只把项目已选模板换成当前编辑的模板配置。
    */
-  const handleExportTest = useCallback(async (source: 'template' | 'bid', confirmed?: { requestId: string }) => {
+  // 模板样张正常导出；投标文件转入修复时不提示导出成功。
+  const handleExportTest = useCallback(async (source: 'template' | 'bid') => {
     setExportSourceOpen(false);
     setExportSource(source);
     let unsubscribe: (() => void) | undefined;
@@ -612,7 +612,7 @@ function ExportFormatPage({
         return;
       }
 
-      const requestId = confirmed?.requestId || `template-export-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const requestId = `template-export-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setExportProgress({
         open: true,
         running: true,
@@ -649,16 +649,16 @@ function ExportFormatPage({
           requestId,
           source: 'technical-plan',
           export_format: config,
-          ...(confirmed ? { confirmStructureIssues: true } : {}),
         });
-      if (result?.needsConfirmation) {
-        setExportProgress(initialExportProgress);
-        setExportStructureConfirm({ requestId, issues: result.issues || [] });
-        return;
-      }
       if (result?.canceled) {
         setExportProgress(initialExportProgress);
         showToast('已取消导出', 'info');
+        return;
+      }
+      if (result?.success === false) {
+        const message = result.message || '本次未导出 Word。';
+        setExportProgress({ open: true, running: false, progress: 100, message, warnings: [] });
+        showToast(message, 'info');
         return;
       }
 
@@ -687,13 +687,6 @@ function ExportFormatPage({
       unsubscribe?.();
     }
   }, [config, showToast]);
-
-  // 取消结构确认即结束本次导出，Main 清理待处理请求并照常显示导出提醒。
-  const cancelExportStructureConfirm = useCallback(() => {
-    const pending = exportStructureConfirm;
-    setExportStructureConfirm(null);
-    if (pending) void window.yibiao?.export.cancelWordConfirmation(pending.requestId);
-  }, [exportStructureConfirm]);
 
   const handleOpenExportedFile = useCallback(async () => {
     if (!exportProgress.filePath) return;
@@ -1608,37 +1601,6 @@ function ExportFormatPage({
           <button className="primary-action" type="button" onClick={() => { void handleExportTest('bid'); }}>从投标文件导出</button>
         </div>
       </AppDialog>
-      <AppDialog
-        open={Boolean(exportStructureConfirm)}
-        onOpenChange={(open) => !open && cancelExportStructureConfirm()}
-        kicker="导出测试"
-        title="部分小节正文结构不完整"
-        description="这些小节的正文存在未闭合的标签或异常的图片结构，多为模型输出被截断或漏写结束标签。继续导出时会自动补齐结构，无法修复的图片不导出；也可以取消后先在正文页重新生成这些小节。"
-        actions={(
-          <>
-            <button type="button" className="secondary-action" onClick={cancelExportStructureConfirm}>取消导出</button>
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => {
-                const confirmed = exportStructureConfirm;
-                setExportStructureConfirm(null);
-                if (confirmed) void handleExportTest('bid', { requestId: confirmed.requestId });
-              }}
-            >
-              继续导出
-            </button>
-          </>
-        )}
-      >
-        <div className="export-warning-list export-structure-list">
-          <strong>共 {exportStructureConfirm?.issues.length ?? 0} 个小节</strong>
-          {exportStructureConfirm?.issues.slice(0, 20).map((issue) => (
-            <small key={issue.section}>{issue.section}：{issue.problems.length} 处，如 {issue.problems[0]}</small>
-          ))}
-          {(exportStructureConfirm?.issues.length ?? 0) > 20 && <small>另有 {(exportStructureConfirm?.issues.length ?? 0) - 20} 个小节，继续导出后可在导出结果中查看。</small>}
-        </div>
-      </AppDialog>
       <Dialog.Root
         open={exportProgress.open}
         onOpenChange={(open) => {
@@ -1652,7 +1614,7 @@ function ExportFormatPage({
           <Dialog.Content className="export-progress-card">
             <div className="content-regenerate-card-head">
               <span className="section-kicker">导出测试</span>
-              <Dialog.Title>{exportProgress.running ? '正在导出测试' : exportProgress.error ? '导出失败' : '导出完成'}</Dialog.Title>
+              <Dialog.Title>{exportProgress.running ? '正在导出测试' : exportProgress.error ? '导出失败' : exportProgress.filePath ? '导出完成' : '本次未导出'}</Dialog.Title>
               <Dialog.Description>
                 {exportSource === 'template' ? '本次导出当前模板的预览样张。' : '本次使用当前模板导出已生成的投标文件。'}
               </Dialog.Description>

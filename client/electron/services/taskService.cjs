@@ -1459,8 +1459,23 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         primarySession: agentService.isPrimarySession({ task_key: GLOBAL_FACTS_AGENT_TASK_KEY }),
       });
     },
+    // 正文生成、单节修改和导出修复共用任务管理，修复不重置生成状态。
     startContentGeneration(payload) {
       const technicalPlan = technicalPlanStore.loadTechnicalPlan();
+      const runtime = technicalPlan.contentGenerationRuntime || {};
+      const continuingRepair = Boolean((payload?.resume || payload?.retryFailedSections || payload?.retry_failed_sections)
+        && runtime.phase === 'export-repair');
+      if (payload?.exportRepair || continuingRepair) {
+        if (isActiveTaskStatus(activeTasks.get('content-generation')?.status)) {
+          throw new Error('当前正文任务正在执行，请等待完成后再导出');
+        }
+        return startManagedTask('content-generation', payload, runContentGenerationTask, {
+          contentGenerationRuntime: {
+            ...runtime, phase: 'export-repair', target_item_id: '',
+            regenerate_requirement: payload.exportRepair || runtime.regenerate_requirement,
+          },
+        }, { primarySession: true });
+      }
       if (!technicalPlan.outlineWordControlSnapshot) {
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
       }

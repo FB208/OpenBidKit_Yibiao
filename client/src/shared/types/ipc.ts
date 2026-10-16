@@ -54,21 +54,12 @@ export interface WordExportProgressEvent {
   warnings?: string[];
 }
 
-/** 整本导出前发现的正文结构问题，按小节汇总。 */
-export interface WordExportStructureIssue {
-  section: string;
-  problems: string[];
-}
-
 export interface WordExportResult {
   success: boolean;
   canceled?: boolean;
   path?: string;
   message?: string;
   warnings?: string[];
-  /** 为 true 时尚未导出，需用户确认结构问题后带 confirmStructureIssues 再次调用。 */
-  needsConfirmation?: boolean;
-  issues?: WordExportStructureIssue[];
 }
 
 export interface CheckResultExportResult {
@@ -835,7 +826,6 @@ export interface YibiaoBridge {
   export: {
     exportWord: (payload: unknown) => Promise<WordExportResult>;
     /** 用户取消正文结构确认时结束该次导出请求。 */
-    cancelWordConfirmation: (requestId: string) => Promise<void>;
     openFile: (filePath: string) => Promise<{ success: boolean }>;
     onWordExportProgress: (callback: (event: WordExportProgressEvent) => void) => () => void;
   };
