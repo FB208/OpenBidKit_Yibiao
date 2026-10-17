@@ -69,6 +69,7 @@ function AgentTestPage() {
   const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus | null>(null);
   const [selfCheckResult, setSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [task, setTask] = useState(DEFAULT_TASK);
+  const [parallelSearch, setParallelSearch] = useState(false);
   const [runningAction, setRunningAction] = useState<'test' | 'self-check' | 'restart' | ''>('');
   const [steps, setSteps] = useState<TestStep[]>(() => createInitialSteps());
   const [result, setResult] = useState<AgentRunResult | null>(null);
@@ -122,6 +123,7 @@ function AgentTestPage() {
       const runtimeName = 'Pi Agent';
       setSteps((previous) => updateStep(previous, 'agent', { status: 'running', detail: `正在使用 ${runtimeName} 执行任务` }));
       const agentResult = await bridge.agent.run({
+        parallel_search: parallelSearch,
         title: `${runtimeName} 开发者链路测试`,
         task,
         output_file: 'agent-result.md',
@@ -239,6 +241,11 @@ function AgentTestPage() {
 
           <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff' }}>
             <h2 style={{ marginTop: 0, fontSize: 18 }}>测试任务</h2>
+            <label style={{ display: 'block', marginBottom: 12 }}>
+              <input type="checkbox" checked={parallelSearch} onChange={(event) => setParallelSearch(event.target.checked)} disabled={busy} />
+              {' '}启用 Parallel 公开网页搜索与读取（本次任务）
+            </label>
+            {parallelSearch && <p style={{ color: '#64748b' }}>无需 Parallel 账号或 API Key。搜索词和网页地址会发送给 Parallel，仅用于公开资料，请勿输入客户资料或招投标文件内容。</p>}
             <textarea value={task} onChange={(event) => setTask(event.target.value)} disabled={busy} style={{ width: '100%', minHeight: 180, resize: 'vertical', border: '1px solid #cbd5e1', borderRadius: 8, padding: 12, fontFamily: 'monospace', lineHeight: 1.6 }} />
             <button type="button" onClick={() => { void runTest(); }} disabled={busy} style={{ marginTop: 16, padding: '10px 16px', border: 0, borderRadius: 8, background: busy ? '#94a3b8' : '#2563eb', color: '#fff' }}>
               {runningAction === 'test' ? '测试中...' : '运行完整链路测试'}

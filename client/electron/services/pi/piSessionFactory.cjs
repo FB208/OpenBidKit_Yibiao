@@ -23,6 +23,7 @@ const {
 } = require('./piSummaryControl.cjs');
 
 const { NATIVE_AGENT_TOOLS } = require('../agent/agentToolEnvironment.cjs');
+const { createPiParallelSearchTools } = require('./piParallelSearchTools.cjs');
 let piModulesPromise = null;
 const FIXED_TOOL_LIST_INSTRUCTIONS = '工具列表覆盖本任务的全部阶段。read、write、edit、bash、grep、find、ls 全程可用，优先按当前任务指导选择工具；业务工具仍按当前阶段使用。';
 
@@ -49,7 +50,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, requestTerminationDecision, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, requestTerminationDecision, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline, parallelSearch = false }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -162,7 +163,10 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     requestedTools = withNativeTools(toolNames);
     if (!fixedToolList) session?.setActiveToolsByName(requestedTools);
   };
-  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir, setActiveTools, baseline }) || []).map(tool => codingAgent.defineTool(tool));
+  const taskTools = [
+    ...(parallelSearch ? createPiParallelSearchTools({ Type: typebox.Type }) : []),
+    ...(createTools?.({ Type: typebox.Type, workspaceDir, setActiveTools, baseline }) || []),
+  ].map(tool => codingAgent.defineTool(tool));
   let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : []), ...taskTools];
   if (summaryEnabled === false && !isFinalToolCall) {
     customTools = [
