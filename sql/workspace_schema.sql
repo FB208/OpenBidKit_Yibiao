@@ -4,7 +4,7 @@
 -- 1. 本文件用于开源开发者阅读、评审和排查问题，展示 workspace/yibiao.sqlite 的目标完整表结构。
 -- 2. 用户运行客户端时不需要手动执行本文件。
 -- 3. 客户端运行时建表和升级以 Electron Main 侧 migration 代码为准。
--- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、官方 API 开票信息 v24、统一生成配置 v25、单企业资信库 v26、导出模板样式范围 v32 目标结构。
+-- 4. 当前运行代码已落地 technical_plan_* v1、duplicate_check_* / rejection_check_* v2、knowledge_* v3、technical_plan_global_fact_groups v4、标段兼容 v5/v6、标段选择 v7、旧待选择标段兼容字段 v8、工作流类型和原方案文件状态 v9、招标解析项选择配置 v10、知识库排序 v11、废标项检查多投标文件 v12、已有方案目录配置 v13、多标段优化状态 v14、导出模板库 v15、多招标文件 v16、全文图片编排 v17、目录字数控制 v18、全局事实补全模式 v22、可行性研究报告 v23、官方 API 开票信息 v24、统一生成配置 v25、单企业资信库 v26、导出模板样式范围 v32、暗标合规检查 v38 目标结构。
 -- 5. 每次表结构调整后，需要同步更新本文件和 runtime migration 版本。
 -- 6. 本文件不保存历史版本，每次更新都写入最新目标完整结构。
 
@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 34;
+PRAGMA user_version = 42;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -1026,3 +1026,134 @@ CREATE TABLE IF NOT EXISTS official_invoice_info (
   tax_number TEXT NOT NULL DEFAULT '',
   email TEXT NOT NULL DEFAULT ''
 );
+
+-- 暗标合规检查 blind_check_*（v38）：单个待检文档、用户格式预设、检查任务与归并后的问题分组。
+-- 内置格式预设定义在 electron/services/blindCheckPresets.cjs，不入库。
+CREATE TABLE IF NOT EXISTS blind_check_meta (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  step TEXT NOT NULL DEFAULT 'upload',
+  preset_id TEXT NOT NULL DEFAULT 'builtin-general',
+  preset_tab TEXT NOT NULL DEFAULT 'page',
+  result_tab TEXT NOT NULL DEFAULT 'all',
+  use_credential_words INTEGER NOT NULL DEFAULT 1,
+  file_id TEXT,
+  file_name TEXT,
+  source_path TEXT,
+  original_path TEXT,
+  file_size INTEGER NOT NULL DEFAULT 0,
+  file_modified_at TEXT,
+  content_hash TEXT,
+  imported_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  fix_rules_json TEXT,
+  ai_review_enabled INTEGER NOT NULL DEFAULT 1,
+  -- v42：上次修复是否选择了程序修复 + AI 修复，作为下次修复弹窗的默认选项；ai_review_enabled 同样记的是上次检查的选择。
+  fix_ai_enabled INTEGER NOT NULL DEFAULT 1
+);
+
+-- source_json（v40）：AI 从招标文件提取生成的预设记录出处（招标文件名、各字段的值与原文依据、未要求项、需人工核对的条款）。
+CREATE TABLE IF NOT EXISTS blind_check_presets (
+  preset_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  profile_json TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  source_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS blind_check_tasks (
+  type TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  progress INTEGER NOT NULL DEFAULT 0,
+  stats_json TEXT,
+  error TEXT,
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS blind_check_results (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  status TEXT NOT NULL DEFAULT 'idle',
+  input_signature TEXT,
+  preset_name TEXT,
+  summary_json TEXT,
+  stats_json TEXT,
+  rule_errors_json TEXT,
+  error TEXT,
+  updated_at TEXT
+);
+
+-- candidate、items_json（v41）：候选问题（规则只能初筛，交 AI 复核判定）及其带段落编号的定位条目，只有候选组保存条目。
+CREATE TABLE IF NOT EXISTS blind_check_finding_groups (
+  group_id TEXT PRIMARY KEY,
+  rule_id TEXT NOT NULL,
+  rule_title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  message TEXT NOT NULL,
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  samples_json TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  candidate INTEGER NOT NULL DEFAULT 0,
+  items_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_blind_check_finding_groups_order
+ON blind_check_finding_groups(sort_order);
+
+-- 暗标 AI 复核（v41）：程序检查后由持久 Agent 对照招标文件补漏、判定候选问题、逐条对照招标条款；
+-- review_json 保存条款对照、候选判定、补充问题和总结，与检查结果按输入签名绑定。
+CREATE TABLE IF NOT EXISTS blind_check_reviews (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  status TEXT NOT NULL DEFAULT 'idle',
+  input_signature TEXT,
+  tender_name TEXT,
+  review_json TEXT,
+  error TEXT,
+  updated_at TEXT
+);
+
+-- 暗标自动修复（v39）：修复副本在 workspace/blind-check/fixed/，原文件不改动；
+-- 单行记录本次修复的勾选项、修改统计、校验结果与修复前后汇总，复查剩余的问题分组单独存放。
+CREATE TABLE IF NOT EXISTS blind_check_fix_results (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  status TEXT NOT NULL DEFAULT 'idle',
+  input_signature TEXT,
+  fix_rules_json TEXT,
+  output_path TEXT,
+  source_bytes INTEGER NOT NULL DEFAULT 0,
+  output_bytes INTEGER NOT NULL DEFAULT 0,
+  fixes_json TEXT,
+  notes_json TEXT,
+  validation_json TEXT,
+  before_summary_json TEXT,
+  before_rule_counts_json TEXT,
+  after_summary_json TEXT,
+  after_stats_json TEXT,
+  error TEXT,
+  updated_at TEXT,
+  -- v41：与检查结果逐条对应的修复结论、修复后新出现的问题、修复后的条款对照、AI 修复阶段的状态与修改记录。
+  items_json TEXT,
+  new_groups_json TEXT,
+  clauses_json TEXT,
+  agent_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS blind_check_fix_groups (
+  group_id TEXT PRIMARY KEY,
+  rule_id TEXT NOT NULL,
+  rule_title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  message TEXT NOT NULL,
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  samples_json TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_blind_check_fix_groups_order
+ON blind_check_fix_groups(sort_order);

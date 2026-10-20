@@ -61,7 +61,6 @@
 【[易标 Web 版 (由第三方提供)](https://github.com/jdcome/OpenBidKit-Yibiao-Web)】
 
 <img src="./screenshots/banner2.webp" alt="易标使用演示视频" width="100%">
-s
 
 <h2 align="center">✨ 核心功能与优势</h2>
 <p align="center">

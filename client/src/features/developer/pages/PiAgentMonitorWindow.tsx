@@ -301,7 +301,10 @@ function applyMonitorEvent(tasks: MonitorTask[], event: AgentMonitorEvent) {
       id: `retry-${event.sequence}`,
       kind: 'system',
       at: event.at,
-      text: `自动修复 ${event.attempt || 0}/${event.maximum || 0}：${event.message || '上一轮结果未通过'}`,
+      // 带上限的是执行出错后的重试；没有上限的是提交结果未通过业务校验、退回 Agent 修改自己的结果文件。
+      text: event.maximum
+        ? `执行重试 ${event.attempt || 0}/${event.maximum}：${event.message || '上一轮执行失败'}`
+        : `提交修复 第 ${event.attempt || 0} 次：${event.message || '上一轮结果未通过校验'}`,
       tone: 'warning',
       complete: true,
     });

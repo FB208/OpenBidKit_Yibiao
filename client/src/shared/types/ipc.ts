@@ -4,6 +4,7 @@ import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSe
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
+import type { BlindCheckCredentialWord, BlindCheckPreset, BlindCheckProfile, BlindCheckTenderSources, BlindCheckWorkspacePatch, BlindCheckWorkspaceState } from '../../features/blind-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanGenerationConfig, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
 import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
 import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey, CredentialLibraryImportResult, CredentialLibraryMutationResult, CredentialLibraryProfile, CredentialLibrarySnapshot, CredentialOtherMaterial, CredentialProject, CredentialRecordSavePayload } from '../../features/credential-library/types';
@@ -43,6 +44,8 @@ export interface TaskEvent<TState = unknown, TRejectionCheckState = unknown, TDu
   rejectionCheckPatch?: RejectionCheckWorkspacePatch;
   duplicateCheck?: TDuplicateCheckState;
   duplicateCheckPatch?: DuplicateCheckWorkspacePatch;
+  blindCheck?: BlindCheckWorkspaceState;
+  blindCheckPatch?: BlindCheckWorkspacePatch;
   feasibilityReportPatch?: Partial<FeasibilityReportState>;
 }
 
@@ -686,6 +689,9 @@ export interface YibiaoBridge {
   };
   file: {
     selectDuplicateCheckFiles: (options?: { multiple?: boolean; filePaths?: string[] }) => Promise<FileSelectionResult>;
+    /** 暗标合规检查只接受单个 .docx。 */
+    selectBlindCheckFile: (options?: { filePaths?: string[] }) => Promise<FileSelectionResult>;
+    selectBlindCheckTenderFile: () => Promise<FileSelectionResult>;
     /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */
     getPathForFile: (file: File) => string;
   };
@@ -793,6 +799,27 @@ export interface YibiaoBridge {
     exportExcel: (request: { rejectionInputSignature: string; bidSignature: string }) => Promise<CheckResultExportResult>;
     clear: () => Promise<{ success: boolean; message?: string }>;
   };
+  blindCheck: {
+    loadState: () => Promise<BlindCheckWorkspaceState>;
+    /** 复制到工作区后作为待检文档；会取消正在运行的检查。 */
+    importFile: (filePath: string) => Promise<BlindCheckWorkspaceState>;
+    removeFile: () => Promise<BlindCheckWorkspaceState>;
+    saveUiState: (payload: Partial<Pick<BlindCheckWorkspaceState, 'step' | 'presetTab' | 'resultTab'>>) => Promise<void>;
+    listPresets: () => Promise<BlindCheckPreset[]>;
+    /** 以 basePresetId 为底稿新建我的预设，并设为当前预设。 */
+    createPreset: (payload: { name?: string; basePresetId: string }) => Promise<BlindCheckPreset>;
+    updatePreset: (presetId: string, patch: { name?: string; profile?: BlindCheckProfile }) => Promise<BlindCheckPreset>;
+    deletePreset: (presetId: string) => Promise<BlindCheckPreset[]>;
+    selectPreset: (presetId: string) => Promise<BlindCheckWorkspaceState>;
+    setUseCredentialWords: (enabled: boolean) => Promise<BlindCheckWorkspaceState>;
+    getCredentialWords: () => Promise<BlindCheckCredentialWord[]>;
+    /** 当前文档、预设和敏感词对应的检查输入签名；未选文档时为 null。 */
+    getInputSignature: () => Promise<string | null>;
+    saveFixRules: (rules: string[]) => Promise<BlindCheckWorkspaceState>;
+    saveFixedDocument: () => Promise<CheckResultExportResult>;
+    getTenderSources: () => Promise<BlindCheckTenderSources>;
+    clear: () => Promise<BlindCheckWorkspaceState>;
+  };
   templates: {
     list: () => Promise<ExportTemplateRecord[]>;
     get: (templateId: string) => Promise<ExportTemplateRecord | null>;
@@ -814,6 +841,11 @@ export interface YibiaoBridge {
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;
     startDuplicateAnalysis: (payload: unknown) => Promise<unknown>;
+    /** aiReview：仅程序检查（false）或程序检查 + AI 复核（true）。 */
+    startBlindCheck: (payload: { aiReview: boolean }) => Promise<unknown>;
+    /** ai：仅程序修复（false）或程序修复 + AI 修复（true）。 */
+    startBlindCheckFix: (payload: { ai: boolean }) => Promise<unknown>;
+    startBlindCheckPresetExtraction: (payload: { source: 'technical-plan' | 'file'; filePath?: string }) => Promise<unknown>;
     startFeasibilityAnalysis: (payload?: unknown) => Promise<unknown>;
     startFeasibilityOutline: (payload?: unknown) => Promise<unknown>;
     startFeasibilityParameters: (payload?: unknown) => Promise<unknown>;

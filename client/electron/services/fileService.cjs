@@ -798,6 +798,63 @@ const config = configStore ? configStore.load() : { components: { file_parser: {
         files,
       };
     },
+
+    /** 暗标格式提取用的招标文件：只选择，解析放到后台任务里做。 */
+    async selectBlindCheckTenderFile() {
+      const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
+      const provider = config.components?.file_parser?.provider || 'local';
+      const supportedExtensions = getSelectableExtensions(provider);
+      const result = await dialog.showOpenDialog({
+        title: '选择招标文件',
+        properties: ['openFile'],
+        filters: [
+          { name: parserLabels[provider] || '招标文件', extensions: [...supportedExtensions].map((item) => item.slice(1)) },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, message: '已取消选择', files: [] };
+      }
+      if (!supportedExtensions.has(path.extname(result.filePaths[0]).toLowerCase())) {
+        return { success: false, message: `当前${parserLabels[provider] || '解析方式'}不支持该文件格式`, files: [] };
+      }
+      return { success: true, message: '已选择 1 个文件', files: [await createLocalFileSelection(result.filePaths[0])] };
+    },
+
+    /** 按当前解析配置把招标文件转成 Markdown，不保留图片。 */
+    async parseBlindCheckTender(filePath) {
+      const config = configStore ? configStore.load() : { components: { file_parser: { provider: 'local' } } };
+      const parser = resolveFileParser(config, filePath);
+      const assetHash = crypto.createHash('sha1').update(String(filePath)).digest('hex').slice(0, 12);
+      let content = '';
+      try {
+        content = (await parseDocumentWithConfig(app, filePath, config, { assetScope: `blind-check-tender-${assetHash}`, preserveImages: false })).trim();
+      } catch (error) {
+        throw new Error(`${path.basename(filePath)}：${formatImportError(error, filePath)}`);
+      }
+      if (!content) throw new Error(`${path.basename(filePath)}：未提取到有效文字，请检查文件内容`);
+      return { fileName: path.basename(filePath), content, parserLabel: parserLabels[parser.provider] || '本地解析' };
+    },
+
+    /** 暗标合规检查只接受 .docx：.doc/.wps 转换会改变格式，检查结果就不准了。 */
+    async selectBlindCheckFile(options = {}) {
+      let selectedPaths = normalizeProvidedFilePaths(options?.filePaths).slice(0, 1);
+      if (!selectedPaths.length) {
+        const result = await dialog.showOpenDialog({
+          title: '选择需要检查的投标文件',
+          properties: ['openFile'],
+          filters: [{ name: 'Word 文档', extensions: ['docx'] }],
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+          return { success: false, message: '已取消选择', files: [] };
+        }
+        selectedPaths = result.filePaths.slice(0, 1);
+      }
+      if (path.extname(selectedPaths[0]).toLowerCase() !== '.docx') {
+        return { success: false, message: '暗标合规检查仅支持 .docx，请先在 Word / WPS 中另存为 .docx', files: [] };
+      }
+      return { success: true, message: '已选择 1 个文件', files: [await createLocalFileSelection(selectedPaths[0])] };
+    },
   };
 }
 
