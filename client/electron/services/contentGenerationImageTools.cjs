@@ -8,6 +8,7 @@ const { AI_IMAGE_STYLES } = require('./aiImageStyles.cjs');
 const { TASK_DIR, LIST_DIR, TASK_FILE_WRITING, taskFilePath, readTaskFile, writeListFile, compactResults } = require('./contentGenerationTaskFiles.cjs');
 const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
 const { compressGeneratedImage } = require('../utils/imageCompression.cjs');
+const { ORIGINAL_GENERATION, allowedImageGenerations, imageKindList } = require('./contentImageKinds.cjs');
 
 const AI_IMAGE_STYLE_OPTIONS = Object.entries(AI_IMAGE_STYLES).map(([key, { label, usage }]) => `${key}=${label}（${usage}）`).join('；');
 
@@ -31,7 +32,9 @@ function validateContentImageReferences(workspaceDir, html) {
 }
 
 // 读取最新正文并保留原文位置；不重新序列化 HTML，避免改变正文和图组布局。
-function readSectionImages(workspaceDir, section) {
+// 原图（original 标记、原图/ 引用或本节原图对应关系，兼容旧正文的 aiImage 标记）只复用；
+// 生成方式只约束待生成的图片，已有有效图片即使所用方式已关闭（如生图模型不可用后关闭 AI 生图）也照常读取和复用。
+function readSectionImages(workspaceDir, section, generations) {
   const file = resolveImageWorkspaceFile(workspaceDir, section.file);
   const html = fs.readFileSync(file, 'utf8');
   const $ = load(html, { sourceCodeLocationInfo: true }, false);
@@ -48,21 +51,22 @@ function readSectionImages(workspaceDir, section) {
     if (node.find('figure').length || image.length !== 1 || prompt.length !== 1 || !prompt.text().trim()) {
       throw new Error(`图片 ${id} 必须有一个 img 和一个非空提示词，不能嵌套 figure`);
     }
-    if (!['aiImage', 'htmlImage', 'mermaid'].includes(generation) || !['square', 'wide', 'tall', 'panorama'].includes(frameSize)) {
-      throw new Error(`图片 ${id} 的生成方式或画框比例无效`);
-    }
+    if (!['square', 'wide', 'tall', 'panorama'].includes(frameSize)) throw new Error(`图片 ${id} 的画框比例无效`);
     const reference = image.attr('data-yb-asset-ref') || '';
-    const table = node.closest('table');
-    const layout = table.length ? table.attr('data-yb-preset') || '' : 'single';
+    const reusedOriginal = generation === ORIGINAL_GENERATION || reference.startsWith('原图/')
+      || Boolean(section.restored_content?.images?.some(item => item.asset_ref === reference));
     const exists = reference ? fs.existsSync(resolveImageWorkspaceFile(workspaceDir, reference))
       && fs.statSync(resolveImageWorkspaceFile(workspaceDir, reference)).isFile() : false;
+    if (!reusedOriginal && !exists && !generations.has(generation)) throw new Error(`图片 ${id} 的生成方式无效，请按配图类型对照表填写`);
+    const table = node.closest('table');
+    const layout = table.length ? table.attr('data-yb-preset') || '' : 'single';
     return {
       image_id: `${encodeURIComponent(section.id)}/${encodeURIComponent(id)}`,
       section_id: section.id, file: section.file, figure_id: id,
       generation, frame_size: frameSize, prompt: prompt.text().trim(),
       alt: image.attr('alt') || '', caption: node.find('figcaption').text().trim(),
       asset_ref: reference, asset_exists: exists,
-      reused_original: reference.startsWith('原图/') || Boolean(section.restored_content?.images?.some(item => item.asset_ref === reference)),
+      reused_original: reusedOriginal,
       fit: node.attr('data-yb-fit') || '',
       layout, table: table[0], image_text_left: layout === 'imageText' && node.closest('td').prevAll('td').length === 0,
       location: image[0].sourceCodeLocation,
@@ -105,7 +109,15 @@ function buildImageSourcePrompt(kind, frameSize) {
 // 图片与独立源码均保存在当前工作区；源码生成使用文本队列，转图继续复用本地渲染。
 // 任务从 taskDir 下的任务文件读取，完整图片清单写入 listDir；单节修改使用独立子目录。
 // 服务端连续失败时 failTask 结束所属任务，本批已完成图片仍随工具结果保留。
-function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, sections = [], getSections = () => sections, beforeApply = () => {}, failTask = () => {}, taskDir = TASK_DIR, listDir = LIST_DIR }, { Type, workspaceDir }) {
+// 已开启的生成方式名称，供调用方设置 active_tools；清单与回填始终可用。
+function imageToolNames(kinds) {
+  return ['list-section-images', 'apply-section-images', ...(kinds.length ? ['generate-section-images'] : []),
+    ...['html', 'mermaid'].filter(kind => kinds.includes(kind)).map(kind => `render-${kind}-image`)];
+}
+
+// imageKinds 为已开启的生成方式：只注册对应的生成和转图工具，描述、清单统计和任务校验也只覆盖这些方式。
+function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, imageKinds = [], sections = [], getSections = () => sections, beforeApply = () => {}, failTask = () => {}, taskDir = TASK_DIR, listDir = LIST_DIR }, { Type, workspaceDir }) {
+  const generations = allowedImageGenerations(imageKinds);
   // 进度只发给业务程序，不增加模型上下文或工具调用；已有图片跳过的项按完成展示。
   const report = (step, label, items, extra = {}) => onActivity?.({ progress: { step, label, unit: '张', items, ...extra } });
   const imageProgress = result => ({ id: result.image_id, status: result.status === 'skipped' ? 'success' : result.status || 'rendering', kind: result.kind,
@@ -140,14 +152,14 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     for (const [id, group] of groups) {
       combinedSignal?.throwIfAborted();
       try {
-        const { file, html, images: current } = readSectionImages(workspaceDir, targets.get(id));
+        const { file, html, images: current } = readSectionImages(workspaceDir, targets.get(id), generations);
         const edits = [];
         for (const item of group) {
           const image = current.find(image => image.image_id === item.image_id);
           if (!image) throw new Error(`图片标识不存在：${item.image_id}`);
           const asset = resolveImageWorkspaceFile(workspaceDir, item.asset_ref);
           if (!fs.existsSync(asset) || !fs.statSync(asset).isFile()) throw new Error(`图片文件不存在：${item.asset_ref}`);
-          if (!/\.(?:png|jpe?g|webp|gif|bmp)$/i.test(item.asset_ref)) throw new Error('回填必须使用图片资源，不能使用 HTML/Mermaid 源码');
+          if (!/\.(?:png|jpe?g|webp|gif|bmp)$/i.test(item.asset_ref)) throw new Error('回填必须使用图片资源，不能使用绘图源码');
           if (image.asset_ref === item.asset_ref) continue;
           if (image.asset_ref !== item.previous_asset_ref) throw new Error(`图片引用已变化，请刷新清单：${item.image_id}`);
           edits.push(imageReferenceEdit(html, image, item.asset_ref));
@@ -176,7 +188,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     for (const id of new Set(images.map(image => decodeURIComponent(image.image_id.split('/')[0])))) {
       try {
         if (!targets.has(id)) throw new Error('图片不属于本次目标小节，请使用清单中的 image_id');
-        for (const image of readSectionImages(workspaceDir, targets.get(id)).images) references.set(image.image_id, image);
+        for (const image of readSectionImages(workspaceDir, targets.get(id), generations).images) references.set(image.image_id, image);
       } catch (error) { errors.set(id, error.message); }
     }
     return image => {
@@ -186,8 +198,10 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
   }
 
   // 已有有效图片视为完成，重复提交同一任务文件不重新生成；regenerate 明确要求替换，原方案图片始终复用。
+  // 所用生成方式已关闭的已有图片只复用，不重新生成，避免改用其他方式悄悄替换。
   function completedImage(current, image) {
     if (current.reused_original && !current.asset_exists) throw new Error('原方案图片不重新生成，请修复原图引用');
+    if (image.regenerate && !current.reused_original && !generations.has(current.generation)) throw new Error('该图片只能复用，不能重新生成');
     return current.asset_exists && (current.reused_original || !image.regenerate);
   }
 
@@ -271,6 +285,22 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
   const listFile = `${listDir}/正文图片清单.json`;
   const taskFile = key => taskFilePath(key, taskDir);
   const skipNote = '对应图片已有有效引用时自动跳过，重复提交同一任务文件不会重新生成；需要替换已有图片时该项加 "regenerate": true，原方案图片不重新生成。';
+  const hasAi = imageKinds.includes('ai');
+  const hasHtml = imageKinds.includes('html');
+  const sourceKinds = ['html', 'mermaid'].filter(kind => imageKinds.includes(kind));
+  const sourceLabel = sourceKinds.map(kind => (kind === 'html' ? 'HTML' : 'Mermaid')).join('/');
+  const generateDescription = [
+    `读取 ${taskFile('images')} 中的全部图片任务并提交生成，格式为 {"images":[{"image_id":"清单标识","kind":"${imageKindList(imageKinds)}","prompt":"…"}]}。image_id 原样使用正文图片清单标识，文件内唯一；kind 为 ${imageKindList(imageKinds)}${imageKinds.length > 1 ? ' 之一' : ''}。`,
+    hasAi ? `AI 项 prompt 按主体、可见元素、视角景别与构图、环境光线依次正向描述画面，写出区分本图的具体视觉元素，保留与正文画框一致的宽高比例及构图方向；画面形式由 style 决定，不写冲突的风格描述，品牌、水印和无关文字的限制由程序统一追加，无须重复罗列。AI 项必填 size：逐图依据正文 data-yb-size 选择对应比例的具体尺寸，square=1:1、wide=3:2、tall=3:4、panorama=16:9，当前金龙 gpt-image-2-1k 的 tall 使用 768x1024，不得传画框名称或省略尺寸；必填 style，按该图 template 中注明的画面形式选择：${AI_IMAGE_STYLE_OPTIONS}；可选 title 为简短图名。` : '',
+    sourceKinds.length ? `${sourceLabel} 项 prompt 写明图片表达目的、准确内容和数据，保留与正文画框一致的宽高比例及构图方向，不只给文件路径或要求模型检索。` : '',
+    hasHtml ? 'HTML 项必填 frame_size，与正文 figure 的 data-yb-size 一致。' : '',
+    `${skipNote}${TASK_FILE_WRITING}`,
+    `${[hasAi && 'AI 使用生图队列', sourceKinds.length && `${sourceLabel} 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列`].filter(Boolean).join('，')}；超限自动排队。`,
+    `每张成功后程序立即回填正文图片引用，无须再调用回填工具。返回 total、applied（本次成功并回填的数量）、skipped（已有图片跳过的数量）和 unresolved；unresolved 只列未成功或回填失败的项，含 status、stage、asset_ref${sourceKinds.length ? '、source_file' : ''}、error，回填失败另有 apply_error 与 previous_asset_ref，可刷新清单后用回填工具重试。`,
+    hasHtml && htmlImageOptimization ? 'HTML 返回 needs_repair 时，按 layout_issues 修改源码后转图，直到成功。' : '',
+    sourceKinds.length ? '有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。' : '',
+    '暂停结果保留已完成产物，恢复仅补未完成项。',
+  ].join('');
   return [{
     name: 'list-section-images', label: '读取正文图片清单', executionMode: 'sequential',
     description: `读取本轮目标小节的最新 HTML，整理每张图片的 image_id、生成方式、比例、适配方式、提示词、图注、当前引用及文件存在状态；没有图片的小节不列出。不传 section_ids 时读取全部目标，完整清单写入 ${listFile}，返回 summary：本轮新增图片数、生成方式分布、各布局组数，以及缺少图注、data-yb-fit 或有效引用的图片数量；具体 image_id 见清单文件中的 summary，布局核对和分布统计直接使用 summary。传 section_ids 时只读取这些小节，直接返回其图片明细，不改写清单文件。image_id 原样传给图片工具及回填工具，不自行拼接。reused_original 为原方案图片，只复用、不重新生成。`,
@@ -285,7 +315,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
         combinedSignal.throwIfAborted();
         try {
           if (!targets.has(id)) throw new Error(`不能读取非目标小节：${id}`);
-          const { images } = readSectionImages(workspaceDir, targets.get(id));
+          const { images } = readSectionImages(workspaceDir, targets.get(id), generations);
           parsed.push(...images);
           // 小节 ID 和文件已由分组给出，布局等统计信息汇总到 summary。
           return { section_id: id, status: 'success', images: images.map(({ location, section_id, file, layout, table, image_text_left, ...image }) => image) };
@@ -298,7 +328,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       const tables = new Set(added.filter(image => image.table).map(image => image.table));
       const summary = {
         new_images: added.length, reused_original_images: parsed.length - added.length,
-        new_images_by_generation: { aiImage: 0, htmlImage: 0, mermaid: 0, ...count(added, image => image.generation) },
+        new_images_by_generation: { ...Object.fromEntries([...generations].map(generation => [generation, 0])), ...count(added, image => image.generation) },
         new_layout_groups: { single: added.filter(image => image.layout === 'single').length, imageText: 0, threeImages: 0, fourImages: 0,
           ...count([...tables], table => table.attribs['data-yb-preset'] || 'unknown') },
         missing_caption: parsed.filter(image => !image.caption && !image.image_text_left).map(image => image.image_id),
@@ -331,12 +361,12 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       report('image-apply', '正在回填图片地址', ordered.map(item => ({ id: item.image_id, status: item.status })));
       return toolResult({ results: ordered }, compactResults(ordered));
     },
-  }, {
+  }, ...(imageKinds.length ? [{
     name: 'generate-section-images', label: '批量生成正文图片', executionMode: 'sequential',
-    description: `读取 ${taskFile('images')} 中的全部图片任务并提交生成，格式为 {"images":[{"image_id":"清单标识","kind":"ai/html/mermaid","prompt":"…"}]}。image_id 原样使用正文图片清单标识，文件内唯一；kind 为 ai、html 或 mermaid。AI 项 prompt 按主体、可见元素、视角景别与构图、环境光线依次正向描述画面，写出区分本图的具体视觉元素，保留与正文画框一致的宽高比例及构图方向；画面形式由 style 决定，不写冲突的风格描述，品牌、水印和无关文字的限制由程序统一追加，无须重复罗列。AI 项必填 size：逐图依据正文 data-yb-size 选择对应比例的具体尺寸，square=1:1、wide=3:2、tall=3:4、panorama=16:9，当前金龙 gpt-image-2-1k 的 tall 使用 768x1024，不得传画框名称或省略尺寸；必填 style，按该图 template 中注明的画面形式选择：${AI_IMAGE_STYLE_OPTIONS}；可选 title 为简短图名。HTML/Mermaid 项 prompt 写明图片表达目的、准确内容和数据，保留与正文画框一致的宽高比例及构图方向，不只给文件路径或要求模型检索；HTML 项必填 frame_size，与正文 figure 的 data-yb-size 一致。${skipNote}${TASK_FILE_WRITING}AI 使用生图队列，HTML/Mermaid 使用文本队列生成源码，每张源码完成后立即进入对应本地渲染队列；超限自动排队。每张成功后程序立即回填正文图片引用，无须再调用回填工具。返回 total、applied（本次成功并回填的数量）、skipped（已有图片跳过的数量）和 unresolved；unresolved 只列未成功或回填失败的项，含 status、stage、asset_ref、source_file、error，回填失败另有 apply_error 与 previous_asset_ref，可刷新清单后用回填工具重试。${htmlImageOptimization ? 'HTML 返回 needs_repair 时，按 layout_issues 修改源码后转图，直到成功。' : ''}有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。暂停结果保留已完成产物，恢复仅补未完成项。`,
+    description: generateDescription,
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_callId, _params, toolSignal, onUpdate) {
-      const { images } = readTaskFile(workspaceDir, 'images', taskDir);
+      const { images } = readTaskFile(workspaceDir, 'images', taskDir, imageKinds);
       return runImageBatch(images, toolSignal, onUpdate, async (image, result, combinedSignal) => {
         const { image_id, kind, prompt, frame_size } = image;
         if (kind === 'ai') {
@@ -358,7 +388,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
         }
       });
     },
-  }, ...['html', 'mermaid'].map(kind => ({
+  }] : []), ...sourceKinds.map(kind => ({
     name: `render-${kind}-image`, label: kind === 'html' ? '批量 HTML 转图片' : '批量 Mermaid 转图片',
     description: `读取 ${taskFile(kind === 'html' ? 'renderHtml' : 'renderMermaid')} 中的全部转图任务并提交，格式为 {"images":[{"image_id":"沿用源码生成时的 image_id","source_file":"当前工作区内的源码相对路径，如 图片/实施流程.${kind === 'html' ? 'html' : 'mmd'}"${kind === 'html' ? ',"frame_size":"与正文 figure 的 data-yb-size 一致"' : ''}}]}，源码使用 UTF-8，不带 Markdown 围栏。${kind === 'html' ? 'frame_size 设计尺寸：square=1240×1240，wide=1240×827，tall=1240×1653，panorama=1240×698，尺寸包含四周40px内边距；按此尺寸编写 HTML，程序以 body 为固定画布截图并以2倍像素输出。' : ''}${skipNote}${TASK_FILE_WRITING}由现有本地渲染队列控制并发并转为 PNG。每张成功后程序立即回填正文图片引用。返回 total、applied、skipped 和 unresolved，unresolved 只列未成功或回填失败的项及其 status、源码路径、error 或 apply_error。${kind === 'html' && htmlImageOptimization ? '返回 needs_repair 时，按 layout_issues 修改源码后重新渲染，直到成功。' : ''}只对失败或需要修正的项修改源码后重新提交，保留其他结果。`,
     executionMode: 'sequential',
@@ -372,4 +402,4 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
   }))];
 }
 
-module.exports = { createContentGenerationImageTools, validateContentImageReferences };
+module.exports = { createContentGenerationImageTools, validateContentImageReferences, imageToolNames };
