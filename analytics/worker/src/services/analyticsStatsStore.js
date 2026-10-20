@@ -354,6 +354,21 @@ async function queryTodayActiveClients(env, projectName) {
   return number(result.data?.[0]?.activeClients);
 }
 
+// 月活：近 30 天（含今天）任意允许事件的去重客户端数。
+async function queryLast30ActiveClients(env, projectName) {
+  const project = sqlString(projectName);
+  const sql = `
+    SELECT COUNT(DISTINCT blob7) AS activeClients
+    FROM ${DATASET}
+    WHERE blob1 = ${project}
+      AND blob2 IN ${allowedEventsSql()}
+      AND blob7 != ''
+      AND ${aeRangeCondition('30')}
+  `;
+  const result = await queryAnalytics(env, sql);
+  return number(result.data?.[0]?.activeClients);
+}
+
 async function queryTodayDaily(env, projectName) {
   const project = sqlString(projectName);
   const sql = `
@@ -385,7 +400,7 @@ export async function queryStatsOverview(env, projectName) {
   const last7Start = getBusinessDateDaysAgo(6);
   const last9Start = getBusinessDateDaysAgo(9);
 
-  const [totals, todayNew, last7New, dailyRows, todayActiveClients, todayDaily] = await Promise.all([
+  const [totals, todayNew, last7New, dailyRows, todayActiveClients, last30ActiveClients, todayDaily] = await Promise.all([
     first(db, `
       SELECT
         total_clients,
@@ -416,6 +431,7 @@ export async function queryStatsOverview(env, projectName) {
       ORDER BY activity_date DESC
     `, [projectName, last9Start, today]),
     queryTodayActiveClients(env, projectName),
+    queryLast30ActiveClients(env, projectName),
     queryTodayDaily(env, projectName),
   ]);
 
@@ -442,6 +458,7 @@ export async function queryStatsOverview(env, projectName) {
     todayNewClients: number(todayNew?.count),
     last7NewClients: number(last7New?.count),
     todayActiveClients,
+    last30ActiveClients,
     lastRollupDate: totals?.last_rollup_date || '',
     daily,
   };

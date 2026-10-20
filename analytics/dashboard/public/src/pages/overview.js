@@ -38,6 +38,7 @@ export async function loadOverview() {
   state.totalGeneratedImages.textContent = formatNumber(summary.totalGeneratedImages);
   state.totalClients.textContent = formatNumber(summary.totalClients);
   state.todayActiveClients.textContent = formatNumber(summary.todayActiveClients);
+  state.last30ActiveClients.textContent = formatNumber(summary.last30ActiveClients);
   state.todayNewClients.textContent = formatNumber(summary.todayNewClients);
   state.last7NewClients.textContent = formatNumber(summary.last7NewClients);
   renderGitHubStats(githubStats.repo);

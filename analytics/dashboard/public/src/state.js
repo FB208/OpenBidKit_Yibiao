@@ -32,6 +32,7 @@ export const state = {
   totalGeneratedImages: $('totalGeneratedImages'),
   totalClients: $('totalClients'),
   todayActiveClients: $('todayActiveClients'),
+  last30ActiveClients: $('last30ActiveClients'),
   todayNewClients: $('todayNewClients'),
   last7NewClients: $('last7NewClients'),
   githubStars: $('githubStars'),
