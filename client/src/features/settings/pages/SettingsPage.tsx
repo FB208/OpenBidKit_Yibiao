@@ -80,16 +80,17 @@ const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
 ];
 
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
+const DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT = 128000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 
 const textProviderDefaults: Record<TextModelProvider, TextModelConfig> = {
   official: { api_key: '', base_url: 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/openai/v1', model_name: 'yibiao-text', multimodal_enabled: true, reasoning_effort: '', context_length_limit: 258000, output_token_limit: 128000, concurrency_limit: 50, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
-  custom: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: 0, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  jinlong: { api_key: '', base_url: 'https://jlaudeapi.com/v1', model_name: 'gpt-3.5-turbo', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  volcengine: { api_key: '', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  agnes: { api_key: '', base_url: 'https://apihub.agnes-ai.com/v1', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
+  custom: { api_key: '', base_url: '', model_name: '', multimodal_enabled: false, reasoning_effort: '', context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT, output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT, concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT, temperature_enabled: false, temperature: DEFAULT_TEXT_TEMPERATURE, request_mode: 'stream' },
 };
 
 // 设置页不编辑官方 Key；保存时省略它，由主进程合并磁盘中的最新值。
@@ -121,21 +122,28 @@ function normalizeAiRequestMode(value?: AiRequestMode): AiRequestMode {
   return value === 'normal' ? 'normal' : 'stream';
 }
 
-function normalizeTextContextLengthLimit(value?: number | string): number {
+// 以下归一化的 fallback 传入当前服务商默认值，清空某个服务商的字段不会套用其他服务商的默认值。
+function normalizeTextContextLengthLimit(value?: number | string, fallback = DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT): number {
   const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT;
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
-function normalizeTextConcurrencyLimit(value?: number | string): number {
+// 归一化输出 token 上限，未设置时使用默认值。
+function normalizeTextOutputTokenLimit(value?: number | string, fallback = DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT): number {
   const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? Math.round(number) : DEFAULT_TEXT_CONCURRENCY_LIMIT;
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
+function normalizeTextConcurrencyLimit(value?: number | string, fallback = DEFAULT_TEXT_CONCURRENCY_LIMIT): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
 // 归一化文本模型温度。
-function normalizeTextTemperature(value?: number | string): number {
-  if (value === '' || value === undefined) return DEFAULT_TEXT_TEMPERATURE;
+function normalizeTextTemperature(value?: number | string, fallback = DEFAULT_TEXT_TEMPERATURE): number {
+  if (value === '' || value === undefined) return fallback;
   const number = Number(value);
-  return Number.isFinite(number) && number >= 0 && number <= 2 ? number : DEFAULT_TEXT_TEMPERATURE;
+  return Number.isFinite(number) && number >= 0 && number <= 2 ? number : fallback;
 }
 
 function parseTextContextLengthInput(value: string): number | '' {
@@ -144,11 +152,11 @@ function parseTextContextLengthInput(value: string): number | '' {
   return Number.isFinite(number) ? Math.max(1, Math.floor(number)) : '';
 }
 
-// 解析输出上限，允许清空或输入非负整数。
+// 解析输出上限，允许清空或输入正整数。
 function parseTextOutputTokenLimitInput(value: string): number | '' {
   if (value === '') return '';
   const number = Number(value);
-  return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : '';
+  return Number.isFinite(number) ? Math.max(1, Math.floor(number)) : '';
 }
 
 function parseTextConcurrencyLimitInput(value: string): number | '' {
@@ -171,11 +179,11 @@ function normalizeTextModelProfile(provider: TextModelProvider, profile?: Partia
     model_name: profile?.model_name ?? defaults.model_name,
     multimodal_enabled: profile?.multimodal_enabled ?? defaults.multimodal_enabled,
     reasoning_effort: profile?.reasoning_effort?.trim() ?? defaults.reasoning_effort,
-    context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit ?? defaults.context_length_limit),
-    output_token_limit: profile?.output_token_limit ?? defaults.output_token_limit,
-    concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
+    context_length_limit: normalizeTextContextLengthLimit(profile?.context_length_limit, defaults.context_length_limit),
+    output_token_limit: normalizeTextOutputTokenLimit(profile?.output_token_limit, defaults.output_token_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(profile?.concurrency_limit, defaults.concurrency_limit),
     temperature_enabled: profile?.temperature_enabled ?? defaults.temperature_enabled,
-    temperature: normalizeTextTemperature(profile?.temperature ?? defaults.temperature),
+    temperature: normalizeTextTemperature(profile?.temperature, defaults.temperature),
     request_mode: normalizeAiRequestMode(profile?.request_mode ?? defaults.request_mode),
   };
 }
@@ -190,17 +198,18 @@ function normalizeTextModelProfiles(
 }
 
 function textProfileFromState(textModel: SettingsPageState['textModel']): TextModelConfig {
+  const defaults = textProviderDefaults[textModel.provider];
   return {
     api_key: textModel.api_key,
-    base_url: textModel.provider === 'custom' ? textModel.base_url : textProviderDefaults[textModel.provider].base_url,
+    base_url: textModel.provider === 'custom' ? textModel.base_url : defaults.base_url,
     model_name: textModel.model_name,
     multimodal_enabled: textModel.multimodal_enabled,
     reasoning_effort: textModel.reasoning_effort.trim(),
-    context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit),
-    output_token_limit: Number(textModel.output_token_limit),
-    concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit),
+    context_length_limit: normalizeTextContextLengthLimit(textModel.context_length_limit, defaults.context_length_limit),
+    output_token_limit: normalizeTextOutputTokenLimit(textModel.output_token_limit, defaults.output_token_limit),
+    concurrency_limit: normalizeTextConcurrencyLimit(textModel.concurrency_limit, defaults.concurrency_limit),
     temperature_enabled: textModel.temperature_enabled,
-    temperature: normalizeTextTemperature(textModel.temperature),
+    temperature: normalizeTextTemperature(textModel.temperature, defaults.temperature),
     request_mode: textModel.request_mode,
   };
 }
@@ -1379,7 +1388,6 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
       const modelInfo = result.model;
       const efforts = modelInfo.reasoningEfforts || [];
       const updates: Partial<Omit<SettingsPageState['textModel'], 'provider'>> = {
-        output_token_limit: modelInfo.output,
         concurrency_limit: modelInfo.concurrencyLimit,
         request_mode: modelInfo.requestMode,
       };
@@ -1388,6 +1396,9 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
       }
       if (modelInfo.context > 0) {
         updates.context_length_limit = modelInfo.context;
+      }
+      if (modelInfo.output > 0) {
+        updates.output_token_limit = modelInfo.output;
       }
       if (modelInfo.imageInputStatus === 'supported' || modelInfo.imageInputStatus === 'mixed') {
         updates.multimodal_enabled = true;
@@ -2051,21 +2062,21 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                     min={1}
                     step={1}
                     value={state.textModel.context_length_limit}
-                    placeholder="400000"
+                    placeholder={String(currentTextProviderDefault.context_length_limit)}
                     onChange={(event) => updateTextModelConfig({ context_length_limit: parseTextContextLengthInput(event.target.value) })}
                   />
                 </label>
                 <label className="settings-row">
                   <div className="settings-row-copy">
                     <strong>输出token上限</strong>
-                    <span>留空或设为 0 时不限制输出 token 数</span>
+                    <span>可手动录入或自动填充；留空时使用默认值 {currentTextProviderDefault.output_token_limit}</span>
                   </div>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     step={1}
                     value={state.textModel.output_token_limit}
-                    placeholder="0"
+                    placeholder={String(currentTextProviderDefault.output_token_limit)}
                     onChange={(event) => updateTextModelConfig({ output_token_limit: parseTextOutputTokenLimitInput(event.target.value) })}
                   />
                 </label>
@@ -2079,7 +2090,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                     min={1}
                     step={1}
                     value={state.textModel.concurrency_limit}
-                    placeholder="10"
+                    placeholder={String(currentTextProviderDefault.concurrency_limit)}
                     onChange={(event) => updateTextModelConfig({ concurrency_limit: parseTextConcurrencyLimitInput(event.target.value) })}
                   />
                 </label>

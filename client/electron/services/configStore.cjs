@@ -9,6 +9,7 @@ const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare', 'atomgit'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
+const DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT = 128000;
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
 const DEFAULT_TEXT_TEMPERATURE = 0.7;
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
@@ -50,7 +51,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    output_token_limit: 0,
+    output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -63,7 +64,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    output_token_limit: 0,
+    output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -76,7 +77,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    output_token_limit: 0,
+    output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -89,7 +90,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    output_token_limit: 0,
+    output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -102,7 +103,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    output_token_limit: 0,
+    output_token_limit: DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -249,6 +250,12 @@ function normalizeTextContextLengthLimit(value, fallback = DEFAULT_TEXT_CONTEXT_
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
 }
 
+// 归一化输出 token 上限，未设置或非正数时使用默认值。
+function normalizeTextOutputTokenLimit(value, fallback = DEFAULT_TEXT_OUTPUT_TOKEN_LIMIT) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
 function normalizeTextConcurrencyLimit(value, fallback = DEFAULT_TEXT_CONCURRENCY_LIMIT) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
@@ -323,7 +330,7 @@ function normalizeTextModelProfile(provider, profile) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, defaults.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, defaults.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
-    output_token_limit: Number(source.output_token_limit ?? defaults.output_token_limit),
+    output_token_limit: normalizeTextOutputTokenLimit(source.output_token_limit, defaults.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, defaults.temperature_enabled),
     temperature: normalizeTextTemperature(source.temperature, defaults.temperature),
@@ -353,7 +360,7 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, fallback.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
-    output_token_limit: Number(source.output_token_limit ?? fallback.output_token_limit),
+    output_token_limit: normalizeTextOutputTokenLimit(source.output_token_limit !== undefined ? source.output_token_limit : fallback.output_token_limit, fallback.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit !== undefined ? source.concurrency_limit : fallback.concurrency_limit, fallback.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, fallback.temperature_enabled),
     temperature: normalizeTextTemperature(source.temperature !== undefined ? source.temperature : fallback.temperature, fallback.temperature),
@@ -389,6 +396,7 @@ function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled ?? selectedProfile?.multimodal_enabled, fallback.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort ?? selectedProfile?.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(pickTextProfileField(source.context_length_limit, selectedProfile?.context_length_limit, fallback.context_length_limit), fallback.context_length_limit),
+    output_token_limit: normalizeTextOutputTokenLimit(pickTextProfileField(source.output_token_limit, selectedProfile?.output_token_limit, fallback.output_token_limit), fallback.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(pickTextProfileField(source.concurrency_limit, selectedProfile?.concurrency_limit, fallback.concurrency_limit), fallback.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled ?? selectedProfile?.temperature_enabled, fallback.temperature_enabled),
     temperature: normalizeTextTemperature(pickTextProfileField(source.temperature, selectedProfile?.temperature, fallback.temperature), fallback.temperature),
