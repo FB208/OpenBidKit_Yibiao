@@ -5,6 +5,8 @@ export type { AppSwitchProps } from './AppSwitch';
 export { default as EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 export { default as InlineSpinner } from './InlineSpinner';
+export { default as OptionCardList } from './OptionCardList';
+export type { OptionCardItem, OptionCardListProps } from './OptionCardList';
 export { default as ProgressBar } from './ProgressBar';
 export type { ProgressBarProps, ProgressBarTone } from './ProgressBar';
 export { UploadBoard, UploadEmpty, UploadFilePill, UploadRow } from './UploadBoard';

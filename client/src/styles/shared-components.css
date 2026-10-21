@@ -599,6 +599,131 @@
   font-size: 16px;
 }
 
+/* 可点击选项卡片（shared/ui/OptionCardList.tsx）：整张卡片是按钮，左侧图标、右侧箭头；is-highlighted 标出推荐或上次的选择 */
+.yb-option-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.yb-option-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 14px;
+  color: var(--yb-text);
+  font: inherit;
+  text-align: left;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
+}
+
+/* 用内阴影补出 2px 描边，标出与否卡片尺寸不变 */
+.yb-option-card.is-highlighted {
+  background: rgba(33, 116, 253, 0.04);
+  border-color: var(--yb-primary);
+  box-shadow: inset 0 0 0 1px var(--yb-primary);
+}
+
+.yb-option-card:hover:not(:disabled) {
+  background: rgba(33, 116, 253, 0.05);
+  border-color: var(--yb-primary);
+}
+
+.yb-option-card:focus-visible {
+  outline: none;
+  box-shadow: var(--yb-focus-ring);
+}
+
+.yb-option-card.is-highlighted:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--yb-primary), var(--yb-focus-ring);
+}
+
+.yb-option-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.yb-option-card-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--yb-text-soft);
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: 10px;
+  transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
+}
+
+.yb-option-card-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.yb-option-card.is-highlighted .yb-option-card-icon,
+.yb-option-card:hover:not(:disabled) .yb-option-card-icon {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+  border-color: transparent;
+}
+
+.yb-option-card-body {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.yb-option-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.yb-option-card-title strong {
+  font-size: 14px;
+}
+
+.yb-option-card-badge {
+  padding: 1px 8px;
+  color: var(--yb-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: var(--yb-radius-pill);
+}
+
+.yb-option-card-description {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.yb-option-card-arrow {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--yb-text-muted);
+  transition: color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
+}
+
+.yb-option-card.is-highlighted .yb-option-card-arrow {
+  color: var(--yb-primary);
+}
+
+.yb-option-card:hover:not(:disabled) .yb-option-card-arrow {
+  color: var(--yb-primary);
+  transform: translateX(2px);
+}
+
 /* 行内加载指示器（shared/ui/InlineSpinner.tsx），原属 Settings，被知识库等跨功能使用后上移到共享层 */
 .inline-spinner {
   width: 15px;

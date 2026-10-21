@@ -100,6 +100,25 @@ function getRejectionCheckDir(app) {
   return path.join(getWorkspaceDir(app), 'rejection-check');
 }
 
+function getBlindCheckDir(app) {
+  return path.join(getWorkspaceDir(app), 'blind-check');
+}
+
+/** 暗标检查的待检文档副本目录。 */
+function getBlindCheckSourceDir(app) {
+  return path.join(getBlindCheckDir(app), 'source');
+}
+
+/** 暗标自动修复写出的副本目录，原文件不改动。 */
+function getBlindCheckFixedDir(app) {
+  return path.join(getBlindCheckDir(app), 'fixed');
+}
+
+/** AI 提取预设时保存的招标文件正文（按预设 ID 命名），AI 复核对照招标原文用；随预设保留，重置检查不清理。 */
+function getBlindCheckTenderDir(app) {
+  return path.join(getWorkspaceDir(app), 'blind-check-tenders');
+}
+
 function getRejectionCheckDocumentMarkdownPath(app, role, documentId) {
   if (role === 'bid') {
     const safeDocumentId = String(documentId || 'bid').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -207,6 +226,10 @@ function getBundledOpenXmlHelperPath(app) {
 module.exports = {
   getAgentRuntimeDir,
   getAiLogsDir,
+  getBlindCheckDir,
+  getBlindCheckSourceDir,
+  getBlindCheckFixedDir,
+  getBlindCheckTenderDir,
   getBundledAgentToolsBinDir,
   getBundledOpenXmlHelperDir,
   getBundledOpenXmlHelperPath,

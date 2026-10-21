@@ -603,6 +603,25 @@ function GenerationSettingsPage({
     }
   };
 
+  // 改为 0 时关闭全部生图方式；从 0（或无任何生图方式）改为非 0 时恢复默认开启；非 0 档位之间切换保留用户已选的生图方式。
+  const changeImageQuantity = (imageQuantity: ContentImageQuantity) => {
+    const enabled = imageQuantity > 0;
+    const restoreDefaults = draftIllustrationOptions.imageQuantity <= 0 || !(draftIllustrationOptions.useAiImages
+      || draftIllustrationOptions.useMermaidImages || draftIllustrationOptions.useHtmlImages);
+    void saveContentOptions({
+      ...draftIllustrationOptions,
+      tableRequirement: draftTableRequirement,
+      imageQuantity,
+      useAiImages: enabled && (restoreDefaults ? imageModelAvailable : draftIllustrationOptions.useAiImages),
+      useMermaidImages: enabled && (restoreDefaults || draftIllustrationOptions.useMermaidImages),
+      useHtmlImages: enabled && (restoreDefaults || draftIllustrationOptions.useHtmlImages),
+      useSingleImageLayout: true,
+      useImageTextLayout: true,
+      useThreeImagesLayout: true,
+      useFourImagesLayout: true,
+    });
+  };
+
   // 配图比例不为 0 时至少保留一种生图方式；AI 生图仅在模型可用时允许开启，均只在前端校验。
   const toggleImageGenerationType = (key: 'useAiImages' | 'useMermaidImages' | 'useHtmlImages', checked: boolean) => {
     if (checked && key === 'useAiImages' && !imageModelAvailable) {
@@ -1014,18 +1033,7 @@ function GenerationSettingsPage({
                     <select
                       value={draftIllustrationOptions.imageQuantity}
                       disabled={contentConfigLocked || contentOptionsBusy}
-                      onChange={(event) => void saveContentOptions({
-                        ...draftIllustrationOptions,
-                        tableRequirement: draftTableRequirement,
-                        imageQuantity: Number(event.target.value) as ContentImageQuantity,
-                        useAiImages: Number(event.target.value) > 0 && imageModelAvailable,
-                        useMermaidImages: Number(event.target.value) > 0,
-                        useHtmlImages: Number(event.target.value) > 0,
-                        useSingleImageLayout: true,
-                        useImageTextLayout: true,
-                        useThreeImagesLayout: true,
-                        useFourImagesLayout: true,
-                      })}
+                      onChange={(event) => void changeImageQuantity(Number(event.target.value) as ContentImageQuantity)}
                     >
                       {Array.from({ length: 11 }, (_, index) => index * 10).map((ratio) => (
                         <option value={ratio} key={ratio}>{ratio}%</option>

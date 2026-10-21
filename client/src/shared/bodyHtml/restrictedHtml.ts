@@ -27,7 +27,8 @@ const UNKNOWN_BLOCK_TAGS = new Set([
   'html', 'head', 'body', 'div', 'section', 'article', 'main', 'header', 'footer', 'nav', 'blockquote', 'pre',
   'dl', 'dt', 'dd', 'fieldset', 'details', 'summary', 'hr',
 ]);
-const FIGURE_GENERATIONS = new Set(['aiImage', 'mermaid', 'htmlImage']);
+// original 为原方案复用图片的格式标记，不对应生成方式。
+const FIGURE_GENERATIONS = new Set(['aiImage', 'mermaid', 'htmlImage', 'original']);
 const FIGURE_SIZES = new Set(['square', 'wide', 'tall', 'panorama']);
 const FIGURE_FITS = new Set(['contain', 'cover']);
 const TABLE_PRESETS = new Set([

@@ -34,7 +34,7 @@
 | `GET/POST/DELETE /api/ip-blocks` | D1 + AE | `ADMIN_TOKEN` | 管理全局精确 IP 封禁；POST 原子写封禁、删除客户端明细并写防回填标记，DELETE 原子解除封禁并释放标记 |
 | `GET/POST /agent-errors` | D1 + R2 | GET 无；POST 有效可信 license | GET 供客户端预检开关、版本和容量；POST 仅在预检条件仍满足时保存 gzip Agent 失败诊断包 |
 | `GET /api/projects` | D1 优先，AE 兜底 | `ADMIN_TOKEN` | 项目列表 |
-| `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、每日统计 |
+| `GET /api/overview` | D1 + AE + KV | `ADMIN_TOKEN` | 概览总数、文本 Token、生图次数、新增、今日活跃、月活、每日统计 |
 | `GET /api/clients` | D1 | `ADMIN_TOKEN` | 客户端统计列表 |
 | `GET /api/client-detail` | AE | `ADMIN_TOKEN` | 单客户端 7天/30天/全部事件明细 |
 | `GET /api/ip-stats` | D1 或 AE | `ADMIN_TOKEN` | `date` 可选；无日期按全部客户端当前最后访问 IP 汇总，指定日期时按当天最后访问 IP 汇总，并返回新客户端数、Total Tokens、AI 服务商和 endpoint host |
@@ -84,6 +84,7 @@
 | 活跃客户端 | 任意允许事件去重 `client_id` |
 | 总客户端数 | D1 `stats_totals.total_clients` |
 | 今日/7日新增 | D1 `stats_clients.first_seen_date` |
+| 月活 | AE 近 30 天（含今天）任意允许事件去重 `client_id` |
 | 实时客户端入库 | `/track` 只对当前业务日期或前 1 天创建的客户端尝试实时插入并增加总客户端数；授权字段会按客户端授权快照覆盖既有 `stats_clients`；D1 写入失败不影响 `/track` 返回成功；老客户端活跃由 Cron 批量更新 |
 | 最后访问 IP | Worker 优先记录 `CF-Connecting-IP`；如果它是 Pseudo IPv4 的 `240.0.0.0/4` 伪地址，则改用 `CF-Connecting-IPv6`；完全忽略 `CF-Pseudo-IPv4`。AE 写入 `blob13`，D1 `stats_clients.last_access_ip` 由新客户端实时入库和每日 Cron 更新 |
 | 每日统计 | 今天读 AE，前 9 天读 D1 |

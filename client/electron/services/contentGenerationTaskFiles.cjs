@@ -29,19 +29,21 @@ const list = (key, items) => ({ type: 'object', additionalProperties: false, req
 const object = (required, optional = {}) => ({
   type: 'object', additionalProperties: false, required: Object.keys(required), properties: { ...required, ...optional },
 });
-// 按生成方式补充必填项；then 中重复声明属性以满足 Ajv 严格模式。
-const imageItem = {
-  ...object({ image_id: id, kind: { enum: ['ai', 'html', 'mermaid'] }, prompt: { type: 'string', minLength: 1 } },
-    { size: aiSize, title: text, style: aiStyle, frame_size: frameSize, regenerate }),
-  allOf: [
-    { if: { properties: { kind: { const: 'ai' } } }, then: { properties: { size: aiSize, style: aiStyle }, required: ['size', 'style'] } },
-    { if: { properties: { kind: { const: 'html' } } }, then: { properties: { frame_size: frameSize }, required: ['frame_size'] } },
-  ],
-};
-// 结构与原工具参数一致；Schema 不要求一次写全，完整性由工具提交时按业务规则检查。
+// kind 只接受已开启的生成方式，未开启方式的字段和条件不进入 Schema；then 中重复声明属性以满足 Ajv 严格模式。
+function buildImagesSchema(kinds) {
+  const ai = kinds.includes('ai');
+  const html = kinds.includes('html');
+  const conditions = [
+    ...(ai ? [{ if: { properties: { kind: { const: 'ai' } } }, then: { properties: { size: aiSize, style: aiStyle }, required: ['size', 'style'] } }] : []),
+    ...(html ? [{ if: { properties: { kind: { const: 'html' } } }, then: { properties: { frame_size: frameSize }, required: ['frame_size'] } }] : []),
+  ];
+  const imageItem = object({ image_id: id, kind: { enum: kinds }, prompt: { type: 'string', minLength: 1 } },
+    { ...(ai ? { size: aiSize, title: text, style: aiStyle } : {}), ...(html ? { frame_size: frameSize } : {}), regenerate });
+  return list('images', conditions.length ? { ...imageItem, allOf: conditions } : imageItem);
+}
+// 结构与原工具参数一致；Schema 不要求一次写全，完整性由工具提交时按业务规则检查。配图任务 Schema 按生成方式构造。
 const TASK_FILE_SCHEMAS = {
   sections: list('sections', object({ section_id: id, instructions: text, references: text }, { regenerate })),
-  images: list('images', imageItem),
   renderHtml: list('images', object({ image_id: id, source_file: id, frame_size: frameSize }, { regenerate })),
   renderMermaid: list('images', object({ image_id: id, source_file: id }, { regenerate })),
   applyImages: list('images', object({ image_id: id, asset_ref: id, previous_asset_ref: text })),
@@ -49,6 +51,22 @@ const TASK_FILE_SCHEMAS = {
 };
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validators = Object.fromEntries(Object.entries(TASK_FILE_SCHEMAS).map(([key, schema]) => [key, ajv.compile(schema)]));
+const imageValidators = new Map();
+
+// 配图任务校验器按开启的生成方式缓存，同一组合只编译一次。
+function imagesValidator(kinds) {
+  const key = kinds.join(',');
+  if (!imageValidators.has(key)) imageValidators.set(key, ajv.compile(buildImagesSchema(kinds)));
+  return imageValidators.get(key);
+}
+
+// 关闭的生成方式不登记对应转图任务；没有可用生成方式时不登记配图任务。
+function taskFileEnabled(key, imageKinds) {
+  if (key === 'images') return imageKinds.length > 0;
+  if (key === 'renderHtml') return imageKinds.includes('html');
+  if (key === 'renderMermaid') return imageKinds.includes('mermaid');
+  return true;
+}
 
 function taskFilePath(key, dir = TASK_DIR) {
   return `${dir}/${TASK_FILES[key]}`;
@@ -60,12 +78,13 @@ function taskFilePaths(dir = TASK_DIR) {
 }
 
 // 供 Agent 用 json-validation 自查；主任务登记全部任务文件，单节修改只登记图片任务。
-function taskFileSchemas(dir = TASK_DIR, keys = Object.keys(TASK_FILES)) {
-  return Object.fromEntries(keys.map(key => [taskFilePath(key, dir), TASK_FILE_SCHEMAS[key]]));
+function taskFileSchemas(dir = TASK_DIR, keys = Object.keys(TASK_FILES), imageKinds = []) {
+  return Object.fromEntries(keys.filter(key => taskFileEnabled(key, imageKinds))
+    .map(key => [taskFilePath(key, dir), key === 'images' ? buildImagesSchema(imageKinds) : TASK_FILE_SCHEMAS[key]]));
 }
 
-// 工具提交时读取完整任务文件，结构错误直接交回 Agent 修正。
-function readTaskFile(workspaceDir, key, dir = TASK_DIR) {
+// 工具提交时读取完整任务文件，结构错误直接交回 Agent 修正；配图任务按开启的生成方式校验。
+function readTaskFile(workspaceDir, key, dir = TASK_DIR, imageKinds = []) {
   const file = taskFilePath(key, dir);
   const target = path.join(workspaceDir, file);
   if (!fs.existsSync(target)) throw new Error(`请先将任务写入 ${file}，再调用本工具提交`);
@@ -75,7 +94,8 @@ function readTaskFile(workspaceDir, key, dir = TASK_DIR) {
   } catch (error) {
     throw new Error(`${file} 不是有效 JSON：${error.message}`);
   }
-  if (!validators[key](value)) throw new Error(`${file} 格式错误：${ajv.errorsText(validators[key].errors, { dataVar: file })}`);
+  const validate = key === 'images' ? imagesValidator(imageKinds) : validators[key];
+  if (!validate(value)) throw new Error(`${file} 格式错误：${ajv.errorsText(validate.errors, { dataVar: file })}`);
   return value;
 }
 

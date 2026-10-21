@@ -1802,3 +1802,142 @@ fieldset.settings-list {
   gap: 8px;
   padding: 0;
 }
+
+/* 存储空间弹窗：三组占用依次排列，组内明细在弹窗内滚动。 */
+.storage-space-dialog {
+  width: min(600px, calc(100vw - 32px));
+}
+
+.storage-space-body {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.storage-space-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 160px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+}
+
+.storage-space-group {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  background: #fbfcff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.storage-space-group-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 整个标题行（箭头、说明、大小）都可点击展开，删除按钮在行外，点击不影响折叠状态。 */
+.storage-space-group-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.storage-space-group-toggle:focus-visible {
+  border-radius: var(--yb-radius-md);
+  outline: 2px solid var(--yb-primary);
+  outline-offset: 4px;
+}
+
+.storage-space-group-chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--yb-text-muted);
+  transition: transform var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.storage-space-group.is-expanded .storage-space-group-chevron {
+  color: var(--yb-primary);
+  transform: rotate(90deg);
+}
+
+.storage-space-group-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.storage-space-group-copy strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.storage-space-group-copy span,
+.storage-space-item-copy small {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.storage-space-size {
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.storage-space-group-head .storage-space-size {
+  font-size: 15px;
+}
+
+.storage-space-group-head .danger-action {
+  min-width: 72px;
+}
+
+.storage-space-items {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-space-items li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--yb-border-soft);
+}
+
+.storage-space-item-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.storage-space-item-copy span {
+  color: var(--yb-text);
+  font-size: 13px;
+}
+
+.storage-space-items .storage-space-size {
+  color: var(--yb-text-soft);
+  font-weight: 600;
+}

@@ -14,6 +14,7 @@ const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorati
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
+const { BLIND_CHECK_AGENT_TASK_KEY } = require('./blindCheckAgent.cjs');
 
 const STORAGE_CLEANUP_VERSION = 1;
 const PERSISTENT_AGENT_TASK_KEYS = [
@@ -24,6 +25,8 @@ const PERSISTENT_AGENT_TASK_KEYS = [
   CONTENT_GENERATION_AGENT_TASK_KEY,
   BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY,
   FEASIBILITY_OUTLINE_AGENT_TASK_KEY,
+  // 暗标 AI 修复续接检查时的复核会话，只在换文件、移除和重置时删除。
+  BLIND_CHECK_AGENT_TASK_KEY,
 ];
 const LEGACY_WORKSPACE_FILES = [
   'technical_plan.json',

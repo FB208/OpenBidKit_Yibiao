@@ -302,6 +302,9 @@ function ContentEditPage({
   const currentWords = contentStats?.current_words ?? totalWords;
   const retryingTableCleanup = taskFailed && contentStats?.phase === 'table-cleaning';
   const retryingLayoutCheck = taskFailed && contentStats?.phase === 'layout-checking';
+  const exportRepairing = contentStats?.phase === 'export-repair';
+  const retryingExportRepair = taskFailed && exportRepairing;
+  const exportRepairCompleted = task?.status === 'success' && exportRepairing;
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
@@ -365,9 +368,11 @@ function ContentEditPage({
     ? '小节修改完成，Word 已更新。'
     : `正文生成全部完成：共 ${currentProgressDetail?.total || 0} 个小节，实际 ${contentStats?.generated_html_words || 0} 字${completedImageCount ? `，新增配图 ${completedImageCount} 张` : ''}，Word 已全部生成。`;
   const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : progress;
-  const displayProgressLabel = contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
+  const displayProgressLabel = exportRepairCompleted ? '导出修复结束' : contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
   // 编辑类步骤按累计完成数展示，不以随分批派发增长的已派发数作分母。
-  const displayProgressCount = currentProgressDetail?.cumulative && currentProgressDetail.unit
+  const displayProgressCount = exportRepairing
+    ? exportRepairCompleted ? '已结束' : taskFailed ? '失败' : paused ? '已暂停' : '处理中'
+    : currentProgressDetail?.cumulative && currentProgressDetail.unit
     ? `已完成 ${currentProgressDetail.completed} ${currentProgressDetail.unit}${currentProgressDetail.failed ? `，失败 ${currentProgressDetail.failed} ${currentProgressDetail.unit}` : ''}`
     : currentProgressDetail?.unit
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}${currentProgressDetail.unit}`
@@ -380,8 +385,8 @@ function ContentEditPage({
     : contentCorrecting
       ? contentCorrectionCount
           : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '正文生成';
-  const progressTone = planning || contentCompleted
+  const progressPhaseLabel = exportRepairCompleted ? '导出修复结束' : contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '正文生成';
+  const progressTone = planning || contentCompleted || exportRepairCompleted
     ? 'success'
     : contentCorrecting
       ? 'sky'
@@ -404,6 +409,11 @@ function ContentEditPage({
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
     ? taskErrorMessage
+    : exportRepairing
+    ? exportRepairCompleted ? '导出修复已结束，请重新点击导出。'
+      : paused ? '导出修复已暂停，继续时沿用原正文会话。'
+      : pausing ? '正在暂停导出修复。'
+      : currentProgressDetail?.step_label || '正在修复导出正文。'
     : contentCompleted
     ? completedDescription
     : workflowDescription
@@ -510,6 +520,8 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
+        : retryingExportRepair
+          ? '重试导出修复'
         : retryingSectionModification
           ? '重试小节修改'
         : retryingBodyGeneration
@@ -654,11 +666,13 @@ function ContentEditPage({
 
   // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingBusinessFill)) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingBusinessFill && !retryingExportRepair)) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingBusinessFill && !retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck
+      showToast(retryingExportRepair
+        ? '导出修复已从原会话继续'
+        : retryingBusinessFill && !retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck
         ? '商务模版填写已从原会话继续'
         : retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
@@ -666,6 +680,7 @@ function ContentEditPage({
     }
   };
 
+  // 暂停继续与失败重试按当前阶段处理，避免修复失败误入重新生成。
   const handleGenerationButtonClick = () => {
     if (running) {
       void pauseGeneration();
@@ -675,7 +690,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingBusinessFill) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingBusinessFill || retryingExportRepair) {
       void retryFailedSections();
       return;
     }

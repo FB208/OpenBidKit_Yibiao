@@ -22,6 +22,10 @@ const TEMPLATE_PREVIEW_TIMEOUT_MS = 120000;
 const TEMPLATE_PREVIEW_ASSET_ROOT = 'preview-assets';
 const TEMPLATE_PREVIEW_CACHE_SIZE = 5;
 const OPENXML_ENVIRONMENT_ERROR_CODE = 'OPENXML_ENVIRONMENT';
+const BLIND_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
+// 修复要改写、校验并复查副本，比单纯检查多一倍以上耗时。
+const BLIND_CHECK_FIX_TIMEOUT_MS = 15 * 60 * 1000;
+const BLIND_CHECK_PROGRESS_INTERVAL_MS = 300;
 
 /** 生成任务编号：时间戳加短随机串。 */
 function createJobId() {
@@ -352,6 +356,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
   let previewAssetPromise = null;
   let previewActive = null;
   let previewPending = null;
+  // 正在使用任务目录的调用数，存储清理据此跳过运行中的助手任务。
+  let activeJobCount = 0;
   // 模板预览会在几份配置之间来回切换，留一小段最近结果就能把重复生成挡在链路之外。
   const previewCache = new Map();
   const logger = createDeveloperLogger({
@@ -401,9 +407,21 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
   const runner = createHelperRunner({ app, writeLog, ensureExecutable, name: 'main' });
   const previewRunner = createHelperRunner({ app, writeLog, ensureExecutable, name: 'preview' });
+  // 暗标检查大文档会占用较多内存且可能被取消，用独立进程，不影响导出和预览队列。
+  const blindCheckRunner = createHelperRunner({ app, writeLog, ensureExecutable, name: 'blind-check' });
 
   function ping() {
     return runner.runJob({ action: 'ping', timeoutMs: PING_TIMEOUT_MS });
+  }
+
+  /** Agent 工具直接提交的任务，调用方读完任务目录前都计为运行中。 */
+  async function runTrackedJob(request) {
+    activeJobCount += 1;
+    try {
+      return await runner.runJob(request);
+    } finally {
+      activeJobCount -= 1;
+    }
   }
 
   /**
@@ -547,6 +565,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     let temporaryAssets;
     let result;
     const assetTypes = {};
+    activeJobCount += 1;
     try {
       if (options.copyAssets) {
         const workspace = getWorkspaceDir(app);
@@ -604,15 +623,89 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         imageWarnings: result.imageWarnings,
       };
     } finally {
-      const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
-      if (result) {
-        const jobDir = path.resolve(result.jobDir);
-        if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
-      }
-      if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
-        fs.rmSync(temporaryAssets, { recursive: true, force: true });
+      // 目录被占用时 rmSync 会抛错，计数放在内层 finally，保证任务结束后一定归还。
+      try {
+        const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
+        if (result) {
+          const jobDir = path.resolve(result.jobDir);
+          if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
+        }
+        if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
+          fs.rmSync(temporaryAssets, { recursive: true, force: true });
+        }
+      } finally {
+        activeJobCount -= 1;
       }
     }
+  }
+
+  /**
+   * 暗标合规检查与修复共用的执行方式。助手把进度写在任务目录的 progress.json，这里轮询后回调；
+   * 每次结束都结束该进程，避免空闲进程继续占着处理大文档时的内存。
+   */
+  async function runBlindCheckJob({ action, request, outputName, timeoutMs }, { signal, onProgress } = {}) {
+    let jobDir = '';
+    let timer = null;
+    let lastProgress = '';
+    const pollProgress = () => {
+      try {
+        const raw = fs.readFileSync(path.join(jobDir, 'progress.json'), 'utf8');
+        if (raw === lastProgress) return;
+        lastProgress = raw;
+        const progress = JSON.parse(raw);
+        onProgress?.({ frac: Number(progress.frac) || 0, label: String(progress.label || '') });
+      } catch {
+        // 助手替换进度文件的瞬间可能读不到，下一轮再读。
+      }
+    };
+    activeJobCount += 1;
+    try {
+      const result = await blindCheckRunner.runJob({
+        action,
+        request,
+        prepare: (dir) => {
+          jobDir = dir;
+          timer = setInterval(pollProgress, BLIND_CHECK_PROGRESS_INTERVAL_MS);
+        },
+        timeoutMs,
+        signal,
+      });
+      return JSON.parse(fs.readFileSync(path.join(result.jobDir, String(result.output || outputName)), 'utf8'));
+    } finally {
+      try {
+        if (timer) clearInterval(timer);
+        await blindCheckRunner.close().catch(() => undefined);
+        if (jobDir && path.dirname(path.resolve(jobDir)) === path.resolve(getOpenXmlJobsDir(app))) {
+          fs.rmSync(jobDir, { recursive: true, force: true });
+        }
+      } finally {
+        activeJobCount -= 1;
+      }
+    }
+  }
+
+  function runBlindCheck(request, options) {
+    return runBlindCheckJob({ action: 'blind-check-inspect', request, outputName: 'blind-check-result.json', timeoutMs: BLIND_CHECK_TIMEOUT_MS }, options);
+  }
+
+  /** 暗标自动修复：在工作区写出修复副本并复查，原文件不改动。 */
+  function runBlindCheckFix(request, options) {
+    return runBlindCheckJob({ action: 'blind-check-fix', request, outputName: 'blind-check-fix-result.json', timeoutMs: BLIND_CHECK_FIX_TIMEOUT_MS }, options);
+  }
+
+  /** 暗标 AI 复核：按段落编号导出标书结构（正文、页眉页脚、分节页码、图片清单）。 */
+  function runBlindCheckDump(request, options) {
+    return runBlindCheckJob({ action: 'blind-check-dump', request, outputName: 'blind-check-dump.json', timeoutMs: BLIND_CHECK_TIMEOUT_MS }, options);
+  }
+
+  /** 暗标 AI 复核：在修复副本上执行 Agent 提交的文字级修改，校验后覆盖副本并返回新的标书结构。 */
+  function runBlindCheckEdit(request, options) {
+    return runBlindCheckJob({ action: 'blind-check-edit', request, outputName: 'blind-check-edit-result.json', timeoutMs: BLIND_CHECK_FIX_TIMEOUT_MS }, options);
+  }
+
+  /** 结束暗标检查助手进程；应用退出时调用。 */
+  function closeBlindCheck() {
+    return blindCheckRunner.close();
   }
 
   /** 结束助手进程并拒绝未完成任务。 */
@@ -633,9 +726,15 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
   return {
     ping,
-    runJob: runner.runJob,
+    runJob: runTrackedJob,
+    hasActiveJobs: () => activeJobCount > 0,
     renderRestrictedHtmlDocx,
     createRestrictedHtmlDocx,
+    runBlindCheck,
+    runBlindCheckFix,
+    runBlindCheckDump,
+    runBlindCheckEdit,
+    closeBlindCheck,
     close,
   };
 }

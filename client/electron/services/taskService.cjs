@@ -18,6 +18,10 @@ const { loadBusinessFillReview, editBusinessFillValues } = require('./businessTe
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
+const { runBlindCheckTask } = require('./blindCheckTask.cjs');
+const { runBlindCheckFixTask } = require('./blindCheckFixTask.cjs');
+const { BLIND_CHECK_AGENT_TASK_KEY } = require('./blindCheckAgent.cjs');
+const { runBlindCheckPresetExtractionTask } = require('./blindCheckPresetExtractionTask.cjs');
 const {
   clearContent,
   runFeasibilityAnalysisTask,
@@ -119,6 +123,33 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'duplicateCheck',
     field: 'analysisTask',
+  },
+  'blind-check-run': {
+    label: '暗标合规检查',
+    group: 'blind-check',
+    groupLabel: '暗标合规检查',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'blindCheck',
+    field: 'checkTask',
+  },
+  'blind-check-fix': {
+    label: '暗标自动修复',
+    group: 'blind-check',
+    groupLabel: '暗标合规检查',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'blindCheck',
+    field: 'fixTask',
+  },
+  'blind-check-preset-extraction': {
+    label: '暗标格式要求提取',
+    group: 'blind-check',
+    groupLabel: '暗标合规检查',
+    step: 2,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'blindCheck',
+    field: 'extractionTask',
   },
   'feasibility-analysis': {
     label: '可研项目资料分析',
@@ -317,7 +348,10 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService }) {
+// 依赖待检文档的暗标任务；从招标文件提取预设与待检文档无关，换文档时不取消。
+const BLIND_CHECK_DOCUMENT_TASK_TYPES = ['blind-check-run', 'blind-check-fix'];
+
+function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
@@ -498,6 +532,9 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     if (definition.stateKey === 'duplicateCheck') {
       return { duplicateCheckPatch: state };
     }
+    if (definition.stateKey === 'blindCheck') {
+      return { blindCheckPatch: state };
+    }
     if (definition.stateKey === 'feasibilityReport') {
       return buildFeasibilityReportSnapshot(task, state, eventPatch);
     }
@@ -514,6 +551,9 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     }
     if (definition.stateKey === 'duplicateCheck') {
       return { duplicateCheck: duplicateCheckStore.loadDuplicateCheck() };
+    }
+    if (definition.stateKey === 'blindCheck') {
+      return { blindCheck: blindCheckStore.loadBlindCheck() };
     }
     if (definition.stateKey === 'feasibilityReport') {
       return buildSnapshot(definition, feasibilityReportStore.loadFeasibilityReport(), task);
@@ -621,6 +661,10 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
       return;
     }
+    if (definition.stateKey === 'blindCheck') {
+      blindCheckStore.updateBlindCheckWithoutReload(partial);
+      return;
+    }
     if (definition.stateKey === 'feasibilityReport') {
       feasibilityReportStore.updateFeasibilityReportWithoutReload(partial);
       return;
@@ -637,6 +681,9 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     }
     if (definition.stateKey === 'duplicateCheck') {
       return duplicateCheckStore.loadDuplicateCheck();
+    }
+    if (definition.stateKey === 'blindCheck') {
+      return blindCheckStore.loadBlindCheck();
     }
     if (definition.stateKey === 'feasibilityReport') {
       return feasibilityReportStore.loadFeasibilityReport();
@@ -932,7 +979,9 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         ? rejectionCheckStore
         : definition.stateKey === 'feasibilityReport'
           ? feasibilityReportStore
-          : duplicateCheckStore;
+          : definition.stateKey === 'blindCheck'
+            ? blindCheckStore
+            : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId, taskControl.signal) : aiService;
     const agentTaskContextProvider = () => createAgentUserTaskContext(type, definition, payload, currentTask);
     const runnerAgentService = agentService.bindTaskContext(
@@ -990,6 +1039,20 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       const definition = getTaskDefinition(type);
       const control = activeTaskControls.get(type);
       if (definition.group !== 'rejection-check' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      if (typeFilter && !typeFilter.has(type)) continue;
+      controls.push(control);
+      control.cancel(reason);
+    }
+    await Promise.all(controls.map((control) => control.waitForSettlement()));
+  }
+
+  // 取消暗标检查任务并等待助手进程退出，再替换或清空待检文档；taskTypes 为空时取消整组。
+  async function cancelBlindCheckTasks(reason, taskTypes) {
+    const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
+    const controls = [];
+    for (const [type, task] of activeTasks.entries()) {
+      const control = activeTaskControls.get(type);
+      if (getTaskDefinition(type).group !== 'blind-check' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
       if (typeFilter && !typeFilter.has(type)) continue;
       controls.push(control);
       control.cancel(reason);
@@ -1365,6 +1428,57 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     emit(recoveredTask, { duplicateCheckPatch: partial });
   }
 
+  function recoverInterruptedBlindCheckExtractionTask(state) {
+    if (activeTasks.has('blind-check-preset-extraction') || state.extractionTask?.status !== 'running') return;
+    const message = '上次格式要求提取未完成，请重新提取';
+    const recoveredTask = {
+      ...state.extractionTask,
+      status: 'error',
+      progress: 100,
+      logs: [message],
+      error: message,
+      updated_at: now(),
+    };
+    const partial = { extractionTask: recoveredTask };
+    blindCheckStore.updateBlindCheckWithoutReload(partial);
+    emit(recoveredTask, { blindCheckPatch: partial });
+  }
+
+  function recoverInterruptedBlindCheckFixTask(state) {
+    if (activeTasks.has('blind-check-fix') || state.fixTask?.status !== 'running') return;
+    const message = '上次修复未完成，请重新修复';
+    const recoveredTask = {
+      ...state.fixTask,
+      status: 'error',
+      progress: 100,
+      logs: [message],
+      error: message,
+      updated_at: now(),
+    };
+    const partial = { fixTask: recoveredTask };
+    if (state.fixResult?.status === 'running') partial.fixResult = { status: 'error', error: message, groups: [], updatedAt: now() };
+    blindCheckStore.updateBlindCheckWithoutReload(partial);
+    emit(recoveredTask, { blindCheckPatch: partial });
+  }
+
+  function recoverInterruptedBlindCheckTask(state) {
+    if (activeTasks.has('blind-check-run') || state.checkTask?.status !== 'running') return;
+    const message = '上次检查未完成，请重新检查';
+    const recoveredTask = {
+      ...state.checkTask,
+      status: 'error',
+      progress: 100,
+      logs: [message],
+      error: message,
+      updated_at: now(),
+    };
+    const partial = { checkTask: recoveredTask };
+    if (state.result?.status === 'running') partial.result = { status: 'error', error: message, groups: [], updatedAt: now() };
+    if (state.review?.status === 'running') partial.review = { status: 'error', error: '上次 AI 复核未完成，请重新检查', review: null, updatedAt: now() };
+    blindCheckStore.updateBlindCheckWithoutReload(partial);
+    emit(recoveredTask, { blindCheckPatch: partial });
+  }
+
   function recoverInterruptedFeasibilityTasks(state) {
     if (!feasibilityReportStore) return;
     const markError = (task, message) => {
@@ -1420,6 +1534,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   const rejectionCheckRecoveryState = rejectionCheckStore.loadRejectionCheck() || {};
   const duplicateCheckRecoveryState = duplicateCheckStore.loadDuplicateCheck() || {};
   const feasibilityReportRecoveryState = feasibilityReportStore?.loadFeasibilityReport?.() || {};
+  const blindCheckRecoveryState = blindCheckStore.loadBlindCheck() || {};
   recoverInterruptedBidSectionExtractionTask(technicalPlanRecoveryState);
   recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
@@ -1429,6 +1544,9 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedRejectionCheckTasks(rejectionCheckRecoveryState);
   recoverInterruptedDuplicateCheckTask(duplicateCheckRecoveryState);
+  recoverInterruptedBlindCheckTask(blindCheckRecoveryState);
+  recoverInterruptedBlindCheckFixTask(blindCheckRecoveryState);
+  recoverInterruptedBlindCheckExtractionTask(blindCheckRecoveryState);
   recoverInterruptedFeasibilityTasks(feasibilityReportRecoveryState);
 
   return {
@@ -1522,8 +1640,23 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         primarySession: agentService.isPrimarySession({ task_key: GLOBAL_FACTS_AGENT_TASK_KEY }),
       });
     },
+    // 正文生成、单节修改和导出修复共用任务管理，修复不重置生成状态。
     startContentGeneration(payload) {
       const technicalPlan = technicalPlanStore.loadTechnicalPlan();
+      const runtime = technicalPlan.contentGenerationRuntime || {};
+      const continuingRepair = Boolean((payload?.resume || payload?.retryFailedSections || payload?.retry_failed_sections)
+        && runtime.phase === 'export-repair');
+      if (payload?.exportRepair || continuingRepair) {
+        if (isActiveTaskStatus(activeTasks.get('content-generation')?.status)) {
+          throw new Error('当前正文任务正在执行，请等待完成后再导出');
+        }
+        return startManagedTask('content-generation', payload, runContentGenerationTask, {
+          contentGenerationRuntime: {
+            ...runtime, phase: 'export-repair', target_item_id: '',
+            regenerate_requirement: payload.exportRepair || runtime.regenerate_requirement,
+          },
+        }, { primarySession: true });
+      }
       if (!technicalPlan.outlineWordControlSnapshot) {
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
       }
@@ -1617,6 +1750,15 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         throw new Error('标书查重任务服务尚未初始化');
       }
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
+    },
+    startBlindCheck(payload) {
+      return startManagedTask('blind-check-run', payload, runBlindCheckTask);
+    },
+    startBlindCheckFix(payload) {
+      return startManagedTask('blind-check-fix', payload, runBlindCheckFixTask);
+    },
+    startBlindCheckPresetExtraction(payload) {
+      return startManagedTask('blind-check-preset-extraction', payload, runBlindCheckPresetExtractionTask);
     },
     startFeasibilityAnalysis(payload) {
       return startManagedTask('feasibility-analysis', payload, runFeasibilityAnalysisTask, {
@@ -1770,6 +1912,27 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           documentRole === 'bid' ? ['rejection-check-run'] : undefined,
         ),
       });
+    },
+    // 暗标 AI 复核的持久会话属于当前待检文档，换文件、移除和重置时连同结果一起删除。
+    async resetBlindCheck() {
+      await cancelBlindCheckTasks('暗标合规检查已重置，后台任务已取消');
+      const state = blindCheckStore.clearBlindCheck();
+      agentService.deletePersistentTask(BLIND_CHECK_AGENT_TASK_KEY);
+      return state;
+    },
+    async importBlindCheckFile(filePath) {
+      const state = await blindCheckStore.importFile(filePath, {
+        beforeCommit: () => cancelBlindCheckTasks('待检文档已更换，后台任务已取消', BLIND_CHECK_DOCUMENT_TASK_TYPES),
+      });
+      agentService.deletePersistentTask(BLIND_CHECK_AGENT_TASK_KEY);
+      return state;
+    },
+    async removeBlindCheckFile() {
+      const state = await blindCheckStore.removeFile({
+        beforeCommit: () => cancelBlindCheckTasks('待检文档已移除，后台任务已取消', BLIND_CHECK_DOCUMENT_TASK_TYPES),
+      });
+      agentService.deletePersistentTask(BLIND_CHECK_AGENT_TASK_KEY);
+      return state;
     },
     async resetFeasibilityReport() {
       await cancelFeasibilityReportTasks('可研报告已重置，后台任务已取消');

@@ -12,6 +12,7 @@ import DuplicateCheckPage from '../features/duplicate-check/pages/DuplicateCheck
 import CredentialLibraryPage from '../features/credential-library/pages/CredentialLibraryPage';
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
+import BlindCheckPage from '../features/blind-check/pages/BlindCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
 import PluginsPage from '../features/plugins/pages/PluginsPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
@@ -42,7 +43,7 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
 
   switch (activeSection) {
     case 'technical-plan':
-      return <TechnicalPlanHome registerLeaveGuard={registerLeaveGuard} />;
+      return <TechnicalPlanHome registerLeaveGuard={registerLeaveGuard} onNavigate={onSectionChange} />;
     case 'feasibility-report':
       return <FeasibilityReportHome registerLeaveGuard={registerLeaveGuard} />;
     case 'document-knowledge-base':
@@ -57,6 +58,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <DuplicateCheckPage />;
     case 'rejection-check':
       return <RejectionCheckPage />;
+    case 'blind-check':
+      return <BlindCheckPage />;
     case 'template-settings':
       return <MyTemplatesPage />;
     case 'developer-test':

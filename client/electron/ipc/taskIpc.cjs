@@ -53,6 +53,18 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.startDuplicateAnalysis(payload);
   });
+  ipcMain.handle('tasks:start-blind-check', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBlindCheck(payload);
+  });
+  ipcMain.handle('tasks:start-blind-check-fix', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBlindCheckFix(payload);
+  });
+  ipcMain.handle('tasks:start-blind-check-preset-extraction', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBlindCheckPresetExtraction(payload);
+  });
   ipcMain.handle('tasks:start-feasibility-analysis', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startFeasibilityAnalysis(payload);

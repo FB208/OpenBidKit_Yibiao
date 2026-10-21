@@ -451,6 +451,10 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+.overview-usage-cards {
+  grid-template-columns: repeat(6, 1fr);
+}
+
 .card {
   padding: 14px 16px;
 }

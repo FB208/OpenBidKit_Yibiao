@@ -3,14 +3,14 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { collectOutlineExportEntries, getPendingContentModeMessage, renderMarkdownForRestrictedHtml } = require('./exportService.cjs');
-const { findHtmlStructureIssues, repairHtmlStructure } = require('../utils/htmlStructure.cjs');
+const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 
 /** 转义程序插入的项目名、目录标题和占位提示。 */
 function escapeHtml(text) {
   return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** 读取 AI 小节正文；正文缺失或图片未就绪时返回未完成原因，其他读取错误继续抛出。 */
+/** 读取 AI 小节正文；图片未就绪时仍返回原始 HTML，供导出前检查源码。 */
 function readAiSection(workspaceDir, file) {
   if (!workspaceDir) return { reason: '正文未生成', detail: `正文 Agent 工作区不存在，无法读取 ${file}` };
   let body;
@@ -20,15 +20,15 @@ function readAiSection(workspaceDir, file) {
     if (error.code === 'ENOENT') return { reason: '正文未生成', detail: `正文文件不存在：${file}` };
     throw error;
   }
-  if (!body.trim()) return { reason: '正文未生成', detail: `正文文件为空：${file}` };
+  if (!body.trim()) return { body, reason: '正文未生成', detail: `正文文件为空：${file}` };
   const $ = cheerio.load(body, null, false);
   for (const img of $('img').toArray()) {
     const reference = $(img).attr('data-yb-asset-ref');
-    if (!reference) return { reason: '有图片未生成完成', detail: '图片缺少 data-yb-asset-ref' };
+    if (!reference) return { body, reason: '有图片未生成完成', detail: '图片缺少 data-yb-asset-ref' };
     try {
       fs.accessSync(path.join(workspaceDir, reference));
     } catch (error) {
-      if (error.code === 'ENOENT') return { reason: '有图片未生成完成', detail: `图片文件不存在：${reference}` };
+      if (error.code === 'ENOENT') return { body, reason: '有图片未生成完成', detail: `图片文件不存在：${reference}` };
       throw error;
     }
   }
@@ -40,8 +40,8 @@ function aiSectionFile(item) {
   return `正文/${encodeURIComponent(item.id)}.html`;
 }
 
-/** 整本导出只读取当前目录、模板和 Agent 产物，不修改正文工作区。 */
-function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService }) {
+/** 整本导出读取当前产物，检查问题交给现有正文任务修复。 */
+function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, startContentGeneration }) {
   return {
     /**
      * 保存对话框与转换使用同一次点击时的目录和模板。
@@ -62,21 +62,29 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       };
     },
 
-    /** 导出前逐节检查 AI 正文结构，供用户确认是否继续；未完成小节仍按原规则在导出时提示。 */
+    /** 导出前逐节检查原始 HTML，汇总结构问题及稳定文件定位。 */
     inspect(snapshot) {
       const issues = [];
       for (const { item } of collectOutlineExportEntries(snapshot.outline, snapshot.export_template_scope === 'ai-only')) {
         if (item.children?.length || item.content_mode !== 'ai-generate') continue;
-        const section = readAiSection(snapshot.workspaceDir, aiSectionFile(item));
-        if (section.reason) continue;
-        const problems = findHtmlStructureIssues(section.body);
-        if (problems.length) issues.push({ section: `${item.number} ${item.title}`, problems });
+        const file = aiSectionFile(item);
+        const section = readAiSection(snapshot.workspaceDir, file);
+        if (section.body === undefined) continue;
+        const problems = findHtmlStructureIssues(section.body, { checkSourceCompleteness: true });
+        if (problems.length) issues.push({ id: item.id, section: `${item.number} ${item.title}`, file, problems });
       }
       return issues;
     },
 
+    /** 将本次问题作为结果要求交给原正文任务，不在导出服务执行修复。 */
+    repair(issues) {
+      const requirement = '导出前检查发现以下小节存在问题。请结合已有会话上下文、项目资料和受限 HTML 规范完成修复，使这些小节具备完整正文、有效图片引用和符合规范的 HTML，能够用于 Word 导出。\n\n'
+        + issues.map(issue => `${issue.section}\n稳定 ID：${issue.id}\nHTML 文件：${issue.file}\n检查问题：\n${issue.problems.map(problem => `- ${problem}`).join('\n')}`).join('\n\n');
+      return startContentGeneration({ exportRepair: requirement });
+    },
+
     /**
-     * 按当前目录顺序组装全文，统一套用当前模板并转换一次；用户导出跳过未完成的 AI 小节、修复结构不完整的小节，格式自检保持严格校验。
+     * 按当前目录顺序组装已通过预检的原始 HTML，统一套用模板；格式自检保持严格校验。
      * 无法导出的单张图片在原位改为文字提示，按小节写入 warnings，不中断导出。
      */
     async build(snapshot, { onProgress, stats, developerLogger, layoutCheck = false }) {
@@ -86,7 +94,6 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       const layoutSources = [];
       const warnings = [];
       let skippedCount = 0;
-      let repairedCount = 0;
       // 图片引用所属小节及各小节无法导出的图片原因，转换结束后按小节汇总提示。
       const imageSections = new Map();
       const imageFailures = new Map();
@@ -118,21 +125,14 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
             if (item.content_mode === 'ai-generate') {
               const file = aiSectionFile(item);
               const section = readAiSection(snapshot.workspaceDir, file);
-              const problems = section.reason ? [] : findHtmlStructureIssues(section.body);
               if (section.reason) {
                 if (layoutCheck) throw new Error(section.detail);
                 skippedCount += 1;
                 warnings.push(`小节 ${label} 未导出正文：${section.reason}`);
                 body = '<p><em>[本小节未完成，未导出正文]</em></p>';
-              } else if (problems.length) {
-                // 各节独立修复后再拼接，未闭合元素不会吞并后续小节；格式自检保持严格。
-                if (layoutCheck) throw new Error(`正文结构不完整：${problems.slice(0, 3).join('；')}`);
-                const repaired = repairHtmlStructure(section.body);
-                repairedCount += 1;
-                warnings.push(`小节 ${label} 正文结构不完整（${problems.length} 处），已自动修复后导出${repaired.repairs.length ? `：${repaired.repairs.join('；')}` : ''}`);
-                body = repaired.html;
-                recordImages(label, section.$('img').map((_i, img) => section.$(img).attr('data-yb-asset-ref')).get());
               } else if (layoutCheck) {
+                const problems = findHtmlStructureIssues(section.body);
+                if (problems.length) throw new Error(`正文结构不完整：${problems.slice(0, 3).join('；')}`);
                 const { $ } = section;
                 const blocks = $.root().children().toArray();
                 body = blocks.map((node, blockIndex) => mark($.html(node), {
@@ -184,7 +184,6 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         buffer: Buffer.from(result.bytes), warnings, stats,
         ...(warnings.length ? { message: `Word 已导出，${[
           skippedCount ? `其中 ${skippedCount} 个 AI 小节未完成，仅保留标题，请完成后重新导出` : '',
-          repairedCount ? `${repairedCount} 个小节正文结构不完整，已自动修复，请打开文档核对` : '',
           failedImageCount ? `${failedImageCount} 张图片无法导出，已在原位置用文字标出，请打开文档核对` : '',
         ].filter(Boolean).join('；')}。` } : {}),
         ...(layoutCheck ? { layoutSources } : {}),

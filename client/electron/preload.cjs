@@ -80,6 +80,10 @@ const bridge = {
     getModelInfo: (modelName) => ipcRenderer.invoke('config:get-model-info', modelName),
     openConfigFolder: () => ipcRenderer.invoke('config:open-config-folder'),
   },
+  storage: {
+    getUsage: () => ipcRenderer.invoke('storage:get-usage'),
+    clean: (groupId) => ipcRenderer.invoke('storage:clean', groupId),
+  },
   license: {
     getStatus: () => ipcRenderer.invoke('license:get-status'),
     refresh: () => ipcRenderer.invoke('license:refresh'),
@@ -191,6 +195,8 @@ const bridge = {
   },
   file: {
     selectDuplicateCheckFiles: (options) => ipcRenderer.invoke('file:select-duplicate-check-files', options),
+    selectBlindCheckFile: (options) => ipcRenderer.invoke('file:select-blind-check-file', options),
+    selectBlindCheckTenderFile: () => ipcRenderer.invoke('file:select-blind-check-tender-file'),
     /** 把拖拽进来的 File 对象换成本地绝对路径，供各上传区拖拽导入使用 */
     getPathForFile: (file) => webUtils.getPathForFile(file),
   },
@@ -290,6 +296,24 @@ const bridge = {
     exportExcel: (request) => ipcRenderer.invoke('rejection-check:export-excel', request),
     clear: () => ipcRenderer.invoke('rejection-check:clear'),
   },
+  blindCheck: {
+    loadState: () => ipcRenderer.invoke('blind-check:load-state'),
+    importFile: (filePath) => ipcRenderer.invoke('blind-check:import-file', filePath),
+    removeFile: () => ipcRenderer.invoke('blind-check:remove-file'),
+    saveUiState: (payload) => ipcRenderer.invoke('blind-check:save-ui-state', payload),
+    listPresets: () => ipcRenderer.invoke('blind-check:list-presets'),
+    createPreset: (payload) => ipcRenderer.invoke('blind-check:create-preset', payload),
+    updatePreset: (presetId, patch) => ipcRenderer.invoke('blind-check:update-preset', presetId, patch),
+    deletePreset: (presetId) => ipcRenderer.invoke('blind-check:delete-preset', presetId),
+    selectPreset: (presetId) => ipcRenderer.invoke('blind-check:select-preset', presetId),
+    setUseCredentialWords: (enabled) => ipcRenderer.invoke('blind-check:set-use-credential-words', enabled),
+    getCredentialWords: () => ipcRenderer.invoke('blind-check:get-credential-words'),
+    getInputSignature: () => ipcRenderer.invoke('blind-check:get-input-signature'),
+    saveFixRules: (rules) => ipcRenderer.invoke('blind-check:save-fix-rules', rules),
+    saveFixedDocument: () => ipcRenderer.invoke('blind-check:save-fixed-document'),
+    getTenderSources: () => ipcRenderer.invoke('blind-check:get-tender-sources'),
+    clear: () => ipcRenderer.invoke('blind-check:clear'),
+  },
   templates: {
     list: () => ipcRenderer.invoke('templates:list'),
     get: (templateId) => ipcRenderer.invoke('templates:get', templateId),
@@ -312,6 +336,9 @@ const bridge = {
     startRejectionItemsExtraction: (payload) => ipcRenderer.invoke('tasks:start-rejection-items-extraction', payload),
     startRejectionCheck: (payload) => ipcRenderer.invoke('tasks:start-rejection-check', payload),
     startDuplicateAnalysis: (payload) => ipcRenderer.invoke('tasks:start-duplicate-analysis', payload),
+    startBlindCheck: (payload) => ipcRenderer.invoke('tasks:start-blind-check', payload),
+    startBlindCheckFix: (payload) => ipcRenderer.invoke('tasks:start-blind-check-fix', payload),
+    startBlindCheckPresetExtraction: (payload) => ipcRenderer.invoke('tasks:start-blind-check-preset-extraction', payload),
     startFeasibilityAnalysis: (payload) => ipcRenderer.invoke('tasks:start-feasibility-analysis', payload),
     startFeasibilityOutline: (payload) => ipcRenderer.invoke('tasks:start-feasibility-outline', payload),
     startFeasibilityParameters: (payload) => ipcRenderer.invoke('tasks:start-feasibility-parameters', payload),
@@ -328,7 +355,6 @@ const bridge = {
   },
   export: {
     exportWord: (payload) => ipcRenderer.invoke('export:word', payload),
-    cancelWordConfirmation: (requestId) => ipcRenderer.invoke('export:cancel-word-confirmation', requestId),
     openFile: (filePath) => ipcRenderer.invoke('export:open-file', filePath),
     onWordExportProgress: (callback) => {
       const listener = (_event, payload) => callback(payload);

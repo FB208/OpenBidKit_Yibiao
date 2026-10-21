@@ -1,0 +1,918 @@
+/* 暗标合规检查（BlindCheckPage.tsx）：上传区、命令条、页签、结果列表复用查重与废标检查的样式，这里只补新增部分。 */
+.blind-check-page {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  gap: 18px;
+  overflow: hidden;
+}
+
+.blind-check-page.is-upload {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+/* Step02~04 共用结构（components/StepLayout.tsx）：标题卡 + 页签条 + 内容卡片，内容卡片占满剩余高度并在内部滚动。 */
+.blind-check-page.is-preset,
+.blind-check-page.is-results,
+.blind-check-page.is-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.blind-check-page.is-preset > :not(.blind-check-step-panel),
+.blind-check-page.is-results > :not(.blind-check-step-panel),
+.blind-check-page.is-fix > :not(.blind-check-step-panel) {
+  flex-shrink: 0;
+}
+
+/* 标题按内容宽度，工具栏占其余宽度，放不下时在工具栏内换行，不挤压标题。 */
+.rejection-result-command-bar.blind-check-step-bar {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.rejection-result-command-bar.blind-check-step-bar > div:first-child {
+  white-space: nowrap;
+}
+
+/* 标题卡工具栏：预设选择器或只读信息胶囊在前，右侧依次是次要、主要操作，统一 42px 高。 */
+.blind-check-step-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.blind-check-step-toolbar > .primary-action,
+.blind-check-step-toolbar > .secondary-action {
+  display: inline-flex;
+  height: 42px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  white-space: nowrap;
+}
+
+.blind-check-preset-picker {
+  display: inline-flex;
+  height: 42px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 0 14px;
+  background: #ffffff;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.blind-check-preset-picker:focus-within {
+  border-color: var(--yb-primary);
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.12);
+}
+
+.blind-check-preset-picker-label {
+  padding-right: 10px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  border-right: 1px solid var(--yb-border-soft);
+}
+
+.blind-check-preset-picker select {
+  min-width: 180px;
+  max-width: 260px;
+  height: 100%;
+  padding: 0 6px;
+  color: var(--yb-text);
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  outline: none;
+  cursor: pointer;
+}
+
+.blind-check-preset-badge {
+  margin-right: 6px;
+  padding: 2px 8px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: rgba(15, 23, 42, 0.05);
+  border-radius: 999px;
+}
+
+.blind-check-preset-picker-tools {
+  display: inline-flex;
+  gap: 2px;
+  padding-left: 4px;
+  border-left: 1px solid var(--yb-border-soft);
+}
+
+.blind-check-preset-picker-tools button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  color: var(--yb-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-sm, 8px);
+  cursor: pointer;
+}
+
+.blind-check-preset-picker-tools button:hover:not(:disabled) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.08);
+}
+
+.blind-check-preset-picker-tools button.is-danger:hover:not(:disabled) {
+  color: var(--yb-danger, #d92d20);
+  background: rgba(217, 45, 32, 0.08);
+}
+
+.blind-check-preset-picker-tools button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.document-switch-tabs.generation-settings-tabs.blind-check-step-tabs {
+  margin: 0;
+}
+
+.blind-check-step-tabs .document-switch-tab.generation-settings-tab {
+  flex-direction: column;
+  gap: 3px;
+  min-height: 58px;
+  padding: 8px 12px;
+}
+
+.blind-check-step-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow);
+  scrollbar-gutter: stable;
+}
+
+.blind-check-readonly-note {
+  padding: 12px 14px;
+  color: var(--yb-warning-deep);
+  font-size: 13px;
+  background: var(--yb-warning-soft);
+  border: 1px solid var(--yb-warning-border);
+  border-radius: var(--yb-radius-lg);
+}
+
+.blind-check-preset-editor {
+  display: grid;
+  gap: 24px;
+}
+
+.blind-check-preset-section {
+  display: grid;
+  gap: 12px;
+}
+
+.blind-check-preset-section-head {
+  display: grid;
+  gap: 4px;
+}
+
+.blind-check-preset-section-head strong {
+  color: var(--yb-text);
+  font-size: 16px;
+}
+
+.blind-check-preset-section-head small {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 设置行复用正文生成配置的行样式，这里放开列表自身滚动，交给预设面板统一滚动。 */
+.blind-check-preset-editor .content-generation-config-list {
+  overflow: visible;
+  padding-right: 0;
+}
+
+.blind-check-preset-editor .content-generation-config-row select {
+  width: 168px;
+}
+
+.blind-check-number-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.blind-check-number-control input {
+  width: 96px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+}
+
+.blind-check-number-control input:disabled,
+.blind-check-words-field textarea:disabled {
+  color: var(--yb-text-muted);
+  background: rgba(248, 250, 253, 0.9);
+}
+
+.blind-check-number-control em {
+  min-width: 2em;
+  color: var(--yb-text-muted);
+  font-size: 13px;
+  font-style: normal;
+}
+
+.blind-check-words-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.blind-check-words-field {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  background: rgba(248, 250, 253, 0.82);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.blind-check-words-field span {
+  display: grid;
+  gap: 6px;
+}
+
+.blind-check-words-field strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.blind-check-words-field small {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.blind-check-words-field textarea {
+  min-height: 120px;
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+  background: #ffffff;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+}
+
+.blind-check-word-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.blind-check-word-chips span {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  padding: 6px 10px;
+  color: var(--yb-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.14);
+  border-radius: var(--yb-radius-pill);
+}
+
+.blind-check-word-chips em {
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+/* 汇总卡片：Step03「全部」页签与 Step04「修复结果」页签共用，标签、数字、说明分三行。 */
+.blind-check-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.blind-check-summary-cards > article,
+.blind-check-summary-cards > button {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: 2px 8px;
+  padding: 12px 16px;
+  font: inherit;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.blind-check-summary-cards span {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blind-check-summary-cards strong {
+  grid-column: 1 / -1;
+  font-size: 26px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.blind-check-summary-cards strong small {
+  margin-left: 4px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.blind-check-summary-cards p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blind-check-summary-cards .is-high {
+  color: var(--yb-danger);
+  background: var(--yb-danger-soft);
+  border-color: var(--yb-danger-border);
+}
+
+.blind-check-summary-cards .is-medium {
+  color: var(--yb-warning-deep);
+  background: var(--yb-warning-soft);
+  border-color: var(--yb-warning-border);
+}
+
+.blind-check-summary-cards .is-low {
+  color: var(--yb-success);
+  background: var(--yb-success-soft);
+  border-color: var(--yb-success-border);
+}
+
+.blind-check-result-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--yb-primary-deep);
+  font-size: 13px;
+  line-height: 1.6;
+  background: rgba(33, 116, 253, 0.06);
+  border: 1px solid rgba(33, 116, 253, 0.14);
+  border-radius: var(--yb-radius-lg);
+}
+
+.blind-check-result-note.is-warning {
+  color: var(--yb-warning-deep);
+  background: var(--yb-warning-soft);
+  border-color: var(--yb-warning-border);
+}
+
+.blind-check-result-note .text-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.blind-check-step-panel > .markdown-empty-state {
+  min-height: 220px;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-xl);
+}
+
+.blind-check-running {
+  display: grid;
+  width: 100%;
+  max-width: 640px;
+  gap: 10px;
+  margin: auto;
+}
+
+.blind-check-running h3,
+.blind-check-running p {
+  margin: 0;
+}
+
+.blind-check-error {
+  max-width: 100%;
+  margin: 14px 0 0;
+  overflow: auto;
+  padding: 12px 14px;
+  color: var(--yb-danger-deep);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--yb-danger-soft);
+  border: 1px solid var(--yb-danger-border);
+  border-radius: var(--yb-radius-md);
+}
+
+.blind-check-rule-errors {
+  padding: 12px 14px;
+  color: var(--yb-warning-deep);
+  font-size: 13px;
+  background: var(--yb-warning-soft);
+  border: 1px solid var(--yb-warning-border);
+  border-radius: var(--yb-radius-lg);
+}
+
+.blind-check-rule-errors ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+/* 问题分组（Step03 与 Step04 共用）：一行显示风险、结论、是否可自动修复和数量，展开后显示修改方法与定位样本。 */
+.blind-check-group-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.blind-check-group {
+  background: #ffffff;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+  transition: border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
+}
+
+.blind-check-group:hover {
+  border-color: rgba(33, 116, 253, 0.22);
+}
+
+.blind-check-group.is-expanded {
+  border-color: rgba(33, 116, 253, 0.26);
+  box-shadow: 0 10px 24px rgba(33, 116, 253, 0.08);
+}
+
+.blind-check-group-row {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.blind-check-group-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--yb-text-muted);
+  transition: transform var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.blind-check-group.is-expanded .blind-check-group-chevron {
+  color: var(--yb-primary);
+  transform: rotate(90deg);
+}
+
+.blind-check-group-row strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 问题标题行的状态标记：需人工确认、修复后新出现。 */
+.blind-check-group-tag {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  color: var(--yb-warning-deep);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  background: var(--yb-warning-soft);
+  border-radius: var(--yb-radius-pill);
+}
+
+.blind-check-group-count {
+  min-width: 64px;
+  flex: 0 0 auto;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.blind-check-group-detail {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px 42px;
+}
+
+/* 问题展开后的统一排版（components/IssueDetail.tsx）：左列灰色标签、右列内容；出现位置每处一条，行首是位置标签。 */
+.blind-check-detail-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.blind-check-detail-rows > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.blind-check-detail-rows dt {
+  color: var(--yb-text-muted);
+  font-weight: 700;
+}
+
+.blind-check-detail-rows dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--yb-text);
+  word-break: break-all;
+}
+
+.blind-check-occurrence-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.blind-check-occurrence {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--yb-border);
+}
+
+.blind-check-occurrence:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.blind-check-occurrence.is-dismissed {
+  opacity: 0.6;
+}
+
+.blind-check-occurrence-where {
+  max-width: 220px;
+  overflow: hidden;
+  padding: 0 8px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(15, 23, 42, 0.05);
+  border-radius: var(--yb-radius-pill);
+}
+
+.blind-check-occurrence-body {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.blind-check-occurrence-body p {
+  margin: 0;
+}
+
+.blind-check-occurrence-text {
+  color: var(--yb-text);
+}
+
+.blind-check-occurrence-note {
+  color: var(--yb-text-soft);
+  font-size: 12px;
+}
+
+.blind-check-occurrence del {
+  color: var(--yb-danger);
+}
+
+.blind-check-occurrence ins {
+  color: var(--yb-success);
+  text-decoration: none;
+}
+
+.blind-check-sample-more {
+  margin: 0;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+.blind-check-name-field {
+  display: grid;
+  gap: 8px;
+}
+
+.blind-check-name-field span {
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.blind-check-name-field input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+}
+
+/* AI 从招标文件生成预设：来源选择、提取进度、提取说明与字段依据。 */
+/* 招标文件来源：两行可点击的选项，图标 + 标题 + 一行说明 + 右箭头，整行即按钮。 */
+.blind-check-source-options {
+  display: grid;
+  gap: 10px;
+}
+
+.blind-check-source-option {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  background: #ffffff;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-lg);
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.blind-check-source-option:hover:not(:disabled) {
+  background: rgba(33, 116, 253, 0.04);
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: 0 6px 18px rgba(33, 116, 253, 0.1);
+}
+
+.blind-check-source-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.blind-check-source-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.09);
+  border-radius: 12px;
+}
+
+.blind-check-source-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.blind-check-source-text {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.blind-check-source-text strong {
+  color: var(--yb-text);
+  font-size: 15px;
+}
+
+.blind-check-source-text small {
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.blind-check-source-arrow {
+  width: 18px;
+  height: 18px;
+  color: var(--yb-text-muted);
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.blind-check-source-option:hover:not(:disabled) .blind-check-source-arrow {
+  color: var(--yb-primary);
+  transform: translateX(2px);
+}
+
+.blind-check-extraction-progress {
+  max-width: none;
+  margin: 0;
+}
+
+.blind-check-running .blind-check-extraction-slow {
+  color: var(--yb-warning-deep);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.blind-check-extraction-notice {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  font-size: 13px;
+  line-height: 1.7;
+  background: rgba(33, 116, 253, 0.05);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: var(--yb-radius-lg);
+}
+
+.blind-check-extraction-notice p,
+.blind-check-extraction-notice ul {
+  margin: 0;
+  color: var(--yb-text-soft);
+}
+
+.blind-check-extraction-notice ul {
+  padding-left: 18px;
+}
+
+.blind-check-manual-related {
+  display: block;
+  color: var(--yb-primary-deep);
+  font-size: 12px;
+}
+
+.blind-check-extraction-notice strong {
+  color: var(--yb-text);
+}
+
+.document-switch-tab.generation-settings-tab.blind-check-step-tab-warning .generation-settings-tab-summary {
+  color: var(--yb-warning-deep);
+}
+
+.blind-check-preset-editor .content-generation-config-row small.blind-check-evidence {
+  display: block;
+  margin-top: 4px;
+  color: var(--yb-primary-deep);
+}
+
+.blind-check-evidence em {
+  margin-right: 6px;
+  padding: 1px 6px;
+  color: #ffffff;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  background: var(--yb-primary);
+  border-radius: var(--yb-radius-pill);
+}
+
+.blind-check-preset-editor .content-generation-config-row small.blind-check-evidence.is-unverified {
+  color: var(--yb-warning-deep);
+}
+
+.blind-check-evidence.is-unverified em {
+  background: var(--yb-warning-deep);
+}
+
+.blind-check-preset-editor .content-generation-config-row small.blind-check-evidence.is-unspecified {
+  color: var(--yb-text-muted);
+}
+
+/* Step04 自动修复：修复项复用预设设置行，修复结果复用检查结果的卡片与问题列表。 */
+.blind-check-fix-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.blind-check-fix-control em {
+  min-width: 64px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+  font-style: normal;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.blind-check-fix-control em.has-issues {
+  color: var(--yb-warning-deep);
+  font-weight: 800;
+}
+
+.blind-check-unverified {
+  margin-left: 8px;
+  padding: 1px 6px;
+  color: var(--yb-warning-deep);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--yb-warning-soft);
+  border-radius: var(--yb-radius-pill);
+}
+
+/* 问题展开后「招标要求」一行里的多条招标原文。 */
+.blind-check-requirement {
+  margin: 0;
+}
+
+.blind-check-requirement + .blind-check-requirement {
+  margin-top: 4px;
+}
+
+/* 修复结果（Step04）：修复范围内的问题和修复后新出现的问题，每行显示已修复、待人工处理的处数。 */
+.blind-check-fix-items {
+  display: grid;
+  gap: 10px;
+}
+
+.blind-check-fix-items .rejection-bid-result-filter button {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.blind-check-fix-badges {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.blind-check-fix-badges em {
+  padding: 3px 8px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+  border-radius: var(--yb-radius-pill);
+}
+
+.blind-check-fix-badges .is-fixed {
+  color: var(--yb-success);
+  background: var(--yb-success-soft);
+}
+
+.blind-check-fix-badges .is-pending {
+  color: var(--yb-warning-deep);
+  background: var(--yb-warning-soft);
+}
+
+.blind-check-group.is-fix-fixed .blind-check-group-row strong {
+  color: var(--yb-text-soft);
+}
+
+@media (max-width: 1100px) {
+  .rejection-result-command-bar.blind-check-step-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .blind-check-words-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

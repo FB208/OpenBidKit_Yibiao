@@ -8,6 +8,22 @@ const EXCEL_TEXT_TRUNCATION_SUFFIX = '……（内容过长，已截断）';
 
 const rejectionSheetNames = ['检查概览', '废标项', '错别字', '逻辑问题'];
 const duplicateSheetNames = ['查重概览', '元数据', '目录重复', '文件相似度', '重复句子', '重复图片'];
+const blindCheckSeverityLabels = { high: '高风险', medium: '中风险', low: '低风险' };
+const blindCheckClauseLabels = { pass: '符合', fail: '不符合', unknown: '无法判断' };
+const blindCheckFixStatusLabels = { fixed: '已修复', pending: '待人工处理', not_problem: '无需处理' };
+const blindCheckCategoryLabels = {
+  privacy: '隐私与匿名',
+  structure: '结构',
+  page: '页面',
+  paragraph: '段落',
+  font: '字体',
+  text: '标点空格',
+  table: '表格',
+  consistency: '一致性',
+  image: '图片',
+};
+// 键与 OpenXmlHelper OutlineAnalyzer 输出的 heading_sources 一致。
+const blindCheckHeadingSourceLabels = { toc: '目录', style: '标题样式', pattern: '编号' };
 
 function normalizeCellText(value) {
   if (value === null || value === undefined) return '';
@@ -389,6 +405,7 @@ function createCheckResultExportService({
   dialog,
   rejectionCheckStore,
   duplicateCheckStore,
+  blindCheckStore,
   fileSystem = fs,
   now = () => new Date(),
 }) {
@@ -441,7 +458,31 @@ function createCheckResultExportService({
     }
   }
 
-  return { exportRejectionExcel, exportDuplicateExcel };
+  /** 导出暗标修复结果：把修复副本复制到用户选的位置，默认放在原文件所在目录，不允许覆盖原文件。 */
+  async function saveBlindCheckFixedDocument() {
+    try {
+      const fixed = blindCheckStore.getFixedDocument();
+      if (!fixed) return { success: false, message: '没有可导出的修复结果，请重新修复' };
+      const originalDir = fixed.originalPath ? path.dirname(fixed.originalPath) : '';
+      const defaultDir = originalDir && fileSystem.existsSync(originalDir) ? originalDir : app?.getPath ? app.getPath('downloads') : process.cwd();
+      const saveResult = await dialog.showSaveDialog({
+        title: '导出修复结果',
+        defaultPath: path.join(defaultDir, sanitizeFileName(`${path.parse(fixed.fileName).name}（暗标修复）.docx`)),
+        filters: [{ name: 'Word 文档', extensions: ['docx'] }],
+      });
+      if (saveResult.canceled || !saveResult.filePath) return { success: false, canceled: true, message: '已取消导出' };
+      const outputPath = /\.docx$/i.test(saveResult.filePath) ? saveResult.filePath : `${saveResult.filePath}.docx`;
+      if (fixed.originalPath && path.resolve(outputPath).toLowerCase() === path.resolve(fixed.originalPath).toLowerCase()) {
+        return { success: false, message: '不能覆盖原文件，请换一个文件名' };
+      }
+      fileSystem.copyFileSync(fixed.path, outputPath);
+      return { success: true, path: outputPath, message: '修复结果已导出' };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : '修复结果导出失败' };
+    }
+  }
+
+  return { exportRejectionExcel, exportDuplicateExcel, saveBlindCheckFixedDocument };
 }
 
 module.exports = {

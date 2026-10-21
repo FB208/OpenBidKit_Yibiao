@@ -1,15 +1,3 @@
-<img src="./screenshots/banner2.webp" alt="Yibiao usage demo video" width="100%">
-
-## 🙏 Sponsors
-
-| Sponsors | Description |
-| --- | --- |
-| ![PackyCode](./screenshots/PackyCode.png) | Access leading AI models through PackyCode with one API endpoint and one API key. Enjoy fast, reliable access with automatic failover and dedicated high-speed routes for Codex and Claude Code.  Get started with $1 in free credits, a discount on your first top-up, and savings of up to 80% on eligible routes. Pay in RMB with no currency conversion markups or extra top-up fees.  [Sign up through the link](https://s.markup.com.cn/packycode) and start building today. |
-| ![ProdClub](./screenshots/prodclub.webp) | ProdClub specializes in ChatGPT subscription top-ups directly to your own account, handling orders directly and processing a thousand orders daily with reliable service. It offers Plus, Pro 5X, and Pro 20X plans, with automatic activation on your own account after payment via QR code. It also offers refunds for the price difference when upgrading from Plus to Pro, 24/7 online customer support before and after purchase, and invoices for proof of purchase and service accountability. ChatGPT/Codex SMS verification services are also available. [Visit ProdClub](https://s.markup.com.cn/prodclub) and use promo code SP7CGN for a discount. Final prices are shown on the order page. |
-| ![SJBG](./screenshots/sjbg.webp) | Sichuan Lixiang Accounting Firm Co., Ltd., established Jan. 25, 1995. Services: audit reports; mergers, divisions and liquidations; final accounts and nonprofit audits; annual filings; capital verification; performance evaluation; tenure and exit audits; accounting advisory; forensic accounting; accounting, tax and management consulting; accounting training; tech project acceptance; and investment feasibility studies. Nationwide service! Tel/WeChat: 18782234757. Email: 18782234757@163.com. Website: [https://bidpower.cc.cd](https://s.markup.com.cn/sjbg) |
-| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | JLaudeAPI is a trusted AI API aggregation platform offering GPT, Claude, Gemini, Grok, leading Chinese LLMs, and mainstream image/video generation models with reliable access.It also provides an enterprise-grade management panel, transparent GPT-Pro account status, invoicing, and corporate payment support—built for business development and production use.Get started via this [registration link](https://s.markup.com.cn/jl). |
-| ![DianBiaoCha](./screenshots/dianbiaocha.webp) | DianBiaoCha is a permanently free WeChat mini program for searching State Grid tender information. Tender notices and contract award information are continuously updated and searchable by region, date, and keyword. View companies' awarded projects, number of lots won, award amounts, and rankings. Follow regions or companies to see new updates in your subscription feed. Companies can also share their contract award records with a single tap, making it easy for customers and partners to learn more. Scan the QR code with WeChat to get started. |
-
 # Yibiao Bid Toolbox - AI Bid Proposal Writing Assistant
 
 <p align="center">
@@ -33,7 +21,6 @@
 <p align="center">
   <a href="https://trendshift.io/repositories/45446?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/45446" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
   <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/daily?language=JavaScript&amp;v=20260720" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
-  <a href="https://trendshift.io/repositories/45446?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-45446" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/45446/weekly?language=JavaScript" alt="FB208%2FOpenBidKit_Yibiao | Trendshift" width="250" height="55"></a>
     <a href="https://atomgit.com/FB208/OpenBidKit_Yibiao"><img alt="AtomGit G-Star" src="https://atomgit.com/FB208/OpenBidKit_Yibiao/star/new_badge.svg"></a>
 </p>
 
@@ -56,9 +43,21 @@
 
 **Online Experience**: [https://yibiao.pro](https://yibiao.pro)  [Get more product information, online demos, and technical support.]
 
+## 🙏 Sponsors
+
+| Sponsors | Description |
+| --- | --- |
+| ![PackyCode](./screenshots/PackyCode.png) | Access leading AI models through PackyCode with one API endpoint and one API key. Enjoy fast, reliable access with automatic failover and dedicated high-speed routes for Codex and Claude Code.  Get started with $1 in free credits, a discount on your first top-up, and savings of up to 80% on eligible routes. Pay in RMB with no currency conversion markups or extra top-up fees.  [Sign up through the link](https://s.markup.com.cn/packycode) and start building today. |
+| ![ProdClub](./screenshots/prodclub.webp) | ProdClub specializes in ChatGPT subscription top-ups directly to your own account, handling orders directly and processing a thousand orders daily with reliable service. It offers Plus, Pro 5X, and Pro 20X plans, with automatic activation on your own account after payment via QR code. It also offers refunds for the price difference when upgrading from Plus to Pro, 24/7 online customer support before and after purchase, and invoices for proof of purchase and service accountability. ChatGPT/Codex SMS verification services are also available. [Visit ProdClub](https://s.markup.com.cn/prodclub) and use promo code SP7CGN for a discount. Final prices are shown on the order page. |
+| ![SJBG](./screenshots/sjbg.webp) | Sichuan Lixiang Accounting Firm Co., Ltd., established Jan. 25, 1995. Services: audit reports; mergers, divisions and liquidations; final accounts and nonprofit audits; annual filings; capital verification; performance evaluation; tenure and exit audits; accounting advisory; forensic accounting; accounting, tax and management consulting; accounting training; tech project acceptance; and investment feasibility studies. Nationwide service! Tel/WeChat: 18782234757. Email: 18782234757@163.com. Website: [https://bidpower.cc.cd](https://s.markup.com.cn/sjbg) |
+| ![JLaudeAPI](./screenshots/JLaudeAPI.png) | JLaudeAPI is a trusted AI API aggregation platform offering GPT, Claude, Gemini, Grok, leading Chinese LLMs, and mainstream image/video generation models with reliable access.It also provides an enterprise-grade management panel, transparent GPT-Pro account status, invoicing, and corporate payment support—built for business development and production use.Get started via this [registration link](https://s.markup.com.cn/jl). |
+| ![DianBiaoCha](./screenshots/dianbiaocha.webp) | DianBiaoCha is a permanently free WeChat mini program for searching State Grid tender information. Tender notices and contract award information are continuously updated and searchable by region, date, and keyword. View companies' awarded projects, number of lots won, award amounts, and rankings. Follow regions or companies to see new updates in your subscription feed. Companies can also share their contract award records with a single tap, making it easy for customers and partners to learn more. Scan the QR code with WeChat to get started. |
+
 ## 💌 Friendly Links
 
 [Yibiao Web Version (provided by a third party)](https://github.com/jdcome/OpenBidKit-Yibiao-Web)
+
+<img src="./screenshots/banner2.webp" alt="Yibiao usage demo video" width="100%">
 
 <h2 align="center">✨ Features & Advantages</h2>
 
@@ -227,6 +226,26 @@ Yibiao Bid Toolbox/
 ├── screenshots/               # README image assets
 └── README.md                  # Chinese project README
 ```
+
+## 🙏 Apology
+
+Yibiao AI has never instructed or encouraged anyone to promote it in other vendors' customer groups. These actions were taken by individual users, and we sincerely apologize to the vendors affected.<br>
+We have explicitly prohibited this behavior.<br>
+AI bid writing is still in its early stages, with ample room for growth. By working together, vendors can grow the industry for everyone's benefit.<br>
+Yibiao strives to learn from industry leaders, and we once again apologize to the vendors affected.
+
+<table>
+<tr>
+<td>
+
+![](https://oss.agnet.top/keep/2026/09/29/20260929191738985.png)
+</td>
+<td>
+
+![](https://oss.agnet.top/keep/2026/09/29/20260929174208277.png)
+</td>
+</tr>
+</table>
 
 ## 🍉 Acknowledgements
 

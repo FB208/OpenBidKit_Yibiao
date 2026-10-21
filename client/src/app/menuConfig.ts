@@ -71,6 +71,12 @@ export const appMenuItems: AppMenuItem[] = [
         icon: 'shield',
       },
       {
+        id: 'blind-check',
+        label: '暗标合规检查',
+        description: '匿名性与排版格式合规检查',
+        icon: 'shield',
+      },
+      {
         id: 'ai-evaluation',
         label: 'AI评标',
         description: '模拟AI评标，对标书进行打分，出具评标报告',

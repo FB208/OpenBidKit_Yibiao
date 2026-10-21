@@ -2747,6 +2747,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     readTenderMarkdown,
     readContentWord,
     readTenderSourceMarkdown,
+    listTenderSourceFiles: () => loadTenderSourceFiles().map((file) => ({ id: file.id, fileName: file.fileName })),
     readOriginalTenderMarkdown,
     readOriginalPlanMarkdown,
     assertOriginalImageFiles,
