@@ -80,6 +80,10 @@ const bridge = {
     getModelInfo: (modelName) => ipcRenderer.invoke('config:get-model-info', modelName),
     openConfigFolder: () => ipcRenderer.invoke('config:open-config-folder'),
   },
+  storage: {
+    getUsage: () => ipcRenderer.invoke('storage:get-usage'),
+    clean: (groupId) => ipcRenderer.invoke('storage:clean', groupId),
+  },
   license: {
     getStatus: () => ipcRenderer.invoke('license:get-status'),
     refresh: () => ipcRenderer.invoke('license:refresh'),

@@ -10,6 +10,7 @@ import OfficialAccountControls from '../components/OfficialAccountControls';
 import OfficialInvoicePanel from '../components/OfficialInvoicePanel';
 import OfficialOrdersPanel from '../components/OfficialOrdersPanel';
 import OfficialTransactionsPanel from '../components/OfficialTransactionsPanel';
+import StorageSpaceDialog from '../components/StorageSpaceDialog';
 
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
 type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'busy' | 'error';
@@ -669,6 +670,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
   const [updateError, setUpdateError] = useState('');
   const [licenseStatus, setLicenseStatus] = useState<LicenseRuntimeStatus | null>(null);
   const [offlineLicenseDialogOpen, setOfflineLicenseDialogOpen] = useState(false);
+  const [storageDialogOpen, setStorageDialogOpen] = useState(false);
   const [agentSelfCheckStatus, setAgentSelfCheckStatus] = useState<AgentSelfCheckUiStatus>('untested');
   const [agentSelfCheckResult, setAgentSelfCheckResult] = useState<AgentSelfCheckResult | null>(null);
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
@@ -1788,6 +1790,21 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
             </label>
           </div>
 
+          <div className="settings-group-title">存储</div>
+          <div className="settings-list">
+            <div className="settings-row">
+              <div className="settings-row-copy">
+                <strong>存储空间</strong>
+                <span>查看本机数据占用，清理历史遗留文件以及临时、缓存、日志等文件</span>
+              </div>
+              <div className="settings-action-cell">
+                <button type="button" className="inline-action" onClick={() => setStorageDialogOpen(true)}>
+                  查看与清理
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="settings-group-title">开发者</div>
           <div className="settings-list">
             <label className="settings-row">
@@ -2704,6 +2721,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
         onOpenChange={setOfflineLicenseDialogOpen}
         onActivated={setLicenseStatus}
       />
+      {storageDialogOpen && <StorageSpaceDialog onClose={() => setStorageDialogOpen(false)} />}
       <FloatingToolbar groups={settingsToolbarGroups} label="设置保存工具条" />
     </div>
   );

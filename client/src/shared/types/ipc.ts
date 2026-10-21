@@ -206,6 +206,39 @@ export interface WorkspaceDatabaseStatus {
   migrationDescription?: string;
 }
 
+export type StorageUsageGroupId = 'protected' | 'legacy' | 'temporary';
+export type StorageCleanGroupId = Exclude<StorageUsageGroupId, 'protected'>;
+
+export interface StorageUsageItem {
+  id: string;
+  label: string;
+  description: string;
+  bytes: number;
+}
+
+export interface StorageUsageGroup {
+  id: StorageUsageGroupId;
+  label: string;
+  description: string;
+  bytes: number;
+  items: StorageUsageItem[];
+}
+
+export interface StorageUsage {
+  groups: StorageUsageGroup[];
+  totalBytes: number;
+  scannedAt: string;
+}
+
+export interface StorageCleanResult {
+  freedBytes: number;
+  /** 被占用或无权限而未删除的条目数。 */
+  failedCount: number;
+  /** 因相关任务运行中而整体跳过的清理项。 */
+  skipped: Array<{ label: string; reason: string }>;
+  usage: StorageUsage;
+}
+
 export type AgentSelfCheckStepStatus = 'pending' | 'running' | 'success' | 'warning' | 'error' | 'skipped';
 export type AgentSelfCheckStatus = 'normal' | 'error' | 'busy';
 
@@ -612,6 +645,10 @@ export interface YibiaoBridge {
     listModels: (config?: ClientConfig) => Promise<ModelListResult>;
     getModelInfo: (modelName: string) => Promise<ModelInfoResult>;
     openConfigFolder: () => Promise<{ success: boolean; path: string }>;
+  };
+  storage: {
+    getUsage: () => Promise<StorageUsage>;
+    clean: (groupId: StorageCleanGroupId) => Promise<StorageCleanResult>;
   };
   license: {
     getStatus: () => Promise<LicenseRuntimeStatus>;

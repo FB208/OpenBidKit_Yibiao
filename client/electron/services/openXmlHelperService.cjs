@@ -352,6 +352,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
   let previewAssetPromise = null;
   let previewActive = null;
   let previewPending = null;
+  // 正在使用任务目录的调用数，存储清理据此跳过运行中的助手任务。
+  let activeJobCount = 0;
   // 模板预览会在几份配置之间来回切换，留一小段最近结果就能把重复生成挡在链路之外。
   const previewCache = new Map();
   const logger = createDeveloperLogger({
@@ -406,6 +408,16 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
   function ping() {
     return runner.runJob({ action: 'ping', timeoutMs: PING_TIMEOUT_MS });
+  }
+
+  /** Agent 工具直接提交的任务，调用方读完任务目录前都计为运行中。 */
+  async function runTrackedJob(request) {
+    activeJobCount += 1;
+    try {
+      return await runner.runJob(request);
+    } finally {
+      activeJobCount -= 1;
+    }
   }
 
   /**
@@ -549,6 +561,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     let temporaryAssets;
     let result;
     const assetTypes = {};
+    activeJobCount += 1;
     try {
       if (options.copyAssets) {
         const workspace = getWorkspaceDir(app);
@@ -606,13 +619,18 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         imageWarnings: result.imageWarnings,
       };
     } finally {
-      const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
-      if (result) {
-        const jobDir = path.resolve(result.jobDir);
-        if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
-      }
-      if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
-        fs.rmSync(temporaryAssets, { recursive: true, force: true });
+      // 目录被占用时 rmSync 会抛错，计数放在内层 finally，保证任务结束后一定归还。
+      try {
+        const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
+        if (result) {
+          const jobDir = path.resolve(result.jobDir);
+          if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
+        }
+        if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
+          fs.rmSync(temporaryAssets, { recursive: true, force: true });
+        }
+      } finally {
+        activeJobCount -= 1;
       }
     }
   }
@@ -636,6 +654,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         // 助手替换进度文件的瞬间可能读不到，下一轮再读。
       }
     };
+    activeJobCount += 1;
     try {
       const result = await blindCheckRunner.runJob({
         action,
@@ -649,10 +668,14 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       });
       return JSON.parse(fs.readFileSync(path.join(result.jobDir, String(result.output || outputName)), 'utf8'));
     } finally {
-      if (timer) clearInterval(timer);
-      await blindCheckRunner.close().catch(() => undefined);
-      if (jobDir && path.dirname(path.resolve(jobDir)) === path.resolve(getOpenXmlJobsDir(app))) {
-        fs.rmSync(jobDir, { recursive: true, force: true });
+      try {
+        if (timer) clearInterval(timer);
+        await blindCheckRunner.close().catch(() => undefined);
+        if (jobDir && path.dirname(path.resolve(jobDir)) === path.resolve(getOpenXmlJobsDir(app))) {
+          fs.rmSync(jobDir, { recursive: true, force: true });
+        }
+      } finally {
+        activeJobCount -= 1;
       }
     }
   }
@@ -699,7 +722,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
 
   return {
     ping,
-    runJob: runner.runJob,
+    runJob: runTrackedJob,
+    hasActiveJobs: () => activeJobCount > 0,
     renderRestrictedHtmlDocx,
     createRestrictedHtmlDocx,
     runBlindCheck,

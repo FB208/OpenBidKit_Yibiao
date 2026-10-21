@@ -43,6 +43,11 @@ function createToolResult(payload, compact = false, details = payload) {
   };
 }
 
+// 任务目录只用于读取助手输出，结果写入工作区后即删除，避免 openxml-jobs 持续累积。
+function removeJobDir(result) {
+  if (result?.jobDir) fs.rmSync(result.jobDir, { recursive: true, force: true });
+}
+
 function normalizeRelativePath(filePath) {
   const relativePath = String(filePath || '').trim().replace(/\\/g, '/');
   if (!relativePath || path.isAbsolute(relativePath)) {
@@ -111,12 +116,15 @@ function createPiOpenXmlTool({
             request: { sources: businessSources },
             signal,
           });
-          const blocksPath = path.join(result.jobDir, 'blocks.json');
-          if (!fs.existsSync(blocksPath)) {
-            throw new Error('助手没有写出原文结构');
+          try {
+            const blocksPath = path.join(result.jobDir, 'blocks.json');
+            if (!fs.existsSync(blocksPath)) {
+              throw new Error('助手没有写出原文结构');
+            }
+            fs.copyFileSync(blocksPath, path.join(workspaceDir, AGENT_BLOCKS_FILE));
+          } finally {
+            removeJobDir(result);
           }
-          const agentPath = path.join(workspaceDir, AGENT_BLOCKS_FILE);
-          fs.copyFileSync(blocksPath, agentPath);
           return createToolResult({
             ok: true,
             action,
@@ -150,6 +158,7 @@ function createPiOpenXmlTool({
             },
             signal,
           });
+          removeJobDir(result);
 
           if (bidTemplateSourcePath && fs.existsSync(bidTemplateSourcePath)) {
             fs.copyFileSync(bidTemplateSourcePath, path.join(workspaceDir, AGENT_TEMPLATE_SOURCE_FILE));
@@ -174,11 +183,16 @@ function createPiOpenXmlTool({
             request: { input: bidTemplateSourceRelativePath },
             signal,
           });
-          const candidatesPath = path.join(result.jobDir, 'template-field-candidates.json');
-          if (!fs.existsSync(candidatesPath)) {
-            throw new Error('助手没有写出投标模版字段候选');
+          let candidateData;
+          try {
+            const candidatesPath = path.join(result.jobDir, 'template-field-candidates.json');
+            if (!fs.existsSync(candidatesPath)) {
+              throw new Error('助手没有写出投标模版字段候选');
+            }
+            candidateData = JSON.parse(fs.readFileSync(candidatesPath, 'utf8'));
+          } finally {
+            removeJobDir(result);
           }
-          const candidateData = JSON.parse(fs.readFileSync(candidatesPath, 'utf8'));
           fs.writeFileSync(
             path.join(workspaceDir, AGENT_FIELD_CANDIDATES_FILE),
             `${JSON.stringify(candidateData, null, 2)}\n`,
@@ -230,6 +244,7 @@ function createPiOpenXmlTool({
             },
             signal,
           });
+          removeJobDir(result);
           if (!bidTemplatePath || !bidTemplateFieldsPath
             || !fs.existsSync(bidTemplatePath) || !fs.existsSync(bidTemplateFieldsPath)) {
             throw new Error('助手没有同时写出投标模版和字段清单');

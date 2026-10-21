@@ -22,13 +22,19 @@ let downloadedUpdateChannel = '';
 let downloadedUpdateFilePath = '';
 let activeUpdateCheckPromise = null;
 
-// 新版本启动后删除已经安装或更旧的手动安装包，保留尚未安装的更新包。
+// 新版本启动后删除已经安装或更旧的手动安装包，保留尚未安装的更新包；
+// 下载中断留下的 `<安装包>.<进程号>.<时间>.tmp` 不属于当前进程时一并删除。
 function clearManualUpdateDownloads(app) {
   const updatesDir = path.join(app.getPath('userData'), 'updates');
   try {
     if (!fs.existsSync(updatesDir)) return;
     for (const entry of fs.readdirSync(updatesDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
+      const partialMatch = /\.(\d+)\.\d+\.tmp$/i.exec(entry.name);
+      if (partialMatch) {
+        if (Number(partialMatch[1]) !== process.pid) fs.rmSync(path.join(updatesDir, entry.name), { force: true });
+        continue;
+      }
       const match = /^Yibiao-(.+?)-(?:win-x64\.exe|mac-(?:x64|arm64)\.dmg)$/i.exec(entry.name);
       if (!match || compareVersions(match[1], app.getVersion()) > 0) continue;
       fs.rmSync(path.join(updatesDir, entry.name), { force: true });
@@ -629,6 +635,11 @@ function triggerUpdateDownload(options) {
   return checkAndDownloadUpdate(options);
 }
 
+// 正在检查下载或已有待安装更新时，更新缓存仍在使用，存储清理需跳过。
+function isUpdateCacheInUse() {
+  return Boolean(activeUpdateCheckPromise || downloadedUpdateVersion);
+}
+
 async function quitAndInstall(options = {}) {
   if (downloadedUpdateFilePath) {
     if (!isDownloadedFileReady(downloadedUpdateFilePath)) {
@@ -695,6 +706,7 @@ module.exports = {
   setupAutoUpdate,
   checkAndDownloadUpdate,
   triggerUpdateDownload,
+  isUpdateCacheInUse,
   quitAndInstall,
   getLatestVersion,
   getUpdateDownloadUrl,

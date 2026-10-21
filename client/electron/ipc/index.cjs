@@ -14,6 +14,7 @@ const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerLicenseIpc } = require('./licenseIpc.cjs');
 const { registerOfficialAccountIpc, registerOfficialInvoiceIpc } = require('./officialAccountIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
+const { registerStorageIpc } = require('./storageIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
 const { registerFeasibilityReportIpc } = require('./feasibilityReportIpc.cjs');
@@ -44,6 +45,7 @@ const { createRejectionCheckStore } = require('../services/rejectionCheckStore.c
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
 const { clearOrphanedGeneratedImages, clearStalePiTaskArchives, runHistoricalStorageCleanup } = require('../services/storageCleanupService.cjs');
+const { createStorageSpaceService } = require('../services/storageSpaceService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
 const { createAgentWorkspaceService } = require('../services/agentWorkspaceService.cjs');
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
@@ -244,6 +246,8 @@ const workspaceDatabaseChannels = [
   'templates:delete',
   'templates:duplicate',
   'templates:render-preview',
+  'storage:get-usage',
+  'storage:clean',
 ];
 
 function clearWorkspaceDatabaseIpc() {
@@ -302,7 +306,7 @@ function registerWorkspaceDatabaseStatusIpc({ mainWindow }) {
   };
 }
 
-function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, openXmlHelperService, updateStatus }) {
+function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, openXmlHelperService, isUpdateCacheInUse, updateStatus }) {
   const sqliteDatabase = createSqliteDatabase(app, { onStatus: updateStatus });
   runHistoricalStorageCleanup({ app, db: sqliteDatabase.db, configStore, onStatus: updateStatus });
   clearStalePiTaskArchives(app);
@@ -349,6 +353,9 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerTemplateIpc({ templateStore, openXmlHelperService });
   registerOfficialInvoiceIpc({ officialInvoiceStore: createOfficialInvoiceStore({ db: sqliteDatabase.db }) });
   registerTaskIpc({ taskService });
+  registerStorageIpc({
+    storageSpaceService: createStorageSpaceService({ app, db: sqliteDatabase.db, taskService, agentService, openXmlHelperService, isUpdateCacheInUse }),
+  });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
   // 更新 pluginService 的服务引用
@@ -371,7 +378,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   }) };
 }
 
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, closeDeveloperAgentMonitorWindow }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, isUpdateCacheInUse, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, closeDeveloperAgentMonitorWindow }) {
   void checkRequiredOnlineServices();
   const configStore = createConfigStore(app);
   initLocalImageRenderService({ configStore });
@@ -519,7 +526,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     databaseStatus.updateStatus({ phase: 'checking', ready: false, message: '正在检查本地数据库' });
     setTimeout(() => {
       try {
-        ({ technicalPlanExport } = registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, openXmlHelperService, updateStatus: databaseStatus.updateStatus }));
+        ({ technicalPlanExport } = registerWorkspaceDatabaseServices({ app, configStore, aiService, agentService, autoConfirmationService, fileService, openXmlHelperService, isUpdateCacheInUse, updateStatus: databaseStatus.updateStatus }));
         setTimeout(() => {
           void agentService.warmup?.().catch((error) => {
             console.warn('[agent] warmup failed', error?.message || String(error));

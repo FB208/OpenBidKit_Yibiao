@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { registerIpcHandlers } = require('./ipc/index.cjs');
-const { setupAutoUpdate, checkAndDownloadUpdate, triggerUpdateDownload, quitAndInstall, getLatestVersion, getUpdateDownloadUrl } = require('./services/updateService.cjs');
+const { setupAutoUpdate, checkAndDownloadUpdate, triggerUpdateDownload, isUpdateCacheInUse, quitAndInstall, getLatestVersion, getUpdateDownloadUrl } = require('./services/updateService.cjs');
 const { getConfigFilePath, getCredentialLibraryDir, getGeneratedImagesDir, getGpuStartupProbePath, getImportedImagesDir } = require('./utils/paths.cjs');
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
@@ -492,6 +492,7 @@ app.whenReady().then(() => {
     mainWindow,
     checkAndDownloadUpdate,
     triggerUpdateDownload,
+    isUpdateCacheInUse,
     quitAndInstall,
     getLatestVersion,
     getUpdateDownloadUrl,
