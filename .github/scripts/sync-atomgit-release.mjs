@@ -1,6 +1,17 @@
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import https from 'node:https';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 const ATOMGIT_API_BASE_URL = 'https://api.atomgit.com/api/v5';
+const ASSET_CONTENT_TYPES = {
+  '.exe': 'application/vnd.microsoft.portable-executable',
+  '.zip': 'application/zip',
+  '.dmg': 'application/x-apple-diskimage',
+  '.yml': 'application/yaml',
+  '.yaml': 'application/yaml',
+};
 
 /** 读取必填环境变量。 */
 function requireEnv(name) {
@@ -201,6 +212,53 @@ async function prepareRelease(atomGit, releaseJsonPath) {
   console.log(`AtomGit Release prepared: ${atomGit.tagName}; pending=${pendingAssets.length}, skipped=${githubRelease.assets.length - pendingAssets.length}`);
 }
 
+/** 流式 PUT 本地文件；fetch 的请求体会随文件大小占用内存，大安装包改用 https 写入。 */
+function putFile(url, headers, filePath) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(url, { method: 'PUT', headers }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+      response.on('error', reject);
+    });
+    request.setTimeout(5 * 60 * 1000, () => request.destroy(new Error('Upload connection idle for 5 minutes.')));
+    request.on('error', reject);
+    pipeline(createReadStream(filePath), request).catch(reject);
+  });
+}
+
+/**
+ * 按 AtomGit 返回的地址和请求头上传单个附件。
+ * 上传域名 file.gitcode.com 会被部分网络按 SNI 重置小握手包；Node 24 默认握手包较大，可正常连通。
+ */
+async function uploadAsset(atomGit, filePath) {
+  const fileName = path.basename(filePath);
+  console.log(`Getting AtomGit upload URL: ${fileName}`);
+  const target = await atomGitRequest({
+    ...atomGit,
+    apiPath: `/releases/${encodePathSegment(atomGit.tagName)}/upload_url`,
+    query: { file_name: fileName },
+  });
+  if (!target?.url) {
+    throw new Error(`AtomGit did not return an upload URL for ${fileName}.`);
+  }
+  const {
+    'Content-Type': contentType = ASSET_CONTENT_TYPES[path.extname(fileName).toLowerCase()] || 'application/octet-stream',
+    ...uploadHeaders
+  } = target.headers || {};
+  const { size } = await fs.stat(filePath);
+  console.log(`Uploading to AtomGit: ${fileName}`);
+  const response = await putFile(target.url, {
+    ...uploadHeaders,
+    'Content-Type': contentType,
+    'Content-Length': size,
+  }, filePath);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`AtomGit upload ${fileName} failed: HTTP ${response.status} ${response.body}`);
+  }
+}
+
 /** 确认完整附件已经到账后，同步发布状态与 Actions 摘要。 */
 async function finalizeRelease(atomGit, releaseJsonPath) {
   const githubRelease = JSON.parse(await fs.readFile(releaseJsonPath, 'utf-8'));
@@ -228,11 +286,11 @@ async function finalizeRelease(atomGit, releaseJsonPath) {
   }
 }
 
-/** 本地脚本在传输前后分别调用准备和完成阶段。 */
+/** 本地脚本依次调用准备、逐个附件上传和完成阶段。 */
 async function main() {
   const mode = process.argv[2];
-  if (mode !== '--prepare' && mode !== '--finalize') {
-    throw new Error('Expected --prepare or --finalize.');
+  if (mode !== '--prepare' && mode !== '--upload' && mode !== '--finalize') {
+    throw new Error('Expected --prepare, --upload <file> or --finalize.');
   }
   const atomGit = {
     token: requireEnv('ATOMGIT_ACCESS_TOKEN'),
@@ -240,6 +298,10 @@ async function main() {
     repo: requireEnv('ATOMGIT_REPO'),
     tagName: requireEnv('TAG_NAME'),
   };
+  if (mode === '--upload') {
+    await uploadAsset(atomGit, process.argv[3]);
+    return;
+  }
   const releaseJsonPath = requireEnv('GITHUB_RELEASE_JSON');
   if (mode === '--prepare') {
     await prepareRelease(atomGit, releaseJsonPath);

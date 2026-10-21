@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 按指定 tag 下载缺失附件并发布到 AtomGit；凭据由环境变量注入。
-# 用法：bash release_download.sh <tag>（依赖 node、curl、jq、python3）。
+# 用法：bash release_download.sh <tag>（依赖 node、curl、jq）。
 set -euo pipefail
 
 if [[ $# -ne 1 || -z "$1" ]]; then
@@ -9,9 +9,8 @@ if [[ $# -ne 1 || -z "$1" ]]; then
 fi
 export TAG_NAME="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ATOM_API_BASE='https://api.atomgit.com'
 
-for dependency in node curl jq python3; do
+for dependency in node curl jq; do
   if ! command -v "$dependency" >/dev/null 2>&1; then
     echo "缺少依赖：$dependency" >&2
     exit 1
@@ -30,59 +29,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 根据附件扩展名选择默认 Content-Type。
-get_asset_content_type() {
-  local ext="${1##*.}"
-  ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
-  case "$ext" in
-    exe) echo 'application/vnd.microsoft.portable-executable' ;;
-    zip) echo 'application/zip' ;;
-    dmg) echo 'application/x-apple-diskimage' ;;
-    yml|yaml) echo 'application/yaml' ;;
-    *) echo 'application/octet-stream' ;;
-  esac
-}
-
-# 复用现有本地协议，携带接口返回的请求头执行 PUT；HTTP 错误必须失败。
-upload_atomgit_asset() {
-  local file_path="$1"
-  local file_name encoded_file_name encoded_tag encoded_owner encoded_repo
-  file_name="$(basename "$file_path")"
-  encoded_file_name="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$file_name")"
-  encoded_tag="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$TAG_NAME")"
-  encoded_owner="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$ATOMGIT_OWNER")"
-  encoded_repo="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$ATOMGIT_REPO")"
-  local upload_api="${ATOM_API_BASE}/api/v5/repos/${encoded_owner}/${encoded_repo}/releases/${encoded_tag}/upload_url?file_name=${encoded_file_name}"
-  local upload_response upload_url content_type header_content_type header_keys
-  echo "正在获取 AtomGit 上传地址: $file_name"
-  upload_response="$(curl --fail --silent --show-error -H 'Accept: application/json' -H "Authorization: Bearer ${ATOMGIT_ACCESS_TOKEN}" "$upload_api")"
-  upload_url="$(echo "$upload_response" | jq -r '.url // empty')"
-  if [[ -z "$upload_url" ]]; then
-    echo "AtomGit 未返回 ${file_name} 的上传地址。" >&2
-    exit 1
-  fi
-  content_type="$(get_asset_content_type "$file_name")"
-  header_content_type="$(echo "$upload_response" | jq -r '.headers."Content-Type" // empty')"
-  if [[ -n "$header_content_type" ]]; then
-    content_type="$header_content_type"
-  fi
-  local extra_headers=(-H "Content-Type: $content_type")
-  header_keys="$(echo "$upload_response" | jq -r '.headers // {} | keys[]?')"
-  if [[ -n "$header_keys" ]]; then
-    while IFS= read -r hk; do
-      [[ "$hk" == 'Content-Type' ]] && continue
-      local hv
-      hv="$(echo "$upload_response" | jq -r --arg k "$hk" '.headers[$k]')"
-      extra_headers+=(-H "${hk}: ${hv}")
-    done <<< "$header_keys"
-  fi
-  echo "正在上传到 AtomGit: $file_name"
-  curl --fail --silent --show-error -X PUT "$upload_url" \
-    "${extra_headers[@]}" \
-    --upload-file "$file_path" -o /dev/null
-}
-
-# 调用共用准备逻辑，再按待传清单下载和上传，全部成功后才完成发布。
+# 调用共用准备逻辑，再按待传清单下载，并由 Node 逐个上传，全部成功后才完成发布。
 main() {
   node "${SCRIPT_DIR}/sync-atomgit-release.mjs" --prepare
   local asset_count i asset_name asset_url file_path
@@ -101,7 +48,7 @@ main() {
   if [[ "$asset_count" -gt 0 ]]; then
     local file
     for file in "${downloaded_files[@]}"; do
-      upload_atomgit_asset "$file"
+      node "${SCRIPT_DIR}/sync-atomgit-release.mjs" --upload "$file"
     done
   fi
   node "${SCRIPT_DIR}/sync-atomgit-release.mjs" --finalize
