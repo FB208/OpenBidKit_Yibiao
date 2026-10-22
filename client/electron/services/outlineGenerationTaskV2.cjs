@@ -1,10 +1,29 @@
-const { NODE_ID_PATTERN, numberOutline, collectOutlineIds, acceptAgentOutline } = require('./technicalPlanOutline.cjs');
+const {
+  NODE_ID_PATTERN,
+  numberOutline,
+  collectOutlineIds,
+  acceptAgentOutline,
+  findOutlineNode,
+  collectOutlineLeaves,
+  filterSelectedOutline,
+  stripOutlineFields,
+} = require('./technicalPlanOutline.cjs');
 const Ajv = require('ajv');
 const {
   OUTLINE_AGENT_TASK_KEY,
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { runTemplateExtractionTask } = require('./templateExtractionTask.cjs');
+const {
+  OUTLINE_BASES,
+  SELECTION_ONLY_FIELDS,
+  prepareTenderStructure,
+  buildOutlineSectionHint,
+  createFormatOutlinePrompt,
+  validateFormatOutline,
+  collectDefaultSelectedIds,
+  collectTemplateItems,
+} = require('./outlineFormatExtraction.cjs');
 
 const DEFAULT_ESTIMATED_SECTION_WORDS = 3000;
 const OUTLINE_OUTPUT_FILE = 'outline.json';
@@ -23,6 +42,8 @@ const STAGE_OUTPUT_FILES = {
   outline_review: [OUTLINE_OUTPUT_FILE, OUTLINE_REVIEW_FILE],
 };
 const AI_CONTENT_MODE = 'ai-generate';
+// 这些阶段会写回完整目录，需要核对已确认节点未被改动。
+const CONFIRMED_OUTLINE_LOCKED_STAGES = new Set(['children_generation', 'leaf_adjustment', 'outline_review']);
 const OUTLINE_ATTRIBUTES = ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'];
 const CONTENT_MODES = ['ai-generate', 'template-fill', 'directory-generate', 'manual-fill', 'other'];
 const ATTRIBUTE_CONTENT_MODE_RULES = {
@@ -33,7 +54,20 @@ const ATTRIBUTE_CONTENT_MODE_RULES = {
 };
 const ORIGINAL_ONLY_DIRECTORY_RULE = '目录来源仅限原方案.md：提取并补齐原方案中实际存在的目录，保留其顺序和层级；不得依据其他资料或专业经验新增原方案中不存在的章节，也不得为凑字数或小节数量新增、拆分章节。';
 
-function createDirectoryNodeSchema(level, root = false) {
+// 原文位置：start 含、end 不含，单位是原文结构的块号或行号；多份来源时 source 为 Word 原件路径或带行号原文的文件名。
+const SOURCE_RANGE_SCHEMA = {
+  type: 'object',
+  required: ['start', 'end'],
+  additionalProperties: false,
+  properties: {
+    source: { type: 'string', minLength: 1 },
+    start: { type: 'integer', minimum: 0 },
+    end: { type: 'integer', minimum: 1 },
+  },
+};
+
+// formatFields 只用于完整投标文件和商务标的一级目录阶段，允许节点携带原文位置和“中标后使用”标记。
+function createDirectoryNodeSchema(level, root = false, formatFields = false) {
   const baseProperties = {
     id: { anyOf: [{ type: 'string', pattern: NODE_ID_PATTERN }, { type: 'null' }] },
     number: { type: 'string' },
@@ -41,6 +75,10 @@ function createDirectoryNodeSchema(level, root = false) {
     description: { type: 'string', minLength: 1 },
     ...(root ? {
       attr: { type: 'string', enum: OUTLINE_ATTRIBUTES },
+    } : {}),
+    ...(formatFields ? {
+      source: SOURCE_RANGE_SCHEMA,
+      post_award: { type: 'boolean' },
     } : {}),
   };
   const baseRequired = ['id', 'title', 'description', ...(root ? ['attr'] : [])];
@@ -69,8 +107,8 @@ function createDirectoryNodeSchema(level, root = false) {
         ...baseProperties,
         children: {
           type: 'array',
-          minItems: 2,
-          items: createDirectoryNodeSchema(level + 1),
+          minItems: 1,
+          items: createDirectoryNodeSchema(level + 1, false, formatFields),
         },
       },
     };
@@ -90,6 +128,23 @@ const OUTLINE_JSON_SCHEMA = {
       type: 'array',
       minItems: 1,
       items: ROOT_NODE_SCHEMA,
+    },
+  },
+};
+
+// 完整投标文件和商务标独立成册的一级目录产物：记录依据和格式章节位置。
+const FORMAT_OUTLINE_JSON_SCHEMA = {
+  type: 'object',
+  required: ['basis', 'format_scope', 'outline'],
+  additionalProperties: false,
+  properties: {
+    basis: { type: 'string', enum: OUTLINE_BASES },
+    // 格式章节可分在几处（如部分格式在另一份文件中），按投标文件组成顺序逐段填写。
+    format_scope: { anyOf: [{ type: 'array', minItems: 1, items: SOURCE_RANGE_SCHEMA }, { type: 'null' }] },
+    outline: {
+      type: 'array',
+      minItems: 1,
+      items: createDirectoryNodeSchema(1, true, true),
     },
   },
 };
@@ -132,11 +187,11 @@ const SCORE_DIRECTORY_PLAN_SCHEMA = {
       minItems: 1,
       items: {
         type: 'object',
-        required: ['root_id', 'root_title', 'score_item_level', 'mappings'],
+        required: ['node_id', 'node_title', 'score_item_level', 'mappings'],
         additionalProperties: false,
         properties: {
-          root_id: { anyOf: [{ type: 'string', pattern: NODE_ID_PATTERN }, { type: 'null' }] },
-          root_title: { type: 'string', minLength: 1 },
+          node_id: { anyOf: [{ type: 'string', pattern: NODE_ID_PATTERN }, { type: 'null' }] },
+          node_title: { type: 'string', minLength: 1 },
           score_item_level: { type: 'integer', minimum: 1, maximum: 6 },
           mappings: {
             type: 'array',
@@ -164,10 +219,10 @@ const SCORE_DIRECTORY_PLAN_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['root_id', 'title', 'reason'],
+        required: ['node_id', 'title', 'reason'],
         additionalProperties: false,
         properties: {
-          root_id: { type: 'string', minLength: 1 },
+          node_id: { type: 'string', minLength: 1 },
           title: { type: 'string', minLength: 1 },
           reason: { type: 'string', minLength: 1 },
         },
@@ -204,7 +259,8 @@ const OUTLINE_REVIEW_SCHEMA = {
   },
 };
 
-function createLeafAllocationSchema(minimumLeafCount = 2) {
+// 每个技术挂载节点至少分配 1 个；分配 1 个表示保留挂载节点本身作为叶子。
+function createLeafAllocationSchema() {
   return {
     oneOf: [
       {
@@ -221,11 +277,11 @@ function createLeafAllocationSchema(minimumLeafCount = 2) {
             minItems: 1,
             items: {
               type: 'object',
-              required: ['root_id', 'leaf_count'],
+              required: ['node_id', 'leaf_count'],
               additionalProperties: false,
               properties: {
-                root_id: { type: 'string', minLength: 1 },
-                leaf_count: { type: 'integer', minimum: minimumLeafCount },
+                node_id: { type: 'string', minLength: 1 },
+                leaf_count: { type: 'integer', minimum: 1 },
               },
             },
           },
@@ -245,10 +301,10 @@ function createLeafAllocationSchema(minimumLeafCount = 2) {
             minItems: 1,
             items: {
               type: 'object',
-              required: ['root_id'],
+              required: ['node_id'],
               additionalProperties: false,
               properties: {
-                root_id: { type: 'string', minLength: 1 },
+                node_id: { type: 'string', minLength: 1 },
               },
             },
           },
@@ -305,6 +361,7 @@ function buildFinalOutline(candidate, knownIds = new Set()) {
 
 const outputAjv = new Ajv({ allErrors: true, strict: true });
 const validateOutlineSchema = outputAjv.compile(OUTLINE_JSON_SCHEMA);
+const validateFormatOutlineSchema = outputAjv.compile(FORMAT_OUTLINE_JSON_SCHEMA);
 
 // 只把空文件、JSON 语法和 Schema 问题写入提交报告，不吞掉执行异常。
 function validateJsonOutput(content, file, validate) {
@@ -326,70 +383,106 @@ function validateJsonOutput(content, file, validate) {
   };
 }
 
-// 目录生成与调整共用解析及身份校验；按调用方原有规则检查 Schema，通过后才分配新节点 ID。
-function validateOutlineOutput(content, knownIds = new Set(), { checkSchema = true } = {}) {
-  const report = validateJsonOutput(content, OUTLINE_OUTPUT_FILE, checkSchema ? validateOutlineSchema : null);
-  if (report.issues.length) return report;
+// 模型产物的遍历结构错误和未知、重复 ID 进入提交修复，不作为执行异常中断任务。
+function collectOutlineIdIssues(outline, knownIds) {
+  const issues = [];
   const seen = new Set();
-  // 模型产物的遍历结构错误进入提交修复，不作为执行异常中断任务。
   const visit = (items, parentPath) => {
     if (!Array.isArray(items)) {
-      report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+      issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
         path: parentPath, message: `目录结构错误：${parentPath} 必须是数组` });
       return;
     }
     items.forEach((item, index) => {
       const nodePath = `${parentPath}/${index}`;
       if (item === null || typeof item !== 'object' || Array.isArray(item)) {
-        report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+        issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
           path: nodePath, message: `目录结构错误：${nodePath} 必须是非空对象` });
         return;
       }
       if (item.id !== null) {
-        if (!knownIds.has(item.id)) report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+        if (!knownIds.has(item.id)) issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
           path: `${nodePath}/id`, message: `目录包含未知 ID：${item.id}；新节点请使用 id:null` });
-        if (seen.has(item.id)) report.issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
+        if (seen.has(item.id)) issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE,
           path: `${nodePath}/id`, message: `目录 ID 重复：${item.id}` });
         seen.add(item.id);
       }
       if (item.children?.length) visit(item.children, `${nodePath}/children`);
     });
   };
-  visit(report.value?.outline || [], '/outline');
+  visit(outline || [], '/outline');
+  return issues;
+}
+
+// 目录生成与调整共用解析及身份校验；按调用方原有规则检查 Schema，通过后才分配新节点 ID。
+function validateOutlineOutput(content, knownIds = new Set(), { checkSchema = true } = {}) {
+  const report = validateJsonOutput(content, OUTLINE_OUTPUT_FILE, checkSchema ? validateOutlineSchema : null);
+  if (report.issues.length) return report;
+  report.issues.push(...collectOutlineIdIssues(report.value?.outline, knownIds));
   if (!report.issues.length) report.value = buildFinalOutline(report.value, knownIds);
   return report;
 }
 
-// 评分规划阶段只接受用户批准新增的技术一级目录；分配新 ID 后按标题回填规划分支的 root_id。
-function validateScorePlanningRoots(content, scoreDirectoryPlan, confirmedRoots) {
-  const report = validateOutlineOutput(content, collectOutlineIds(confirmedRoots));
+// 完整投标文件和商务标的一级目录：先校验结构，再按原文结构核对位置与标题，通过后分配 ID 并保留确认阶段字段。
+function validateFormatOutlineOutput(content, structure) {
+  const report = validateJsonOutput(content, OUTLINE_OUTPUT_FILE, validateFormatOutlineSchema);
+  if (report.issues.length) return report;
+  report.issues.push(...collectOutlineIdIssues(report.value.outline, new Set()));
+  if (!report.issues.length) report.issues.push(...validateFormatOutline(report.value, structure, OUTLINE_OUTPUT_FILE));
+  if (!report.issues.length) {
+    report.value = {
+      basis: report.value.basis,
+      format_scope: report.value.format_scope,
+      outline: acceptAgentOutline(report.value.outline, new Set(), { keepFields: SELECTION_ONLY_FIELDS }),
+    };
+  }
+  return report;
+}
+
+// 已确认节点的可比较字段：一级目录另比较属性，叶子另比较处理方式。
+function confirmedNodeFields(item, root) {
+  const leaf = !item?.children?.length;
+  return JSON.stringify([
+    String(item?.title || '').trim(),
+    String(item?.description || '').trim(),
+    root ? item?.attr : '',
+    leaf ? item?.content_mode : '',
+    leaf && item?.content_mode === 'other' ? String(item?.content_mode_note || '').trim() : '',
+  ]);
+}
+
+// 两棵子树的身份、字段和子节点顺序完全一致。
+function isSameConfirmedTree(actual, expected, root) {
+  const actualChildren = actual?.children || [];
+  const expectedChildren = expected?.children || [];
+  return actual?.id === expected?.id
+    && confirmedNodeFields(actual, root) === confirmedNodeFields(expected, root)
+    && actualChildren.length === expectedChildren.length
+    && expectedChildren.every((child, index) => isSameConfirmedTree(actualChildren[index], child, false));
+}
+
+// 评分规划阶段已确认目录必须原样保留，只接受用户批准新增的技术一级目录；分配新 ID 后按标题回填规划分支的 node_id。
+function validateScorePlanningOutline(content, scoreDirectoryPlan, confirmedOutline) {
+  const report = validateOutlineOutput(content, collectOutlineIds(confirmedOutline));
   if (report.issues.length) return { value: null, issues: report.issues };
   const issues = [];
   const addIssue = (file, path, message) => issues.push({ severity: 'blocking', file, path, message });
-  const rootFields = (item) => JSON.stringify([
-    String(item?.title || '').trim(),
-    String(item?.description || '').trim(),
-    item?.attr,
-    item?.content_mode,
-    item?.content_mode === 'other' ? String(item?.content_mode_note || '').trim() : '',
-  ]);
-  const confirmedRootIds = new Set(confirmedRoots.map((item) => item.id));
+  const confirmedRootIds = new Set(confirmedOutline.map((item) => item.id));
+  const confirmedLeafIds = new Set(collectOutlineLeaves(confirmedOutline).map(({ item }) => item.id));
   const roots = report.value.outline;
   const keptRoots = roots.filter((item) => confirmedRootIds.has(item.id));
   const newRoots = roots.filter((item) => !confirmedRootIds.has(item.id));
-  const keptUnchanged = keptRoots.length === confirmedRoots.length
-    && keptRoots.every((item, index) => item.id === confirmedRoots[index].id && rootFields(item) === rootFields(confirmedRoots[index]));
+  const keptUnchanged = keptRoots.length === confirmedOutline.length
+    && keptRoots.every((item, index) => isSameConfirmedTree(item, confirmedOutline[index], true));
   if (!keptUnchanged) {
-    addIssue(OUTLINE_OUTPUT_FILE, '/outline', `${OUTLINE_OUTPUT_FILE} 中用户已确认的一级目录必须全部保留，id、title、description、attr、content_mode 和相对顺序均不得修改；本阶段只能插入经用户批准新增的一级目录`);
+    addIssue(OUTLINE_OUTPUT_FILE, '/outline', `${OUTLINE_OUTPUT_FILE} 中用户已确认的目录必须全部原样保留，id、title、description、attr、content_mode、层级和相对顺序均不得修改；本阶段只能插入经用户批准新增的一级目录`);
   }
-  roots.forEach((item, index) => {
-    if (item.children?.length) {
-      addIssue(OUTLINE_OUTPUT_FILE, `/outline/${index}/children`, `${OUTLINE_OUTPUT_FILE} 本阶段只调整一级目录，「${item.title}」不得包含 children`);
-    }
-  });
   const titleCounts = new Map();
   roots.forEach((item) => titleCounts.set(item.title, (titleCounts.get(item.title) || 0) + 1));
   newRoots.forEach((item) => {
+    if (item.children?.length) {
+      addIssue(OUTLINE_OUTPUT_FILE, '/outline', `新增一级目录「${item.title}」本阶段不得包含 children`);
+    }
     if (item.attr !== '技术' || item.content_mode !== AI_CONTENT_MODE) {
       addIssue(OUTLINE_OUTPUT_FILE, '/outline', `新增一级目录「${item.title}」必须设置 attr=技术、content_mode=${AI_CONTENT_MODE}`);
     }
@@ -405,33 +498,33 @@ function validateScorePlanningRoots(content, scoreDirectoryPlan, confirmedRoots)
   const newRootsByTitle = new Map(newRoots.map((item) => [item.title, item]));
   const newRootReferences = new Map();
   const branches = (scoreDirectoryPlan?.branches || []).map((branch, index) => {
-    const path = `/branches/${index}/root_id`;
-    if (branch.root_id !== null) {
-      if (!confirmedRootIds.has(branch.root_id)) {
-        addIssue(SCORE_DIRECTORY_PLAN_FILE, path, `${SCORE_DIRECTORY_PLAN_FILE} 的 root_id「${branch.root_id}」不是当前已确认的一级目录 id，请从 ${OUTLINE_OUTPUT_FILE} 复制`);
+    const path = `/branches/${index}/node_id`;
+    if (branch.node_id !== null) {
+      if (!confirmedLeafIds.has(branch.node_id)) {
+        addIssue(SCORE_DIRECTORY_PLAN_FILE, path, `${SCORE_DIRECTORY_PLAN_FILE} 的 node_id「${branch.node_id}」不是已确认目录中的叶子节点 id；技术方案只能挂载在已确认的叶子节点上，请从 ${OUTLINE_OUTPUT_FILE} 复制`);
       }
       return branch;
     }
     if (!allowRootChanges) {
-      addIssue(SCORE_DIRECTORY_PLAN_FILE, path, `${SCORE_DIRECTORY_PLAN_FILE} 中 root_id 为 null 仅用于用户批准新增的一级目录，当前 allow_root_changes 不是 true`);
+      addIssue(SCORE_DIRECTORY_PLAN_FILE, path, `${SCORE_DIRECTORY_PLAN_FILE} 中 node_id 为 null 仅用于用户批准新增的一级目录，当前 allow_root_changes 不是 true`);
       return branch;
     }
-    const root = newRootsByTitle.get(branch.root_title);
+    const root = newRootsByTitle.get(branch.node_title);
     if (!root) {
-      addIssue(SCORE_DIRECTORY_PLAN_FILE, path, `${SCORE_DIRECTORY_PLAN_FILE} 中 root_id 为 null 的分支「${branch.root_title}」在 ${OUTLINE_OUTPUT_FILE} 中没有标题完全一致、id 为 null 的新增一级目录`);
+      addIssue(SCORE_DIRECTORY_PLAN_FILE, path, `${SCORE_DIRECTORY_PLAN_FILE} 中 node_id 为 null 的分支「${branch.node_title}」在 ${OUTLINE_OUTPUT_FILE} 中没有标题完全一致、id 为 null 的新增一级目录`);
       return branch;
     }
     newRootReferences.set(root.id, (newRootReferences.get(root.id) || 0) + 1);
-    return { ...branch, root_id: root.id };
+    return { ...branch, node_id: root.id };
   });
   newRoots.forEach((item) => {
     if (newRootReferences.get(item.id) !== 1) {
-      addIssue(SCORE_DIRECTORY_PLAN_FILE, '/branches', `新增一级目录「${item.title}」必须在 ${SCORE_DIRECTORY_PLAN_FILE} 中恰好对应一个分支：root_id 填 null，root_title 与该目录标题完全一致`);
+      addIssue(SCORE_DIRECTORY_PLAN_FILE, '/branches', `新增一级目录「${item.title}」必须在 ${SCORE_DIRECTORY_PLAN_FILE} 中恰好对应一个分支：node_id 填 null，node_title 与该目录标题完全一致`);
     }
   });
   (scoreDirectoryPlan?.extra_titles || []).forEach((item, index) => {
-    if (!confirmedRootIds.has(item.root_id)) {
-      addIssue(SCORE_DIRECTORY_PLAN_FILE, `/extra_titles/${index}/root_id`, `${SCORE_DIRECTORY_PLAN_FILE} 中 extra_titles 的 root_id「${item.root_id}」不是当前已确认的一级目录 id`);
+    if (!confirmedLeafIds.has(item.node_id)) {
+      addIssue(SCORE_DIRECTORY_PLAN_FILE, `/extra_titles/${index}/node_id`, `${SCORE_DIRECTORY_PLAN_FILE} 中 extra_titles 的 node_id「${item.node_id}」不是已确认目录中的叶子节点 id`);
     }
   });
   if (issues.length) return { value: null, issues };
@@ -444,14 +537,63 @@ function validateScorePlanningRoots(content, scoreDirectoryPlan, confirmedRoots)
   };
 }
 
-// 根目录身份不随顺序变化，只同步供 Agent 阅读的标题。
+// 子目录生成、数量调整和审核阶段锁定全部已确认节点：只有技术方案挂载节点可以向下扩展。
+function collectConfirmedOutlineIssues(items, confirmedOutline, anchorNodeIds) {
+  const issues = [];
+  const addIssue = (message) => issues.push({ severity: 'blocking', file: OUTLINE_OUTPUT_FILE, path: '/outline', message });
+  const actualNodes = new Map();
+  const indexNodes = (nodes, parentId) => (nodes || []).forEach((node, position) => {
+    actualNodes.set(node.id, { node, parentId, position });
+    indexNodes(node.children, node.id);
+  });
+  indexNodes(items, null);
+
+  const visit = (expectedNodes, parentId, root) => {
+    let previousPosition = -1;
+    expectedNodes.forEach((expected) => {
+      const found = actualNodes.get(expected.id);
+      if (!found) {
+        addIssue(`已确认目录「${expected.title}」被删除或更换了 id，必须原样保留`);
+        return;
+      }
+      if (found.parentId !== parentId) {
+        addIssue(`已确认目录「${expected.title}」的上级目录被改变，必须保持原有层级`);
+      } else {
+        if (found.position < previousPosition) addIssue(`已确认目录「${expected.title}」的相对顺序被改变，必须保持原有顺序`);
+        previousPosition = found.position;
+      }
+      const { node } = found;
+      if (String(node.title || '').trim() !== String(expected.title || '').trim()
+        || String(node.description || '').trim() !== String(expected.description || '').trim()
+        || (root && node.attr !== expected.attr)) {
+        addIssue(`已确认目录「${expected.title}」的标题、说明${root ? '或属性' : ''}被修改，必须保持不变`);
+      }
+      if (expected.children?.length) {
+        visit(expected.children, expected.id, false);
+      } else if (!anchorNodeIds.has(expected.id) && (node.children?.length || node.content_mode !== expected.content_mode)) {
+        addIssue(`已确认目录「${expected.title}」不是技术方案挂载节点，不得增加子目录或修改处理方式`);
+      }
+    });
+  };
+  visit(confirmedOutline, null, true);
+
+  const confirmedIds = collectOutlineIds(confirmedOutline);
+  for (const [id, { node, parentId }] of actualNodes) {
+    if (confirmedIds.has(id)) continue;
+    let ancestorId = parentId;
+    while (ancestorId && !anchorNodeIds.has(ancestorId)) ancestorId = actualNodes.get(ancestorId)?.parentId || null;
+    if (!ancestorId) addIssue(`新增目录「${node.title}」只能位于技术方案挂载节点之下`);
+  }
+  return issues;
+}
+
+// 挂载节点身份不随顺序变化，只同步供 Agent 阅读的标题。
 function synchronizeScoreDirectoryPlan(scoreDirectoryPlan, items) {
-  const roots = new Map((items || []).map(item => [item.id, item]));
   return {
     ...scoreDirectoryPlan,
     branches: (scoreDirectoryPlan?.branches || []).map(branch => {
-      const root = roots.get(branch.root_id);
-      return root ? { ...branch, root_title: root.title } : branch;
+      const node = findOutlineNode(items, branch.node_id);
+      return node ? { ...branch, node_title: node.title } : branch;
     }),
   };
 }
@@ -480,7 +622,6 @@ function collectOutlineStructure(items) {
   const result = {
     max_depth: 0,
     parent_count: 0,
-    single_child_nodes: [],
     invalid_leaf_content_modes: [],
   };
   const visit = (nodes, depth) => {
@@ -489,9 +630,6 @@ function collectOutlineStructure(items) {
       const children = Array.isArray(item?.children) ? item.children : [];
       if (children.length) {
         result.parent_count += 1;
-        if (children.length < 2) {
-          result.single_child_nodes.push({ id: item.id, title: item.title, child_count: children.length });
-        }
         visit(children, depth + 1);
       } else if (!CONTENT_MODES.includes(item?.content_mode)) {
         result.invalid_leaf_content_modes.push({ id: item.id, title: item.title, content_mode: item?.content_mode || '' });
@@ -514,27 +652,25 @@ function collectNodesAtLevel(item, currentDepth, targetDepth, result = []) {
   return result;
 }
 
-// 对照用户确认的评分规划，机械检查目标标题是否位于指定分支和层级。
+// 对照用户确认的评分规划，机械检查目标标题是否位于指定挂载节点之下的指定层级（挂载节点为第 1 层）。
 function collectScoreMappingCoverage(items, scoreDirectoryPlan) {
   const extraTitles = Array.isArray(scoreDirectoryPlan?.extra_titles) ? scoreDirectoryPlan.extra_titles : [];
   const branches = (scoreDirectoryPlan?.branches || []).map((branch) => {
-    const root = (items || []).find((item) => item?.id === branch.root_id);
+    const node = findOutlineNode(items, branch.node_id);
     const expectedTitles = [
       ...(branch.mappings || []).flatMap((mapping) => [mapping.target_title, ...(mapping.additional_titles || [])]),
-      ...extraTitles.filter((item) => item.root_id === branch.root_id).map((item) => item.title),
+      ...extraTitles.filter((item) => item.node_id === branch.node_id).map((item) => item.title),
     ].filter(Boolean);
     const uniqueExpectedTitles = [...new Set(expectedTitles)];
-    const actualNodes = root ? collectNodesAtLevel(root, 1, branch.score_item_level) : [];
+    const actualNodes = node ? collectNodesAtLevel(node, 1, branch.score_item_level) : [];
     const actualTitles = actualNodes.map((item) => item.title);
     const actualTitleSet = new Set(actualTitles);
     const expectedTitleSet = new Set(uniqueExpectedTitles);
     return {
-      root_id: branch.root_id,
-      planned_root_id: branch.root_id,
-      current_root_id: root?.id || '',
-      root_title: root?.title || branch.root_title,
+      node_id: branch.node_id,
+      node_title: node?.title || branch.node_title,
       score_item_level: branch.score_item_level,
-      root_found: Boolean(root),
+      node_found: Boolean(node),
       expected_titles: uniqueExpectedTitles,
       actual_titles: actualTitles,
       missing_titles: uniqueExpectedTitles.filter((title) => !actualTitleSet.has(title)),
@@ -551,7 +687,7 @@ function collectScoreMappingCoverage(items, scoreDirectoryPlan) {
   });
   return {
     valid: branches.every((branch) => (
-      branch.root_found
+      branch.node_found
       && branch.missing_titles.length === 0
       && branch.unexpected_titles.length === 0
     )),
@@ -580,7 +716,6 @@ function buildOutlineReviewContext({ outline, scoreDirectoryPlan, targetLeafCoun
     structure: {
       ...structure,
       valid: structure.max_depth <= 6
-        && structure.single_child_nodes.length === 0
         && structure.invalid_leaf_content_modes.length === 0,
     },
     ...(scoreDirectoryPlan ? { score_mapping: collectScoreMappingCoverage(items, scoreDirectoryPlan) } : {}),
@@ -621,22 +756,18 @@ function buildKnowledgeFiles(knowledgeBaseService, documentIds) {
     .filter((file) => file.content);
 }
 
-function createInitialPrompt(taskInstruction, { standaloneTechnical = false, noTechnicalScoreMode = false } = {}) {
-  const goal = standaloneTechnical
-    ? noTechnicalScoreMode
-      ? '我们的目标是为没有技术评分项的单独装订技术文件准备一级目录。'
-      : '我们的目标是为单独装订的技术文件准备一级目录。一级目录必须直接对应技术评分大项。'
-    : '我们的目标是为编写响应文件/投标文件准备一级目录。';
-  const modeRequirements = standaloneTechnical
-    ? noTechnicalScoreMode
-      ? `6. 本模式只生成技术文件独立分册：一级目录必须是适合展开技术正文的专业主题，attr 必须为“技术”，content_mode 必须为 ai-generate。
+// 技术文件独立成册的一级目录提示词；完整投标文件和商务标独立成册使用 outlineFormatExtraction 的格式章节提示词。
+function createInitialPrompt(taskInstruction, { noTechnicalScoreMode = false } = {}) {
+  const goal = noTechnicalScoreMode
+    ? '我们的目标是为没有技术评分项的单独装订技术文件准备一级目录。'
+    : '我们的目标是为单独装订的技术文件准备一级目录。一级目录必须直接对应技术评分大项。';
+  const modeRequirements = noTechnicalScoreMode
+    ? `6. 本模式只生成技术文件独立分册：一级目录必须是适合展开技术正文的专业主题，attr 必须为“技术”，content_mode 必须为 ai-generate。
 7. 招标文件已确认没有可用的技术评分项。优先采用已有资料中的明确要求；资料没有给出目录结构时，根据项目类型和专业经验补充通用、合理的技术方案主题，但不得编造具体项目事实、参数、业绩或承诺。
 8. 不得创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层总目录，也不得加入商务/资信、投标函、授权委托书等非技术章节。`
-      : `6. 本模式只生成技术文件独立分册：只能保留适合展开技术正文的评分大项，attr 必须为“技术”，content_mode 必须为 ai-generate。
+    : `6. 本模式只生成技术文件独立分册：只能保留适合展开技术正文的评分大项，attr 必须为“技术”，content_mode 必须为 ai-generate。
 7. 每个一级目录直接对应一个技术评分大项，并保持评分大项的原顺序和正式表述；不得创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层总目录，也不得加入商务/资信、投标函、授权委托书等非技术章节。
-8. 完整结构示例：{"outline":[{"id":null,"title":"评分大项一","description":"评分大项一的技术响应范围","attr":"技术","content_mode":"ai-generate"},{"id":null,"title":"评分大项二","description":"评分大项二的技术响应范围","attr":"技术","content_mode":"ai-generate"}]}。`
-    : `6. 每个一级目录当前都是叶子节点，必须根据属性和后续处理方式填写 content_mode：技术方案正文使用 ai-generate；attr=商务/资信或业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时必须使用 manual-fill；无法归类的特殊内容使用 other，并在 content_mode_note 说明原因。
-7. 完整结构示例：{"outline":[{"id":null,"title":"投标文件目录","description":"投标文件目录说明","attr":"目录","content_mode":"directory-generate"},{"id":null,"title":"技术方案","description":"技术方案目录说明","attr":"技术","content_mode":"ai-generate"},{"id":null,"title":"投标报价","description":"投标报价目录说明","attr":"报价","content_mode":"manual-fill"}]}。content_mode_note 只在 content_mode=other 且确有说明时填写。`;
+8. 完整结构示例：{"outline":[{"id":null,"title":"评分大项一","description":"评分大项一的技术响应范围","attr":"技术","content_mode":"ai-generate"},{"id":null,"title":"评分大项二","description":"评分大项二的技术响应范围","attr":"技术","content_mode":"ai-generate"}]}。`;
   return `请只在当前工作目录内工作。
 ${createOutputFileRequirements('initial-outline')}
 
@@ -653,8 +784,8 @@ ${taskInstruction}
 4. description 是目录说明。
 5. attr 必须从“通用”“商务/资信”“技术”“其他”“目录”“报价”“业绩”中选择。
 ${modeRequirements}
-8. ${OUTLINE_OUTPUT_FILE} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。
-9. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验，不通过会退回问题清单继续修复。`;
+9. ${OUTLINE_OUTPUT_FILE} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。
+10. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验，不通过会退回问题清单继续修复。`;
 }
 
 // 构造无技术评分项模式的正文目录生成规则，不引入评分清单和映射。
@@ -664,7 +795,7 @@ function createNoTechnicalScoreChildrenPrompt({ targetLeafCount, standaloneTechn
     : `最终完整目录合计应有约 ${targetLeafCount} 个 content_mode=ai-generate 的叶子节点。`;
   const scopeInstruction = standaloneTechnical
     ? '所有一级目录均属于技术文件，只生成技术方案正文相关的二级及以下目录。'
-    : '只扩展 attr=技术 且 content_mode=ai-generate 的一级目录；其他一级目录保持原样，不得增加子目录。';
+    : '只扩展已确认目录中 content_mode=ai-generate 的叶子节点（可能是一级目录，也可能是子目录）；其他已确认目录保持原样，不得增加子目录。';
   return `用户已确认招标文件没有技术评分项，请直接根据确定的无技术评分项规则生成完整目录，不要判断是否存在评分项，也不要创建评分清单或评分映射。
 ${createOutputFileRequirements('children_generation')}
 
@@ -672,30 +803,27 @@ ${createOutputFileRequirements('children_generation')}
 
 要求：
 1. ${scopeInstruction}
-2. 一级目录的数量、顺序、id、title、description 和 attr 已由用户确认，必须保持不变；未扩展为父节点的一级目录还必须保留原 content_mode。
+2. 用户已确认的目录（含子目录）的数量、顺序、层级、id、title、description 和一级目录的 attr 必须保持不变；未扩展的已确认叶子还必须保留原 content_mode。
 3. ${originalOnly ? ORIGINAL_ONLY_DIRECTORY_RULE : '优先采用资料中的明确要求，并根据项目类型、实施内容和专业逻辑组织技术方案目录；资料不足时可以用专业经验补充通用、合理的章节，但不得编造具体项目事实、参数、业绩或承诺。'}
 4. ${leafInstruction}目录质量优先于机械凑数。
 5. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
-6. 任意非叶子节点的 children 至少包含两个节点；目录最多六级，已有节点保留 id，新节点 id 填 null；number 是程序计算的显示编号。
+6. 目录最多六级，已有节点保留 id，新节点 id 填 null；number 是程序计算的显示编号。AI 扩展的目录尽量避免只有一个子节点的冗余层级。
 7. title 只写正式、专业的纯标题，不包含章节编号或 Markdown 标记；避免重复、近义和空泛目录。
 8. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验，不通过会退回问题清单继续修复。`;
 }
 
-function createLeafAllocationPrompt({ standaloneTechnical = false } = {}) {
-  const allocationInstruction = standaloneTechnical
-    ? '优先为每个目录分配至少 2 个；总目标不足时允许部分目录分配 1 个，表示保留一级目录本身作为叶子且不生成 children。除 1 以外不得分配少于 2 个，禁止形成只有一个子节点的冗余层级。'
-    : '每个目录至少分配 2 个。';
-  return `请继续使用当前 Pi Session 已读取的技术评分信息、知识库、原方案和目录规划，为多个技术一级目录分配“AI生成”叶子数量。
+function createLeafAllocationPrompt() {
+  return `请继续使用当前 Pi Session 已读取的技术评分信息、知识库、原方案和目录规划，为多个技术挂载节点分配“AI生成”叶子数量。
 ${createOutputFileRequirements('leaf_allocation')}
 
 要求：
 1. 阅读 ${OUTLINE_OUTPUT_FILE}、${TECHNICAL_SCORE_GROUPS_FILE}、${SCORE_DIRECTORY_PLAN_FILE} 和 ${LEAF_ALLOCATION_CONTEXT_FILE}。
-2. 综合各一级目录负责的评分项数量、评分细项数量、内容复杂度以及已读取的参考资料，合理分配 allocatable_ai_leaf_count。
-3. allocations 必须恰好覆盖 context 中 technical_branches 的全部 root_id，每个 root_id 只出现一次。${allocationInstruction}root_id 是不会因目录重新编号而变化的内部稳定标识。
+2. 综合各挂载节点负责的评分项数量、评分细项数量、内容复杂度以及已读取的参考资料，合理分配 allocatable_ai_leaf_count。
+3. allocations 必须恰好覆盖 context 中 technical_branches 的全部 node_id，每个 node_id 只出现一次。每个挂载节点至少分配 1 个，优先分配 2 个以上；分配 1 个表示该分支只保留一个“AI生成”叶子。node_id 是不会因目录重新编号而变化的内部稳定标识。
 4. 所有 leaf_count 之和必须等于 allocatable_ai_leaf_count。
 5. 将结果写入 ${LEAF_ALLOCATION_FILE}，保留 context 中的 mode、target_ai_leaf_count、fixed_ai_leaf_count 和 allocatable_ai_leaf_count。
 6. 不要修改 ${OUTLINE_OUTPUT_FILE}、${TECHNICAL_SCORE_GROUPS_FILE} 或 ${SCORE_DIRECTORY_PLAN_FILE}。
-7. 输出格式为 {"mode":"allocated","target_ai_leaf_count":20,"fixed_ai_leaf_count":1,"allocatable_ai_leaf_count":19,"allocations":[{"root_id":"从当前目录复制根节点ID","leaf_count":10},{"root_id":"另一根节点ID","leaf_count":9}]}。
+7. 输出格式为 {"mode":"allocated","target_ai_leaf_count":20,"fixed_ai_leaf_count":1,"allocatable_ai_leaf_count":19,"allocations":[{"node_id":"从当前目录复制挂载节点ID","leaf_count":10},{"node_id":"另一挂载节点ID","leaf_count":9}]}。
 8. 程序已为 ${LEAF_ALLOCATION_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验，不通过会退回问题清单继续修复。`;
 }
 
@@ -703,14 +831,14 @@ ${createOutputFileRequirements('leaf_allocation')}
 
 function createScorePlanningPrompt({ standaloneTechnical = false } = {}) {
   const placementInstruction = standaloneTechnical
-    ? `4. 当前采用“技术文件独立成册”：${OUTLINE_OUTPUT_FILE} 中每个一级根节点本身就应对应一个技术评分大项。每个根节点建立一个 branch，score_item_level 固定为 1，mappings 只填写与该根标题对应的评分大项，target_title 必须与 root_title 完全一致；不得再创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层分支。
+    ? `4. 当前采用“技术文件独立成册”：${OUTLINE_OUTPUT_FILE} 中每个一级根节点本身就应对应一个技术评分大项，也就是技术方案的挂载节点。每个根节点建立一个 branch，score_item_level 固定为 1，mappings 只填写与该根标题对应的评分大项，target_title 必须与 node_title 完全一致；不得再创建“技术方案”“项目管理方案”“监理大纲”“监理大纲（暗标）”“施工组织设计”“技术标”等外层分支。
 5. 一级根节点与评分大项默认严格一一对应；发现缺失、重复、合并或顺序不一致时，必须作为一级目录调整向用户说明并取得批准。detail_points 只用于后续生成根节点以下的目录。`
-    : `4. 判断技术方案位于哪些目录分支，以及每个分支内评分项对应节点应统一处于哪个层级。不同分支可以使用不同层级，不预设必须是二级目录。优先选择 attr=技术且 content_mode=ai-generate 的一级目录；template-fill、directory-generate、manual-fill 和 other 是特殊处理叶子，不得作为普通技术方案分支展开，除非先向用户说明并取得调整批准。
+    : `4. 判断技术方案挂载在哪些已确认的叶子节点上（可能是一级目录，也可能是子目录），以及每个分支内评分项对应节点应统一处于哪个层级：挂载节点本身为第 1 层，score_item_level=1 表示挂载节点本身就是评分项节点，2 表示评分项节点是挂载节点的直接下级。不同分支可以使用不同层级。优先选择 content_mode=ai-generate 的叶子；template-fill、directory-generate、manual-fill 和 other 是特殊处理叶子，不得作为技术方案分支展开，除非先向用户说明并取得调整批准。
 5. 默认每个评分项对应一个独立同层级节点，节点标题与评分大项基本一一对应；detail_points 用于后续生成更下级目录。`;
   const planExample = standaloneTechnical
-    ? `{"branches":[{"root_id":"从当前目录复制根节点ID","root_title":"评分大项一","score_item_level":1,"mappings":[{"requirement_id":"R1","target_title":"评分大项一"}]}],"extra_titles":[],"allow_root_changes":false}`
-    : `{"branches":[{"root_id":"从当前目录复制根节点ID","root_title":"技术方案","score_item_level":2,"mappings":[{"requirement_id":"R1","target_title":"评分大项目录标题","additional_titles":["经批准拆分出的同级标题"],"adjustment_note":"用户批准的调整说明"}]}],"extra_titles":[{"root_id":"从当前目录复制根节点ID","title":"经批准增加的同层级标题","reason":"增加原因"}],"allow_root_changes":false}`;
-  return `用户已经确认最终保留的一级目录，${OUTLINE_OUTPUT_FILE} 已由程序重新整理并编号。工作区也已加入技术评分信息和用户选择的参考资料。
+    ? `{"branches":[{"node_id":"从当前目录复制挂载节点ID","node_title":"评分大项一","score_item_level":1,"mappings":[{"requirement_id":"R1","target_title":"评分大项一"}]}],"extra_titles":[],"allow_root_changes":false}`
+    : `{"branches":[{"node_id":"从当前目录复制挂载节点ID","node_title":"挂载节点标题","score_item_level":2,"mappings":[{"requirement_id":"R1","target_title":"评分大项目录标题","additional_titles":["经批准拆分出的同级标题"],"adjustment_note":"用户批准的调整说明"}]}],"extra_titles":[{"node_id":"从当前目录复制挂载节点ID","title":"经批准增加的同层级标题","reason":"增加原因"}],"allow_root_changes":false}`;
+  return `用户已经确认最终保留的目录，${OUTLINE_OUTPUT_FILE} 已由程序重新整理并编号。工作区也已加入技术评分信息和用户选择的参考资料。
 ${createOutputFileRequirements('score-planning')}
 
 请完成技术评分项结构化和目录规划：
@@ -718,12 +846,12 @@ ${createOutputFileRequirements('score-planning')}
 2. 程序已确认本任务存在技术评分项。只从技术评分信息.md 的“技术评分项”中提取适合在技术方案中一一响应、展开编写的评分大项。“技术评分要求”只能作为评分标准、扣分规则和编写约束，不得提取为评分项。
 3. 将评分大项写入 ${TECHNICAL_SCORE_GROUPS_FILE}，完整结构为 {"groups":[{"requirement_id":"R1","title":"评分大项","description":"关注内容","detail_points":["关键评分细项"]}]}。根对象只能包含 groups；保持原顺序、专业术语和关键评分细项，requirement_id 使用连续的 R1、R2 格式。
 ${placementInstruction}
-6. 只有以下偏离需要用户批准：合并或拆分评分项、遗漏评分项对应节点、增加评分项中不存在的同层级大项、改变分支评分项目标层级，以及新增、删除、合并或调整用户已确认的一级目录。普通标题规范化和评分项下级目录扩展不需要询问。
+6. 只有以下偏离需要用户批准：合并或拆分评分项、遗漏评分项对应节点、增加评分项中不存在的同层级大项、改变分支评分项目标层级，以及新增、删除、合并或调整用户已确认的目录。普通标题规范化和评分项下级目录扩展不需要询问。
 7. 存在至少一个有效评分项时，无论是否存在偏离，都必须调用一次 ask-user 让用户确认。没有偏离时，question 只说明你分析得出的技术方案所在目录和评分项所在层级，最多使用两句话且不要使用列表；存在偏离时，只补充实际需要用户批准的偏离及影响，存在多个实际确认事项时才使用简单 Markdown 分行列出。question、选项名称和选项说明不得复述、概括或改写本任务 Prompt 中的要求，只呈现你分析后确实需要用户确认的结论或不确定事项。第一项给出推荐方案；另提供一个名为“调整目录安排”等明确业务名称的选项并设置 custom=true，让用户说明希望调整的位置或层级，其他选项均设置 custom=false。
-8. 根据用户回答写入 ${SCORE_DIRECTORY_PLAN_FILE}。完整字段层级示例：${planExample}。branches 中 root_id 必须复制当前 ${OUTLINE_OUTPUT_FILE} 中对应根节点的 id，root_title 填其标题；统一填写 score_item_level，并让每个 requirement_id 在 mappings 中恰好出现一次。后续重排或改名一级目录时，root_id 保持不变；不得填写显示编号或自行编造 ID。经用户批准新增一级目录时，该分支 root_id 填 null，root_title 与 ${OUTLINE_OUTPUT_FILE} 中新增目录的标题完全一致，程序在本阶段结束后分配 ID 并回填。默认一一对应；经用户批准合并时，多个 mapping 可以使用相同 target_title；经用户批准拆分时才填写 mapping.additional_titles；合并或拆分时才填写 adjustment_note。extra_titles 必须位于根对象，经批准增加同层级大项时才写入条目，否则使用空数组。
-9. 默认锁定一级目录，allow_root_changes=false；只有用户明确批准一级目录调整时才设为 true。用户批准新增一级目录时，须在本阶段把新增目录写入 ${OUTLINE_OUTPUT_FILE}。
-10. 程序已为 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE} 预置 Schema。可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验两份文件及其与一级目录的对应关系，不通过会退回问题清单继续修复。如果现有材料无法在不编造评分项的情况下通过校验，调用 report-failure。
-11. 此阶段对 ${OUTLINE_OUTPUT_FILE} 只允许插入经用户批准新增的一级目录：id 填 null，attr 为“技术”，content_mode 为 ai-generate，不包含 children，标题不得与其他一级目录重复；已有一级目录的 id、title、description、attr、content_mode 和相对顺序保持不变。删除、合并、改名、排序等其他已批准的一级目录调整留到生成完整目录时执行。不要删除、清空或重命名任何任务文件。`;
+8. 根据用户回答写入 ${SCORE_DIRECTORY_PLAN_FILE}。完整字段层级示例：${planExample}。branches 中 node_id 必须复制当前 ${OUTLINE_OUTPUT_FILE} 中对应挂载节点（已确认的叶子节点）的 id，node_title 填其标题；统一填写 score_item_level，并让每个 requirement_id 在 mappings 中恰好出现一次。后续重排或改名目录时，node_id 保持不变；不得填写显示编号或自行编造 ID。经用户批准新增一级目录时，该分支 node_id 填 null，node_title 与 ${OUTLINE_OUTPUT_FILE} 中新增目录的标题完全一致，程序在本阶段结束后分配 ID 并回填。默认一一对应；经用户批准合并时，多个 mapping 可以使用相同 target_title；经用户批准拆分时才填写 mapping.additional_titles；合并或拆分时才填写 adjustment_note。extra_titles 必须位于根对象，经批准增加同层级大项时才写入条目，否则使用空数组。
+9. 默认锁定已确认目录，allow_root_changes=false；只有用户明确批准一级目录调整时才设为 true。用户批准新增一级目录时，须在本阶段把新增目录写入 ${OUTLINE_OUTPUT_FILE}。
+10. 程序已为 ${TECHNICAL_SCORE_GROUPS_FILE} 和 ${SCORE_DIRECTORY_PLAN_FILE} 预置 Schema。可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验两份文件及其与已确认目录的对应关系，不通过会退回问题清单继续修复。如果现有材料无法在不编造评分项的情况下通过校验，调用 report-failure。
+11. 此阶段对 ${OUTLINE_OUTPUT_FILE} 只允许插入经用户批准新增的一级目录：id 填 null，attr 为“技术”，content_mode 为 ai-generate，不包含 children，标题不得与其他一级目录重复；已确认目录（含子目录）的 id、title、description、attr、content_mode、层级和相对顺序保持不变。删除、合并、改名、排序等其他已批准的一级目录调整留到生成完整目录时执行。不要删除、清空或重命名任何任务文件。`;
 }
 
 function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, allowRootChanges, standaloneTechnical }) {
@@ -737,35 +865,35 @@ function createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, 
     : `严格参考 ${LEAF_ALLOCATION_FILE} 中的分配，使最终完整目录合计约有 ${targetLeafCount} 个 content_mode=ai-generate 的叶子节点。`;
   const rootInstruction = allowRootChanges
     ? `用户已批准 ${SCORE_DIRECTORY_PLAN_FILE} 中记录的一级目录调整，只能按该规划进行必要修改并重新编号。上一阶段新增的一级目录已写入当前目录并分配 id，保留其 id，不要重复新增。`
-    : '一级目录的数量、顺序、id、title、description、attr 均已由用户确认，必须保持不变；未扩展为父节点的一级目录还必须保留其 content_mode。';
+    : '用户已确认的目录（含子目录）的数量、顺序、层级、id、title、description 和一级目录的 attr 必须保持不变；未扩展为父节点的已确认叶子还必须保留其 content_mode。';
   const mappingInstruction = standaloneTechnical
     ? '每个 branch 的 score_item_level=1，现有一级根节点本身就是评分项映射节点。不得在根节点下面再次生成同名评分项；只根据 detail_points、招标要求和专业逻辑生成其二级及以下目录。'
-    : '每个 branch 的 mappings 必须在该分支的 score_item_level 层级生成对应节点。';
+    : '每个 branch 的 mappings 必须在该分支的 score_item_level 层级生成对应节点（挂载节点本身为第 1 层）。';
   const standaloneLeafInstruction = standaloneTechnical
     ? 'leaf_count=1 表示保留对应一级目录本身作为叶子，不得为其生成 children；leaf_count>=2 时才向下展开。'
     : '';
   const outlineExample = standaloneTechnical
     ? `{"outline":[{"id":null,"title":"评分大项一","description":"评分大项说明","attr":"技术","children":[{"id":null,"title":"响应内容一","description":"具体响应内容","content_mode":"ai-generate"},{"id":null,"title":"响应内容二","description":"具体响应内容","content_mode":"ai-generate"}]}]}`
-    : `{"outline":[{"id":null,"title":"投标文件目录","description":"投标文件目录说明","attr":"目录","content_mode":"directory-generate"},{"id":null,"title":"技术方案","description":"技术方案说明","attr":"技术","children":[{"id":null,"title":"评分大项","description":"评分大项说明","children":[{"id":null,"title":"具体方案一","description":"具体方案说明","content_mode":"ai-generate"},{"id":null,"title":"具体方案二","description":"具体方案说明","content_mode":"ai-generate"}]},{"id":null,"title":"另一评分大项","description":"评分大项说明","content_mode":"ai-generate"}]}]}`;
+    : `{"outline":[{"id":"已确认节点ID","title":"已确认的模板填写目录","description":"目录说明","attr":"商务/资信","content_mode":"template-fill"},{"id":"已确认节点ID","title":"已确认的挂载节点","description":"挂载节点说明","attr":"技术","children":[{"id":null,"title":"评分大项","description":"评分大项说明","children":[{"id":null,"title":"具体方案一","description":"具体方案说明","content_mode":"ai-generate"},{"id":null,"title":"具体方案二","description":"具体方案说明","content_mode":"ai-generate"}]},{"id":null,"title":"另一评分大项","description":"评分大项说明","content_mode":"ai-generate"}]}]}`;
   return `请继续使用当前上下文，为 ${OUTLINE_OUTPUT_FILE} 生成完整目录。生成方式和处理顺序由你自主决定，但必须严格遵循评分项目录规划。
 ${createOutputFileRequirements('children_generation')}
 
 要求：
 1. ${branchInstruction}
 2. 以 ${TECHNICAL_SCORE_GROUPS_FILE} 为技术评分项权威清单，以 ${SCORE_DIRECTORY_PLAN_FILE} 为评分项与目录位置的权威规划。
-3. ${mappingInstruction} 规划的 root_id 对应根节点 id，节点本身不增加 root_id 字段；已有节点 id 不得随排序、改名或层级变化而改变。默认每个评分项形成一个独立节点；多个 mapping 使用相同 target_title 表示用户已批准合并，additional_titles 表示用户已批准将该评分项拆成多个同级节点。
+3. ${mappingInstruction} 规划的 node_id 对应挂载节点 id，节点本身不增加 node_id 字段；已有节点 id 不得随排序、改名或层级变化而改变。默认每个评分项形成一个独立节点；多个 mapping 使用相同 target_title 表示用户已批准合并，additional_titles 表示用户已批准将该评分项拆成多个同级节点。
 4. mappings 中的 target_title 是评分项对应节点标题，必须基本保持评分大项的专业表述；detail_points 主要用于生成其下级目录。
 5. extra_titles 是用户已批准增加的同层级大项；除此之外不得自行增加技术评分项中不存在的同层级标题。
 6. “技术评分要求”只能作为评分标准、扣分口径、判定规则和目录说明约束，不能生成独立评分项节点。
 7. ${rootInstruction}
-8. 未纳入评分项目录规划的一级目录和分支保持原样，不得增加子目录。
+8. 不是挂载节点的已确认目录保持原样，不得增加子目录。
 9. 如果存在参考知识库或原方案，只能用于完善评分项对应节点的下级结构，不得改变评分项映射或引入未经批准的同层级大项。
-10. ${leafInstruction}${LEAF_ALLOCATION_FILE} 中 allocations 使用 root_id 指向技术分支的稳定节点 ID。${standaloneLeafInstruction}评分项完整对应和目录质量优先于数量目标。
+10. ${leafInstruction}${LEAF_ALLOCATION_FILE} 中 allocations 使用 node_id 指向技术分支挂载节点的稳定 ID。${standaloneLeafInstruction}评分项完整对应和目录质量优先于数量目标。
 11. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
-12. 任意非叶子节点的 children 至少包含两个节点，不要创建只有一个子节点的冗余层级。
+12. AI 扩展的目录尽量避免只有一个子节点的冗余层级。
 13. 目录层级可变，但最多六级；一级目录包含 attr，子目录不包含 attr。已有节点必须原样保留 id，新节点 id 填 null；数组顺序决定排序，number 由程序计算，不得把编号填入 id。
 14. title 只写纯标题，不包含章节编号或 Markdown 标记。
-15. ${OUTLINE_OUTPUT_FILE} 的完整结构示例：${outlineExample}。示例中的 null 仅表示新节点；已有根节点必须从当前目录复制原 id 和 number，不能照抄 null。实际层级与标题按任务材料生成。
+15. ${OUTLINE_OUTPUT_FILE} 的完整结构示例：${outlineExample}。示例中的 null 仅表示新节点；已有节点必须从当前目录复制原 id 和 number，不能照抄示例。实际层级与标题按任务材料生成。
 16. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema。可使用 write 覆盖写回或 edit 修改该文件，内容较多时可分多次写入：首次用 write，之后用 edit 补充。可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验，不通过会退回问题清单继续修复。`;
 }
 
@@ -773,10 +901,10 @@ function createLeafAdjustmentPrompt(targetLeafCount, actualLeafCount, { noTechni
   const adjustmentBoundary = noTechnicalScoreMode
     ? `2. 用户已确认采用无技术评分项模式。选择调整时，只能根据现有资料和专业逻辑调整技术目录，不得编造具体项目事实、参数、业绩或承诺。
 3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、directory-generate、manual-fill 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
-4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，已有节点必须保留 id，新节点 id 填 null，number 由程序计算；用户已确认的一级目录不得修改；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。`
+4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，已有节点必须保留 id，新节点 id 填 null，number 由程序计算；用户已确认的目录（含子目录）不得修改，只能调整 AI 生成挂载节点下面的目录；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。`
     : `2. 用户选择“允许 Agent 自行调整”或“自定义需求”时，必须继续遵循 ${SCORE_DIRECTORY_PLAN_FILE}：不得删除、移动或改变评分项对应节点的目标层级，不得新增未经批准的同层级大项；优先调整评分项节点下面的更深层目录。
 3. 只通过合理调整 ai-generate 叶子的目录结构满足数量目标，不得为了凑数把 template-fill、directory-generate、manual-fill 或 other 改成 ai-generate，也不得改变非 AI 叶子的处理模式。
-4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，已有节点必须保留 id，新节点 id 填 null，number 由程序计算；技术一级目录的 id 必须与 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 root_id 一致，不能因增删、移动或重新编号而改变；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。`;
+4. 调整后仍须保持完整根结构 {"outline":[一级目录节点]}，已有节点必须保留 id，新节点 id 填 null，number 由程序计算；技术挂载节点的 id 必须与 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 node_id 一致，不能因增删、移动或重新编号而改变；用户已确认的其他目录不得修改；父节点只含 children，不含 content_mode，叶子节点只含 content_mode，不含 children。`;
   return `程序计算当前完整目录共有 ${actualLeafCount} 个“AI生成”叶子节点，目标是 ${targetLeafCount} 个。
 ${createOutputFileRequirements('leaf_adjustment')}
 
@@ -813,7 +941,7 @@ ${originalOnly
 2. 没有问题时不要修改 ${OUTLINE_OUTPUT_FILE}；写入 ${OUTLINE_REVIEW_FILE}，status=passed、issues=[]、user_feedback=""。
 3. 仅标题专业化和明显重复子目录合并可静默修复并设置 status=simple_fix；一级目录调整、增加或拆分目录、明显结构重排和叶子数量超出合理范围必须先集中调用一次 ask-user。
 4. 用户要求修改时设置 status=user_feedback；用户要求保留现状时不修改目录并设置 status=user_refuse。修改完成后不得再次询问。
-5. 用户已确认的一级目录数量、顺序、标题、描述和属性不得修改。所有叶子保留合法 content_mode，父节点至少有两个 children，目录最多六级，id 与实际父子位置一致。
+5. 用户已确认的目录（含子目录）的数量、顺序、层级、标题、描述和一级目录属性不得修改。所有叶子保留合法 content_mode，目录最多六级，id 与实际父子位置一致。
 6. issues 的 category 只能使用 leaf-count、duplicate-directory 或 professional-structure。最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}。
 7. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验两份文件，不通过会退回问题清单继续修复。未修改 ${OUTLINE_OUTPUT_FILE} 时不要为了校验而重写目录。
 
@@ -828,11 +956,11 @@ function createOutlineReviewPrompt({ targetLeafCount, actualLeafCount, allowRoot
     : `\n- “AI生成”叶子数量：程序计算目标为 ${targetLeafCount} 个，当前为 ${actualLeafCount} 个，可接受范围为 ${Math.max(1, targetLeafCount - 2)} 至 ${targetLeafCount + 2} 个。只统计 content_mode=ai-generate 的最终叶子节点；修复后仍须保持在此范围内。`;
   const rootRequirement = allowRootChanges
     ? `一级目录只能保持用户已批准的 ${SCORE_DIRECTORY_PLAN_FILE} 规划，不得提出规划之外的新调整。`
-    : '一级目录已经由用户确认，数量、顺序、标题、描述和属性不得修改。';
+    : '用户已确认的目录（含子目录）的数量、顺序、层级、标题、描述和一级目录属性不得修改，只能调整技术挂载节点下面的目录。';
   return `请对当前完整技术方案目录执行最终审核，并在用户确认后完成必要修复。
 ${createOutputFileRequirements('outline_review')}
 
-以下已提供 ${OUTLINE_REVIEW_CONTEXT_FILE}、${OUTLINE_OUTPUT_FILE}、技术评分信息.md 和 ${SCORE_DIRECTORY_PLAN_FILE} 在本阶段开始时的最新完整内容。后续修改文件后，以修改后的内容为准。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，叶子数量、内容模式数量、最大层级、父节点数量、单子节点和评分节点机械映射均直接采用其中结果；你只负责评分语义覆盖、近义重复和专业合理性审核。优先使用本次已提供的最新材料和程序计算结果，通常无需重复读取或重新统计。需要确认具体节点、补足上下文或排查结果异常时，可使用 grep、read 或 bash 定位相关部分；已有结果足以判断时直接继续审核。
+以下已提供 ${OUTLINE_REVIEW_CONTEXT_FILE}、${OUTLINE_OUTPUT_FILE}、技术评分信息.md 和 ${SCORE_DIRECTORY_PLAN_FILE} 在本阶段开始时的最新完整内容。后续修改文件后，以修改后的内容为准。${OUTLINE_REVIEW_CONTEXT_FILE} 是宿主程序计算的确定性审核结果，叶子数量、内容模式数量、最大层级、父节点数量和评分节点机械映射均直接采用其中结果；你只负责评分语义覆盖、近义重复和专业合理性审核。优先使用本次已提供的最新材料和程序计算结果，通常无需重复读取或重新统计。需要确认具体节点、补足上下文或排查结果异常时，可使用 grep、read 或 bash 定位相关部分；已有结果足以判断时直接继续审核。
 
 审核维度：${leafCountReview}
 - 评分覆盖：直接以技术评分信息.md 为原始依据，逐项检查其中适合技术方案响应的评分大项是否被目录准确覆盖；结构化评分项和目录规划用于核对已确认的映射，但不能掩盖原始评分信息中的遗漏。
@@ -849,7 +977,7 @@ ${createOutputFileRequirements('outline_review')}
 7. 根据 ask-user 返回的 answer 执行最终处理：用户要求全部或部分修改时更新 ${OUTLINE_OUTPUT_FILE} 并设置 status=user_feedback；用户明确拒绝修改或要求保留现状时不得修改目录并设置 status=user_refuse。将 answer 原文完整写入 user_feedback，修改完成后不得再次询问用户。
 8. ${rootRequirement}
 9. 修复必须继续遵守 ${SCORE_DIRECTORY_PLAN_FILE} 中用户确认的评分项映射、目标层级和一级目录调整边界。补回遗漏映射、合并重复目录或优化层级时，不得引入未经用户批准的评分大项规划变更。
-10. 技术一级目录的 id 必须与 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 root_id 一致；调整一级目录顺序或编号时不得修改节点 id。结构事实以 ${OUTLINE_REVIEW_CONTEXT_FILE} 为准；如果其中确定性检查不通过，直接依据列出的节点和缺失项形成问题并修复，不要重新统计。任何语义修复仍必须保证叶子保留合法 content_mode、父节点不包含 content_mode 或 content_mode_note、父节点至少有两个 children 且目录最多六级。
+10. 技术挂载节点的 id 必须与 ${SCORE_DIRECTORY_PLAN_FILE} 中对应的 node_id 一致；调整目录顺序或编号时不得修改节点 id。结构事实以 ${OUTLINE_REVIEW_CONTEXT_FILE} 为准；如果其中确定性检查不通过，直接依据列出的节点和缺失项形成问题并修复，不要重新统计。任何语义修复仍必须保证叶子保留合法 content_mode、父节点不包含 content_mode 或 content_mode_note 且目录最多六级。
 11. 最终将完整问题清单和处理结果写入 ${OUTLINE_REVIEW_FILE}。无问题时完整格式为 {"status":"passed","issues":[],"user_feedback":"","summary":"审核通过原因"}；有问题时完整格式为 {"status":"user_feedback","issues":[{"category":"score-coverage","problem":"问题说明","repair":"修复方案","confirmation_required":true}],"user_feedback":"用户回答原文","summary":"处理结果"}。category 只能是 leaf-count、score-coverage、duplicate-directory、professional-structure；status 按本流程选择 passed、simple_fix、user_feedback 或 user_refuse。
 12. 程序已为 ${OUTLINE_OUTPUT_FILE} 和 ${OUTLINE_REVIEW_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验两份文件，不通过会退回问题清单继续修复。未修改 ${OUTLINE_OUTPUT_FILE} 时不要为了校验而重写目录。
 
@@ -883,7 +1011,8 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     ? payload.outline_mode
     : storedPlan.outlineMode;
   const standaloneTechnical = outlineMode === 'standalone-technical';
-  const standaloneBusiness = outlineMode === 'standalone-business';
+  // 技术文件独立成册按技术评分项生成一级目录；完整投标文件和商务标独立成册按招标文件格式章节提取。
+  const formatExtraction = !standaloneTechnical;
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile);
   const originalOnly = hasOriginalPlan && storedPlan.outlineExpansionMode === 'original-only';
   const originalPlan = hasOriginalPlan ? workspaceStore.readOriginalPlanMarkdown() : '';
@@ -897,7 +1026,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     ...(!noTechnicalScoreMode ? {
       [TECHNICAL_SCORE_GROUPS_FILE]: TECHNICAL_SCORE_GROUPS_SCHEMA,
       [SCORE_DIRECTORY_PLAN_FILE]: SCORE_DIRECTORY_PLAN_SCHEMA,
-      [LEAF_ALLOCATION_FILE]: createLeafAllocationSchema(standaloneTechnical ? 1 : 2),
+      [LEAF_ALLOCATION_FILE]: createLeafAllocationSchema(),
     } : {}),
     [OUTLINE_REVIEW_FILE]: OUTLINE_REVIEW_SCHEMA,
   };
@@ -917,11 +1046,15 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       outputs[file] = report.value;
       issues.push(...report.issues);
     }
-    // 评分规划文件本身有效后，再核对一级目录与规划分支的身份对应。
+    // 评分规划文件本身有效后，再核对已确认目录与规划分支的身份对应。
     if (meta.workflow_stage === 'score-planning' && !issues.length) {
-      const rootReport = validateScorePlanningRoots(candidate.output_content, outputs[SCORE_DIRECTORY_PLAN_FILE], lockedRoots);
-      issues.push(...rootReport.issues);
-      Object.assign(outputs, rootReport.value);
+      const planningReport = validateScorePlanningOutline(candidate.output_content, outputs[SCORE_DIRECTORY_PLAN_FILE], confirmedOutline);
+      issues.push(...planningReport.issues);
+      Object.assign(outputs, planningReport.value);
+    }
+    // 用户未批准一级目录调整时，后续阶段只能在技术挂载节点下扩展，其他已确认节点保持原样。
+    if (CONFIRMED_OUTLINE_LOCKED_STAGES.has(meta.workflow_stage) && !allowRootChanges && !issues.length) {
+      issues.push(...collectConfirmedOutlineIssues(outputs[OUTLINE_OUTPUT_FILE].outline, confirmedOutline, anchorNodeIds));
     }
     return { value: outputs, issues };
   }
@@ -964,7 +1097,10 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   const initialCheckpoint = checkpointTask({ status: 'running', progress: currentProgress, logs });
   let task = initialCheckpoint.task;
   const templateTaskId = `${task.task_id}-template`;
-  let lockedRoots = [];
+  let confirmedOutline = [];
+  let templateItems = [];
+  // 技术方案挂载节点：有评分项时取评分规划分支，无评分项模式取已确认的 AI 生成叶子。
+  let anchorNodeIds = new Set();
   let technicalBranches = [];
   let scoreDirectoryPlan = null;
   let allowRootChanges = false;
@@ -1069,9 +1205,12 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     task = next.task;
   }
 
+  // 按勾选裁剪目录树；原文位置只交给模版提取，后续阶段使用去掉确认字段的通用目录。
   function applyConfirmedSelection(confirmed) {
-    const selectedIdSet = new Set(confirmed.selectedIds);
-    lockedRoots = numberOutline(confirmed.items.filter((item) => selectedIdSet.has(item.id)));
+    const selectedOutline = numberOutline(filterSelectedOutline(confirmed.items, new Set(confirmed.selectedIds)));
+    templateItems = formatExtraction ? collectTemplateItems(selectedOutline) : [];
+    confirmedOutline = stripOutlineFields(selectedOutline, SELECTION_ONLY_FIELDS);
+    const basis = task.stats?.outline_selection?.basis;
     const checkpoint = checkpointTask({
       stats: {
         ...(task.stats || {}),
@@ -1079,6 +1218,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
           items: confirmed.items,
           selected_ids: confirmed.selectedIds,
           confirmed: true,
+          ...(basis ? { basis } : {}),
         },
       },
     });
@@ -1099,7 +1239,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       message: 'Agent 正在生成子目录',
       prompt: createChildrenPrompt({ hasOriginalPlan, originalOnly, targetLeafCount, allowRootChanges, standaloneTechnical }),
       files: [
-        { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
+        { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: confirmedOutline }, null, 2) },
         {
           path: LEAF_ALLOCATION_FILE,
           content: JSON.stringify({
@@ -1149,15 +1289,29 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   }
 
   if (!restoringOutlineSelection) {
+    // 完整投标文件和商务标独立成册先由程序准备原文结构，一级目录按招标文件格式章节提取。
+    let tenderStructure = null;
+    if (formatExtraction) {
+      publish('正在读取招标原文结构', currentProgress);
+      tenderStructure = await prepareTenderStructure({ workspaceStore, openXmlHelperService, signal: taskControl.signal });
+    }
     updateAgentState({ status: 'running', phase: 'initial-outline', agent_connection: 'running', session_file: '' });
     const initialResult = await agentService.runTask({
       task_id: task.task_id,
       title: '技术方案一级目录生成',
       summary_enabled: false,
-      prompt: createInitialPrompt(taskInstruction, { standaloneTechnical, noTechnicalScoreMode }),
+      prompt: formatExtraction
+        ? createFormatOutlinePrompt({
+            structure: tenderStructure,
+            fallbackInstruction: taskInstruction,
+            sectionHint: buildOutlineSectionHint(storedPlan),
+            outputRequirements: createOutputFileRequirements('initial-outline'),
+            outputFile: OUTLINE_OUTPUT_FILE,
+          })
+        : createInitialPrompt(taskInstruction, { noTechnicalScoreMode }),
       output_file: OUTLINE_OUTPUT_FILE,
       prepare_output_files: [OUTLINE_OUTPUT_FILE],
-      files: initialFiles,
+      files: formatExtraction ? [...initialFiles, ...tenderStructure.files] : initialFiles,
       signal: taskControl.signal,
       persistent_task: {
         task_key: OUTLINE_AGENT_TASK_KEY,
@@ -1165,12 +1319,16 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       },
       initial_stage: 'initial-outline',
       initial_stage_index: 0,
-      json_validation_schemas: jsonValidationSchemas,
+      json_validation_schemas: formatExtraction
+        ? { ...jsonValidationSchemas, [OUTLINE_OUTPUT_FILE]: FORMAT_OUTLINE_JSON_SCHEMA }
+        : jsonValidationSchemas,
       max_retries: 1,
       buildRetryPrompt: createOutputRepairPrompt,
       // 在当前 Session 的修复循环内校验一级目录，通过后才进入用户确认。
       validateOutput(candidate) {
-        return validateOutlineOutput(candidate.output_content);
+        return formatExtraction
+          ? validateFormatOutlineOutput(candidate.output_content, tenderStructure)
+          : validateOutlineOutput(candidate.output_content);
       },
       // 将正式身份写回会话，确认和后续任务使用同一份目录。
       async continueTask(_candidate, meta) {
@@ -1182,12 +1340,12 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     });
     const generated = initialResult.validation_result;
     const items = generated.outline || [];
-    const defaultSelectedIds = standaloneBusiness
-      ? items.filter((item) => ['template-fill', 'directory-generate', 'manual-fill'].includes(item.content_mode)).map((item) => item.id)
-      : standaloneTechnical
-        ? items.filter((item) => item.attr === '技术').map((item) => item.id)
-        : items.map((item) => item.id);
-    const selection = { items, selected_ids: defaultSelectedIds, confirmed: false };
+    const selection = {
+      items,
+      selected_ids: collectDefaultSelectedIds(items, outlineMode),
+      confirmed: false,
+      ...(formatExtraction ? { basis: generated.basis } : {}),
+    };
     const waitingMessage = '一级目录已生成，等待用户确认';
     if (waitingMessage !== logs[logs.length - 1]) logs = [...logs, waitingMessage];
     currentProgress = Math.max(currentProgress, 30);
@@ -1210,12 +1368,13 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
 
   const confirmed = await taskControl.waitForOutlineSelection();
   applyConfirmedSelection(confirmed);
-  knownNodeIds = collectOutlineIds(lockedRoots);
-  const requiresTechnicalDirectoryGeneration = lockedRoots.some((item) => item.content_mode === AI_CONTENT_MODE);
-  const templateRoots = standaloneTechnical
-    ? []
-    : lockedRoots.filter((item) => item.content_mode === 'template-fill');
-  const extractTemplate = templateRoots.length > 0;
+  knownNodeIds = collectOutlineIds(confirmedOutline);
+  const confirmedAiLeafIds = collectOutlineLeaves(confirmedOutline)
+    .filter(({ item }) => item.content_mode === AI_CONTENT_MODE)
+    .map(({ item }) => item.id);
+  const requiresTechnicalDirectoryGeneration = confirmedAiLeafIds.length > 0;
+  if (noTechnicalScoreMode) anchorNodeIds = new Set(confirmedAiLeafIds);
+  const extractTemplate = templateItems.length > 0;
 
   publish(
     extractTemplate && requiresTechnicalDirectoryGeneration
@@ -1274,7 +1433,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
         workspaceStore,
         openXmlHelperService,
         taskId: templateTaskId,
-        outline: templateRoots,
+        items: templateItems,
         signal: parallelSignal,
         onActivity: publishTemplateAgentActivity,
         onCheckpoint: syncTemplateAgentCheckpoint,
@@ -1293,11 +1452,11 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     prepare_output_files: noTechnicalScoreMode ? [] : STAGE_OUTPUT_FILES['score-planning'],
     files: noTechnicalScoreMode
       ? [
-          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
+          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: confirmedOutline }, null, 2) },
           ...initialFiles,
         ]
       : [
-          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
+          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: confirmedOutline }, null, 2) },
           { path: '技术评分信息.md', content: storedPlan.techRequirements || '' },
           ...knowledgeFiles,
         ],
@@ -1354,21 +1513,23 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
 
       if (meta.workflow_stage === 'score-planning') {
         // 用户批准新增的一级目录在此获得正式 ID，后续分配、子目录和审核均使用同一份身份。
-        lockedRoots = meta.validation_result[OUTLINE_OUTPUT_FILE].outline;
-        knownNodeIds = collectOutlineIds(lockedRoots);
+        confirmedOutline = meta.validation_result[OUTLINE_OUTPUT_FILE].outline;
+        knownNodeIds = collectOutlineIds(confirmedOutline);
         scoreDirectoryPlan = meta.validation_result[SCORE_DIRECTORY_PLAN_FILE];
-        scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, lockedRoots);
+        scoreDirectoryPlan = synchronizeScoreDirectoryPlan(scoreDirectoryPlan, confirmedOutline);
         await meta.writeFiles([
-          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: lockedRoots }, null, 2) },
+          { path: OUTLINE_OUTPUT_FILE, content: JSON.stringify({ outline: confirmedOutline }, null, 2) },
           { path: SCORE_DIRECTORY_PLAN_FILE, content: JSON.stringify(scoreDirectoryPlan, null, 2) },
         ]);
         technicalBranches = scoreDirectoryPlan.branches.map((branch) => ({
-          root_id: branch.root_id,
-          root_title: branch.root_title,
+          node_id: branch.node_id,
+          node_title: branch.node_title,
         }));
+        anchorNodeIds = new Set(technicalBranches.map((branch) => branch.node_id));
         allowRootChanges = scoreDirectoryPlan.allow_root_changes === true;
-        fixedAiLeafCount = lockedRoots
-          .filter((root) => !technicalBranches.some(branch => branch.root_id === root.id) && root.content_mode === AI_CONTENT_MODE).length;
+        // 不作为挂载节点的 AI 叶子保持为单个正文小节，计入固定数量。
+        fixedAiLeafCount = collectOutlineLeaves(confirmedOutline)
+          .filter(({ item }) => item.content_mode === AI_CONTENT_MODE && !anchorNodeIds.has(item.id)).length;
         if (standaloneTechnical) {
           const requestedLeafTarget = targetLeafCount;
           targetLeafCount = enforceMinimumLeafTarget(
@@ -1387,7 +1548,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
             stage: 'leaf_allocation',
             prepare_output_files: [LEAF_ALLOCATION_FILE],
             message: 'Agent 正在分配 AI 生成小节',
-            prompt: createLeafAllocationPrompt({ standaloneTechnical }),
+            prompt: createLeafAllocationPrompt(),
             files: [{
               path: LEAF_ALLOCATION_CONTEXT_FILE,
               content: JSON.stringify({
@@ -1401,8 +1562,8 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
           };
         }
         const allocations = allocatedAiLeafCount === null
-          ? technicalBranches.map((branch) => ({ root_id: branch.root_id }))
-          : [{ root_id: technicalBranches[0].root_id, leaf_count: allocatedAiLeafCount }];
+          ? technicalBranches.map((branch) => ({ node_id: branch.node_id }))
+          : [{ node_id: technicalBranches[0].node_id, leaf_count: allocatedAiLeafCount }];
         return continueWithChildrenGeneration(allocations);
       }
 
@@ -1448,7 +1609,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
         ],
       };
     },
-  }) : Promise.resolve({ output_content: JSON.stringify({ outline: lockedRoots }) });
+  }) : Promise.resolve({ output_content: JSON.stringify({ outline: confirmedOutline }) });
 
   let templateReturned = !extractTemplate;
   const observedDirectoryPromise = observeParallelBranch('目录生成', directoryPromise).finally(() => {
@@ -1610,7 +1771,7 @@ module.exports = {
   OUTLINE_JSON_SCHEMA,
   buildFinalOutline,
   validateOutlineOutput,
-  validateScorePlanningRoots,
+  validateScorePlanningOutline,
   readJson,
   formatProgressTitle,
   createInitialPrompt,

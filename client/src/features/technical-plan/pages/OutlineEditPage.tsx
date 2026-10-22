@@ -398,7 +398,7 @@ function OutlineEditPage({
       setSavingOutlineSelection(true);
       await onOutlineSelectionSaved({ taskId: task.task_id, items, selectedIds });
       setSelectionDialogOpen(false);
-      showToast(`已确认 ${selectedIds.length} 个一级目录`, 'success');
+      showToast('已确认目录选择', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存一级目录选择失败', 'error');
     } finally {

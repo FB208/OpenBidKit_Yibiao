@@ -20,21 +20,36 @@ export interface SaveOutlineRequest {
   affectedNodeIds?: string[];
 }
 
+// 一级目录候选在招标原文中的位置，由 Main 核对后原样回传，Renderer 不使用。
+export interface OutlineSourceRange {
+  source?: string;
+  start: number;
+  end: number;
+}
+
+// 一级目录候选树：attr 只在一级目录上，content_mode 只在叶子上。
 export interface OutlineSelectionItem {
   id: string;
   number: string;
   title: string;
   description: string;
-  attr: OutlineAttribute;
-  content_mode: OutlineContentMode;
+  attr?: OutlineAttribute;
+  content_mode?: OutlineContentMode;
   content_mode_note?: string;
+  post_award?: boolean;
+  source?: OutlineSourceRange;
+  children?: OutlineSelectionItem[];
 }
+
+// 完整投标文件和商务标独立成册的目录依据：招标文件格式章节，或响应文件要求。
+export type OutlineSelectionBasis = 'format-template' | 'response-requirements';
 
 export interface OutlineSelectionState {
   items: OutlineSelectionItem[];
   selected_ids: string[];
   confirmed: boolean;
   auto_answer_at?: string;
+  basis?: OutlineSelectionBasis;
 }
 
 export interface SaveOutlineSelectionRequest {

@@ -1,9 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { OutlineContentMode } from '../../../shared/types';
 import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
-import type { OutlineAttribute, OutlineSelectionItem, OutlineSelectionState } from '../types';
+import type { OutlineAttribute, OutlineSelectionBasis, OutlineSelectionItem, OutlineSelectionState } from '../types';
 
 interface OutlineSelectionDialogProps {
   open: boolean;
@@ -14,10 +14,50 @@ interface OutlineSelectionDialogProps {
   onConfirm: (items: OutlineSelectionItem[], selectedIds: string[]) => void;
 }
 
+interface SelectionRow {
+  item: OutlineSelectionItem;
+  depth: number;
+  ancestorIds: string[];
+}
+
 const outlineAttributes: OutlineAttribute[] = ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'];
 const contentModes = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
+const basisLabels: Record<OutlineSelectionBasis, string> = {
+  'format-template': '依据：招标文件投标文件格式',
+  'response-requirements': '依据：响应文件要求（未找到明确格式）',
+};
 
-// 展示一级目录候选，并维护本次确认前的属性和选择草稿。
+// 按先序展开目录树，记录层级和祖先，供缩进与联动勾选使用。
+function flattenItems(items: OutlineSelectionItem[], depth = 0, ancestorIds: string[] = [], rows: SelectionRow[] = []) {
+  items.forEach((item) => {
+    rows.push({ item, depth, ancestorIds });
+    if (item.children?.length) flattenItems(item.children, depth + 1, [...ancestorIds, item.id], rows);
+  });
+  return rows;
+}
+
+function collectSubtreeIds(item: OutlineSelectionItem, ids: string[] = []) {
+  ids.push(item.id);
+  item.children?.forEach((child) => collectSubtreeIds(child, ids));
+  return ids;
+}
+
+function updateItem(items: OutlineSelectionItem[], itemId: string, patch: (item: OutlineSelectionItem) => OutlineSelectionItem): OutlineSelectionItem[] {
+  return items.map((item) => {
+    if (item.id === itemId) return patch(item);
+    return item.children?.length ? { ...item, children: updateItem(item.children, itemId, patch) } : item;
+  });
+}
+
+// 取消勾选后，从近到远移除已没有选中子目录的上级目录。
+function pruneAncestors(selected: Set<string>, ancestorIds: string[], rowsById: Map<string, SelectionRow>) {
+  [...ancestorIds].reverse().forEach((ancestorId) => {
+    const children = rowsById.get(ancestorId)?.item.children || [];
+    if (!children.some((child) => selected.has(child.id))) selected.delete(ancestorId);
+  });
+}
+
+// 展示目录候选树，并维护本次确认前的属性、处理模式和勾选草稿。
 function OutlineSelectionDialog({
   open,
   selection,
@@ -31,6 +71,11 @@ function OutlineSelectionDialog({
   const [countdownSeconds, setCountdownSeconds] = useState(0);
   const interactionReportedRef = useRef(false);
   const { enabled: autoAnswerEnabled, saving: autoAnswerSaving, setEnabled: setAutoAnswerEnabled } = useAutoAnswer();
+  const rows = useMemo(() => flattenItems(items), [items]);
+  const rowsById = useMemo(() => new Map(rows.map((row) => [row.item.id, row])), [rows]);
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const leafRows = rows.filter((row) => !row.item.children?.length);
+  const selectedLeafCount = leafRows.filter((row) => selectedIdSet.has(row.item.id)).length;
 
   useEffect(() => {
     if (!open) return;
@@ -60,34 +105,48 @@ function OutlineSelectionDialog({
     onInteraction();
   };
 
-  const toggleItem = (item: OutlineSelectionItem) => {
+  // 勾选会带上整棵子树和全部上级；取消会移除整棵子树，并移除已没有选中子目录的上级。
+  const toggleRow = (row: SelectionRow) => {
     reportInteraction();
-    setSelectedIds((current) => current.includes(item.id)
-      ? current.filter((id) => id !== item.id)
-      : [...current, item.id]);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      const subtreeIds = collectSubtreeIds(row.item);
+      if (next.has(row.item.id)) {
+        subtreeIds.forEach((id) => next.delete(id));
+        pruneAncestors(next, row.ancestorIds, rowsById);
+      } else {
+        [...row.ancestorIds, ...subtreeIds].forEach((id) => next.add(id));
+      }
+      return [...next];
+    });
   };
 
+  // 属性快捷按钮按一级目录的属性整棵选中或取消。
   const toggleAttribute = (attribute: OutlineAttribute) => {
-    const attributeIds = items.filter((item) => item.attr === attribute).map((item) => item.id);
-    if (!attributeIds.length) return;
+    const roots = items.filter((item) => item.attr === attribute);
+    if (!roots.length) return;
     reportInteraction();
-    const allSelected = attributeIds.every((id) => selectedIds.includes(id));
-    const attributeIdSet = new Set(attributeIds);
-    setSelectedIds((current) => allSelected
-      ? current.filter((id) => !attributeIdSet.has(id))
-      : [...current, ...attributeIds.filter((id) => !current.includes(id))]);
+    const allSelected = roots.every((item) => selectedIdSet.has(item.id));
+    const subtreeIds = roots.flatMap((item) => collectSubtreeIds(item));
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      subtreeIds.forEach((id) => (allSelected ? next.delete(id) : next.add(id)));
+      return [...next];
+    });
   };
 
   const changeAttribute = (itemId: string, attribute: OutlineAttribute) => {
     reportInteraction();
-    setItems((current) => current.map((item) => item.id === itemId ? { ...item, attr: attribute } : item));
+    setItems((current) => updateItem(current, itemId, (item) => ({ ...item, attr: attribute })));
   };
 
   const changeContentMode = (itemId: string, contentMode: OutlineContentMode) => {
     reportInteraction();
-    setItems((current) => current.map((item) => item.id === itemId
-      ? { ...item, content_mode: contentMode, ...(contentMode === 'other' ? {} : { content_mode_note: undefined }) }
-      : item));
+    setItems((current) => updateItem(current, itemId, (item) => ({
+      ...item,
+      content_mode: contentMode,
+      ...(contentMode === 'other' ? {} : { content_mode_note: undefined }),
+    })));
   };
 
   return (
@@ -102,17 +161,18 @@ function OutlineSelectionDialog({
         <Dialog.Content className="outline-selection-dialog">
           <header className="outline-selection-head">
             <div>
-              <Dialog.Title>选择一级目录</Dialog.Title>
-              <Dialog.Description>选择需要继续使用的一级目录，也可以在确认前调整目录属性和内容处理模式。</Dialog.Description>
+              <Dialog.Title>选择目录</Dialog.Title>
+              <Dialog.Description>选择需要使用的目录，也可以在确认前调整一级目录的属性和各目录的内容处理模式。</Dialog.Description>
+              {selection.basis && <p className="outline-selection-basis">{basisLabels[selection.basis]}</p>}
             </div>
-            <span aria-live="polite">已选 {selectedIds.length} / {items.length}</span>
+            <span aria-live="polite">已选 {selectedLeafCount} / {leafRows.length}</span>
           </header>
 
           <div className="outline-selection-filters" aria-label="按属性快捷选择">
             {outlineAttributes.map((attribute) => {
               const attributeItems = items.filter((item) => item.attr === attribute);
               const allSelected = Boolean(attributeItems.length)
-                && attributeItems.every((item) => selectedIds.includes(item.id));
+                && attributeItems.every((item) => selectedIdSet.has(item.id));
               return (
                 <button
                   key={attribute}
@@ -137,34 +197,47 @@ function OutlineSelectionDialog({
               <span>使用</span>
             </div>
             <div className="outline-selection-list">
-              {items.map((item) => {
-                const selected = selectedIds.includes(item.id);
+              {rows.map((row) => {
+                const { item } = row;
+                const selected = selectedIdSet.has(item.id);
+                const leaf = !item.children?.length;
                 return (
                   <div className={`outline-selection-row${selected ? ' is-selected' : ''}`} key={item.id}>
                     <span className="outline-selection-id">{item.number}</span>
-                    <strong title={item.title}>{item.title}</strong>
-                    <select
-                      value={item.attr}
-                      aria-label={`${item.title}的目录属性`}
-                      onChange={(event) => changeAttribute(item.id, event.target.value as OutlineAttribute)}
-                      disabled={saving}
-                    >
-                      {outlineAttributes.map((attribute) => <option key={attribute} value={attribute}>{attribute}</option>)}
-                    </select>
-                    <select
-                      className="outline-selection-mode"
-                      value={item.content_mode}
-                      aria-label={`${item.title}的内容处理模式`}
-                      onChange={(event) => changeContentMode(item.id, event.target.value as OutlineContentMode)}
-                      disabled={saving}
-                    >
-                      {contentModes.map((mode) => <option key={mode} value={mode}>{OUTLINE_CONTENT_MODE_LABELS[mode]}</option>)}
-                    </select>
+                    <div className="outline-selection-title" style={{ '--outline-selection-depth': row.depth } as CSSProperties}>
+                      <strong title={item.title}>{item.title}</strong>
+                      {item.post_award && <span className="outline-selection-tag">中标后使用</span>}
+                    </div>
+                    {row.depth === 0 && item.attr ? (
+                      <select
+                        value={item.attr}
+                        aria-label={`${item.title}的目录属性`}
+                        onChange={(event) => changeAttribute(item.id, event.target.value as OutlineAttribute)}
+                        disabled={saving}
+                      >
+                        {outlineAttributes.map((attribute) => <option key={attribute} value={attribute}>{attribute}</option>)}
+                      </select>
+                    ) : (
+                      <span className="outline-selection-blank is-attribute" aria-hidden="true">—</span>
+                    )}
+                    {leaf && item.content_mode ? (
+                      <select
+                        className="outline-selection-mode"
+                        value={item.content_mode}
+                        aria-label={`${item.title}的内容处理模式`}
+                        onChange={(event) => changeContentMode(item.id, event.target.value as OutlineContentMode)}
+                        disabled={saving}
+                      >
+                        {contentModes.map((mode) => <option key={mode} value={mode}>{OUTLINE_CONTENT_MODE_LABELS[mode]}</option>)}
+                      </select>
+                    ) : (
+                      <span className="outline-selection-blank is-mode" aria-hidden="true">—</span>
+                    )}
                     <input
                       type="checkbox"
                       checked={selected}
                       aria-label={`使用目录：${item.title}`}
-                      onChange={() => toggleItem(item)}
+                      onChange={() => toggleRow(row)}
                       disabled={saving}
                     />
                   </div>
@@ -175,7 +248,7 @@ function OutlineSelectionDialog({
 
           <footer className="outline-selection-actions">
             <div className="outline-selection-summary">
-              <span>{selectedIds.length ? `将使用 ${selectedIds.length} 个一级目录` : '请至少选择一个一级目录'}</span>
+              <span>{selectedLeafCount ? `将使用 ${selectedLeafCount} 个目录` : '请至少选择一个目录'}</span>
               <div className="outline-selection-auto-answer">
                 <label>
                   <AppSwitch checked={autoAnswerEnabled} disabled={autoAnswerSaving || saving} onCheckedChange={(checked) => void setAutoAnswerEnabled(checked)} />
@@ -195,7 +268,7 @@ function OutlineSelectionDialog({
                 type="button"
                 className="primary-action"
                 onClick={() => onConfirm(items, selectedIds)}
-                disabled={saving || !selectedIds.length}
+                disabled={saving || !selectedLeafCount}
               >
                 {saving ? '正在保存...' : '确认选择'}
               </button>

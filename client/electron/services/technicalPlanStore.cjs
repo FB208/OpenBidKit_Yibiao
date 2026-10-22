@@ -2773,6 +2773,16 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         .map((file) => String(file.sourceDocxPath || '').trim())
         .filter((item) => item && fs.existsSync(resolveMarkdownPath(item)));
     },
+    // 没有 Word 原件的招标文件（如 PDF）只有解析后的 Markdown，混合导入时供一级目录与 Word 原文结构一并阅读。
+    listTenderSourceMarkdownsWithoutDocx() {
+      return loadTenderSourceFiles()
+        .filter((file) => {
+          const docxPath = String(file.sourceDocxPath || '').trim();
+          return !docxPath || !fs.existsSync(resolveMarkdownPath(docxPath));
+        })
+        .map((file) => ({ fileName: file.fileName, markdown: readTenderSourceMarkdown(file.id) }))
+        .filter((file) => file.markdown.trim());
+    },
     getBidTemplateRelativePath() {
       return bidTemplateRelativePath;
     },

@@ -16,7 +16,8 @@ const DEFAULT_TIMEOUT_MS = 300000;
 // 与 openXmlHelperService 的 OPENXML_ENVIRONMENT_ERROR_CODE 一致；此处不引用服务模块，避免 Pi 层加载 Electron 依赖。
 const OPENXML_ENVIRONMENT_ERROR_CODE = 'OPENXML_ENVIRONMENT';
 const REPEATED_FAILURE_LIMIT = 3;
-const TEMPLATE_STEP_COUNT = 4;
+// 原文结构由目录任务在一级目录阶段之前准备，模版提取只推进抽章、扫描和写入字段三步。
+const TEMPLATE_STEP_COUNT = 3;
 const ACTION_LABELS = {
   [LIST_BLOCKS_ACTION]: '读取招标原文结构',
   [EXTRACT_CHAPTERS_ACTION]: '抽取投标模版章节',
@@ -94,6 +95,30 @@ function removeJobDir(result) {
   if (result?.jobDir) fs.rmSync(result.jobDir, { recursive: true, force: true });
 }
 
+/** 调用助手列出招标 Word 原文块，返回紧凑原文结构文本和原始块数据，供 Agent 阅读和程序核对。 */
+async function readTenderBlockOutline({ openXmlHelperService, sources, signal }) {
+  const result = await openXmlHelperService.runJob({
+    action: LIST_BLOCKS_ACTION,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    request: { sources },
+    signal,
+  });
+  try {
+    const blocksPath = path.join(result.jobDir, 'blocks.json');
+    if (!fs.existsSync(blocksPath)) {
+      throw new Error('助手没有写出原文结构');
+    }
+    const payload = JSON.parse(fs.readFileSync(blocksPath, 'utf8'));
+    return {
+      text: formatBlockOutline(payload),
+      blockCount: result.blockCount || result.block_count || 0,
+      sources: Array.isArray(payload?.sources) ? payload.sources : [],
+    };
+  } finally {
+    removeJobDir(result);
+  }
+}
+
 function normalizeRelativePath(filePath) {
   const relativePath = String(filePath || '').trim().replace(/\\/g, '/');
   if (!relativePath || path.isAbsolute(relativePath)) {
@@ -121,7 +146,7 @@ function createPiOpenXmlTool({
   // 分类从模型生成的文件读取，保留原工具参数的结构校验。
   const validateFieldSelections = new Ajv({ allErrors: true, strict: true }).compile(TEMPLATE_FIELD_CLASSIFICATION_SCHEMA);
   let repeatedFailure = { key: '', count: 0 };
-  // 列块、抽章、扫描和开始写入字段各推进一步；进度回调失败不影响工具执行。
+  // 抽章、扫描和开始写入字段各推进一步；进度回调失败不影响工具执行。
   const emitStep = (step, message) => {
     try { onStep?.({ step, total: TEMPLATE_STEP_COUNT, message }); } catch {}
   };
@@ -141,7 +166,7 @@ function createPiOpenXmlTool({
   const tool = {
     name: OPENXML_TOOL_NAME,
     label: 'Open XML 助手',
-    description: '列出招标 Word 原文块、抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 list-blocks、extract-chapters、scan-template-fields、apply-template-fields 顺序调用。apply-template-fields 只传 fields_file，工具读取文件内全部候选的完整分类；失败时编辑该文件后重新提交路径，不要在工具参数里重复输出字段清单。',
+    description: '抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 extract-chapters、scan-template-fields、apply-template-fields 顺序调用；招标原文结构.txt 已由程序准备，缺失时才用 list-blocks 重新生成。apply-template-fields 只传 fields_file，工具读取文件内全部候选的完整分类；失败时编辑该文件后重新提交路径，不要在工具参数里重复输出字段清单。',
     promptSnippet: '用 openxml 抽取投标模版、扫描待填候选并写入内容控件。',
     parameters: Type.Object({
       action: Type.String({
@@ -176,33 +201,18 @@ function createPiOpenXmlTool({
         }
 
         if (action === LIST_BLOCKS_ACTION) {
-          const result = await openXmlHelperService.runJob({
-            action: LIST_BLOCKS_ACTION,
-            timeoutMs: DEFAULT_TIMEOUT_MS,
-            request: { sources: businessSources },
+          const { text, blockCount } = await readTenderBlockOutline({
+            openXmlHelperService,
+            sources: businessSources,
             signal,
           });
-          const blockCount = result.blockCount || result.block_count || 0;
-          try {
-            const blocksPath = path.join(result.jobDir, 'blocks.json');
-            if (!fs.existsSync(blocksPath)) {
-              throw new Error('助手没有写出原文结构');
-            }
-            fs.writeFileSync(
-              path.join(workspaceDir, AGENT_BLOCKS_FILE),
-              formatBlockOutline(JSON.parse(fs.readFileSync(blocksPath, 'utf8'))),
-              'utf8',
-            );
-          } finally {
-            removeJobDir(result);
-          }
-          emitStep(1, `已读取招标原文结构，共 ${blockCount} 个原文块`);
+          fs.writeFileSync(path.join(workspaceDir, AGENT_BLOCKS_FILE), text, 'utf8');
           return createToolResult({
             ok: true,
             action,
             file_path: AGENT_BLOCKS_FILE,
             block_count: blockCount,
-            message: `已写入 ${AGENT_BLOCKS_FILE}，请用 read 一次读完后按原文标题或块号抽章。`,
+            message: `已写入 ${AGENT_BLOCKS_FILE}，请按块号定点读取需要核对的部分后抽章。`,
           });
         }
 
@@ -236,7 +246,7 @@ function createPiOpenXmlTool({
             fs.copyFileSync(bidTemplateSourcePath, path.join(workspaceDir, AGENT_TEMPLATE_SOURCE_FILE));
           }
 
-          emitStep(2, `已抽取 ${chapters.length} 个章节`);
+          emitStep(1, `已抽取 ${chapters.length} 个章节`);
           return createToolResult({
             ok: true,
             action,
@@ -282,7 +292,7 @@ function createPiOpenXmlTool({
             candidate_count: candidateData.candidates.length,
             message: `已写入 ${AGENT_FIELD_CANDIDATES_FILE}，当前结果已包含紧凑候选，请逐项分类后调用 apply-template-fields。`,
           };
-          emitStep(3, `识别到 ${candidateData.candidates.length} 个待填位置，正在分类`);
+          emitStep(2, `识别到 ${candidateData.candidates.length} 个待填位置，正在分类`);
           return createToolResult(toolPayload, true, {
             ok: true,
             action,
@@ -306,7 +316,7 @@ function createPiOpenXmlTool({
           }
           const fields = normalizeTemplateFields(selections.fields);
           const ignoredCandidateIds = normalizeIgnoredCandidateIds(selections.ignored_candidate_ids);
-          emitStep(4, `正在写入 ${fields.length} 个字段`);
+          emitStep(3, `正在写入 ${fields.length} 个字段`);
           const result = await openXmlHelperService.runJob({
             action: APPLY_TEMPLATE_FIELDS_ACTION,
             timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -417,7 +427,9 @@ function resolveChapterSources(chapters, businessSources, resolveAgentSources) {
 }
 
 module.exports = {
+  AGENT_BLOCKS_FILE,
   OPENXML_TOOL_NAME,
   TEMPLATE_FIELD_CLASSIFICATION_SCHEMA,
   createPiOpenXmlTool,
+  readTenderBlockOutline,
 };
