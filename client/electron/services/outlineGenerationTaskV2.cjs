@@ -993,7 +993,7 @@ function isMissingTechnicalScoreItems(content) {
   return section?.[1].trim() === '没有提及';
 }
 
-// 运行 V2 目录业务任务；存在 AI 目录时继续扩展，存在模板填写目录时独立提取模版。
+// 运行 V2 目录业务任务；存在 AI 目录时继续扩展，存在可抽取的格式目录时独立提取模版。
 async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
@@ -1386,7 +1386,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
           : standaloneTechnical
             ? '一级目录已确认，已跳过投标模版提取，开始生成技术文件目录'
             : requiresTechnicalDirectoryGeneration
-              ? '一级目录已确认，当前无模板填写目录，已跳过投标模版提取，开始生成完整目录'
+              ? '一级目录已确认，当前无可抽取的投标模版，已跳过投标模版提取，开始生成完整目录'
               : '一级目录已确认，所选目录无需 AI 扩展',
     35,
   );
@@ -1681,7 +1681,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
       ? '所选一级目录整理完成'
       : standaloneTechnical
       ? '目录生成与审核完成'
-      : '目录生成与审核完成，当前无模板填写目录'
+      : '目录生成与审核完成，当前无可抽取的投标模版'
     : templateResult.status === 'skipped'
       ? requiresTechnicalDirectoryGeneration
         ? '目录生成与审核完成，当前无招标 Word 原件'

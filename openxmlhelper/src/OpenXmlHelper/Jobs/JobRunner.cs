@@ -46,6 +46,7 @@ sealed class JobRunner
             ScanTemplateFieldsAction.Name => ScanTemplateFieldsAction.Execute(_workspace, jobId),
             ApplyTemplateFieldsAction.Name => ApplyTemplateFieldsAction.Execute(_workspace, jobId),
             FillTemplateFieldsAction.Name => FillTemplateFieldsAction.Execute(_workspace, jobId),
+            ReadTemplateLayoutAction.Name => ReadTemplateLayoutAction.Execute(_workspace, jobId),
             InsertBodyHtmlAction.Name => InsertBodyHtmlAction.Execute(_workspace, jobId),
             RenderRestrictedHtmlDocxAction.Name => RenderRestrictedHtmlDocxAction.Execute(_workspace, jobId),
             BlindCheck.BlindCheckInspectAction.Name => BlindCheck.BlindCheckInspectAction.Execute(_workspace, jobId),

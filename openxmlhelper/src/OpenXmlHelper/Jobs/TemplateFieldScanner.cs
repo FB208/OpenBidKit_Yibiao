@@ -95,10 +95,11 @@ static class TemplateFieldScanner
                 ScanElement(block, blockPath, result.Candidates, seen, ref order);
             }
 
-            var chapterName = FindChapter(chapters, blockIndex)?.Title;
+            var blockChapter = FindChapter(chapters, blockIndex);
             for (var index = firstCandidate; index < result.Candidates.Count; index += 1)
             {
-                result.Candidates[index].ChapterName = Optional(Limit(chapterName ?? "", 120));
+                result.Candidates[index].ChapterName = Optional(Limit(blockChapter?.Title ?? "", 120));
+                result.Candidates[index].Chapter = blockChapter;
             }
             blockIndex += Math.Max(0, checkboxGroup.Count - 1);
         }
@@ -329,6 +330,7 @@ static class TemplateFieldScanner
             {
                 Id = Optional(item.Id),
                 Title = title,
+                AutoFill = item.AutoFill,
                 StartBlock = item.StartBlock,
                 EndBlock = item.EndBlock,
             });
@@ -387,7 +389,7 @@ static class TemplateFieldScanner
     }
 
     /// <summary>把物理单元格映射到 Word 表格逻辑网格，跨列单元格占用连续逻辑列。</summary>
-    static List<TableRowInfo> BuildTableRows(Wp.Table table)
+    internal static List<TableRowInfo> BuildTableRows(Wp.Table table)
     {
         var result = new List<TableRowInfo>();
         var rows = table.Elements<Wp.TableRow>().ToList();
@@ -1090,7 +1092,7 @@ static class TemplateFieldScanner
     }
 
     /// <summary>签字类或纯盖章区建议人工；名称等文字旁的盖章提示仍由程序填写文字。</summary>
-    static string SuggestFillBy(string label, string hint)
+    internal static string SuggestFillBy(string label, string hint)
     {
         var (core, labelHint) = SplitLabelHint(label);
         var hints = $"{hint} {labelHint}";
@@ -1158,9 +1160,9 @@ static class TemplateFieldScanner
 
     sealed record ParagraphHit(string Kind, int Start, int Length, string Name, string FillBy, List<string>? Options = null);
 
-    sealed record TableRowInfo(Wp.TableRow Row, int RowIndex, List<TableCellInfo> Cells);
+    internal sealed record TableRowInfo(Wp.TableRow Row, int RowIndex, List<TableCellInfo> Cells);
 
-    sealed record TableCellInfo(
+    internal sealed record TableCellInfo(
         Wp.TableCell Cell,
         int CellIndex,
         int ColumnStart,

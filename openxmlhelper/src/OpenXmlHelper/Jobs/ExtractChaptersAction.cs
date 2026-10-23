@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -15,6 +16,9 @@ sealed class ExtractChapterSpec
     public string Source { get; set; } = "";
     public int? StartBlock { get; set; }
     public int? EndBlock { get; set; }
+    /// <summary>章节字段是否自动填写；为 false 时写入字段时统一改为人工。</summary>
+    [JsonPropertyName("auto_fill")]
+    public bool? AutoFill { get; set; }
 }
 
 sealed class ExtractChaptersRequest
@@ -59,6 +63,7 @@ static class ExtractChaptersAction
                     Source = (item.Source ?? "").Trim(),
                     StartBlock = item.StartBlock,
                     EndBlock = item.EndBlock,
+                    AutoFill = item.AutoFill,
                 })
                 .Where(item => item.Title.Length > 0)
                 .ToList();
@@ -142,6 +147,7 @@ static class ExtractChaptersAction
                     {
                         Id = match.Chapter.Id.Length > 0 ? match.Chapter.Id : null,
                         Title = match.Chapter.Title,
+                        AutoFill = match.Chapter.AutoFill ?? true,
                         StartBlock = startBlock,
                         EndBlock = destBody.ChildElements.Count,
                     });

@@ -1,7 +1,10 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { InfoCircledIcon } from '@radix-ui/react-icons';
+import * as Popover from '@radix-ui/react-popover';
+import { useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
 import type { BusinessFillReview, BusinessFillReviewImage, BusinessFillReviewUnit, BusinessFillReviewValue } from '../types';
+import BusinessFillDocument, { collectFieldIds, createDraft, describeUnitState, isFilled, isPending, type UnitDraft } from './BusinessFillDocument';
 
 interface BusinessFillReviewDialogProps {
   open: boolean;
@@ -15,23 +18,7 @@ interface BusinessFillReviewDialogProps {
   onConfirm: (values: BusinessFillReviewValue[]) => void;
 }
 
-interface UnitDraft {
-  value: string;
-  selected: string[];
-  imageId: string;
-}
-
-function createDraft(unit: BusinessFillReviewUnit): UnitDraft {
-  return { value: unit.value || '', selected: unit.selected || [], imageId: unit.image_id || '' };
-}
-
-function isFilled(unit: BusinessFillReviewUnit, draft: UnitDraft) {
-  if (unit.kind === 'attachment') return Boolean(draft.imageId);
-  if (unit.kind === 'choice') return draft.selected.length > 0;
-  return Boolean(draft.value.trim());
-}
-
-// 展示副 Agent 填写的商务模版字段值，确认前或填写完成后允许修改文字、勾选项和附件图片。
+// 按模版版式展示副 Agent 填写的商务模版字段值，确认前或填写完成后在原表格、原段落位置修改文字、勾选项和附件图片。
 function BusinessFillReviewDialog({
   open,
   mode,
@@ -44,15 +31,21 @@ function BusinessFillReviewDialog({
 }: BusinessFillReviewDialogProps) {
   const [drafts, setDrafts] = useState<Record<string, UnitDraft>>({});
   const [countdownSeconds, setCountdownSeconds] = useState(0);
+  const [activeChapter, setActiveChapter] = useState(0);
   const interactionReportedRef = useRef(false);
+  const paperRef = useRef<HTMLDivElement>(null);
+  const lastFocusedKeyRef = useRef('');
   const { enabled: autoAnswerEnabled, saving: autoAnswerSaving, setEnabled: setAutoAnswerEnabled } = useAutoAnswer();
-  const units = review?.units || [];
+  const units = useMemo(() => review?.units || [], [review]);
+  const chapters = useMemo(() => review?.chapters || [], [review]);
   const editing = mode === 'edit';
 
   useEffect(() => {
     if (!open || !review) return;
     setDrafts(Object.fromEntries(review.units.map((unit) => [unit.key, createDraft(unit)])));
+    setActiveChapter(0);
     interactionReportedRef.current = false;
+    lastFocusedKeyRef.current = '';
   }, [open, review]);
 
   useEffect(() => {
@@ -69,7 +62,7 @@ function BusinessFillReviewDialog({
     return () => window.clearInterval(timer);
   }, [autoAnswerAt]);
 
-  // 图片按所属记录分组，表格序号按出现顺序编号。
+  // 图片按所属记录分组。
   const imageGroups = useMemo(() => {
     const groups = new Map<string, BusinessFillReviewImage[]>();
     for (const image of review?.images || []) {
@@ -78,15 +71,35 @@ function BusinessFillReviewDialog({
     return [...groups.entries()];
   }, [review]);
   const imagesById = useMemo(() => new Map((review?.images || []).map((image) => [image.image_id, image])), [review]);
-  const tableNumbers = useMemo(() => {
-    const numbers = new Map<string, number>();
-    for (const unit of units) {
-      if (unit.table_id && !numbers.has(unit.table_id)) numbers.set(unit.table_id, numbers.size + 1);
-    }
-    return numbers;
-  }, [units]);
+  const unitsByFieldId = useMemo(
+    () => new Map(units.flatMap((unit) => unit.field_ids.map((fieldId) => [fieldId, unit] as const))),
+    [units],
+  );
 
-  const filledCount = units.filter((unit) => drafts[unit.key] && isFilled(unit, drafts[unit.key])).length;
+  // 各章出现的填写项、填写项在版式中的出现次数与文档顺序，以及首次出现的章节。
+  const layoutIndex = useMemo(() => {
+    const occurrences = new Map<string, number>();
+    const firstChapter = new Map<string, number>();
+    const chapterUnits = chapters.map((chapter, chapterIndex) => {
+      const chapterKeys = new Map<string, BusinessFillReviewUnit>();
+      for (const fieldId of collectFieldIds(chapter.blocks)) {
+        const unit = unitsByFieldId.get(fieldId);
+        if (!unit) continue;
+        occurrences.set(unit.key, (occurrences.get(unit.key) || 0) + 1);
+        if (!firstChapter.has(unit.key)) firstChapter.set(unit.key, chapterIndex);
+        chapterKeys.set(unit.key, unit);
+      }
+      return [...chapterKeys.values()];
+    });
+    const orderedUnits = chapterUnits.flat().filter((unit, index, list) => list.findIndex((item) => item.key === unit.key) === index);
+    return { occurrences, firstChapter, chapterUnits, orderedUnits };
+  }, [chapters, unitsByFieldId]);
+
+  const draftOf = (unit: BusinessFillReviewUnit) => drafts[unit.key] || createDraft(unit);
+  const pendingUnits = layoutIndex.orderedUnits.filter((unit) => isPending(unit, draftOf(unit)));
+  // 签章位置不计入；未使用的空行只有填写后才计入。
+  const countedUnits = units.filter((unit) => !unit.signature && (!unit.blank || isFilled(unit, draftOf(unit))));
+  const filledCount = countedUnits.filter((unit) => isFilled(unit, draftOf(unit))).length;
 
   // 首次修改字段值时通知 Main 停止本次自动确认。
   const reportInteraction = () => {
@@ -100,71 +113,53 @@ function BusinessFillReviewDialog({
     setDrafts((current) => ({ ...current, [key]: { ...current[key], ...patch } }));
   };
 
-  const toggleOption = (unit: BusinessFillReviewUnit, option: string) => {
-    const selected = drafts[unit.key]?.selected || [];
-    updateDraft(unit.key, { selected: selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option] });
-  };
-
   const buildValues = (): BusinessFillReviewValue[] => units.flatMap<BusinessFillReviewValue>((unit) => {
     const draft = drafts[unit.key];
-    if (!draft || !isFilled(unit, draft)) return [];
+    if (!draft || unit.signature || !isFilled(unit, draft)) return [];
     if (unit.kind === 'attachment') return [{ key: unit.key, image_id: draft.imageId }];
     if (unit.kind === 'choice') return [{ key: unit.key, selected: draft.selected }];
     return [{ key: unit.key, value: draft.value }];
   });
 
-  const renderEditor = (unit: BusinessFillReviewUnit) => {
-    const draft = drafts[unit.key] || createDraft(unit);
-    if (unit.kind === 'choice') {
-      return (
-        <div className="business-fill-options">
-          {(unit.options || []).map((option) => (
-            <label key={option}>
-              <input type="checkbox" checked={draft.selected.includes(option)} onChange={() => toggleOption(unit, option)} disabled={saving} />
-              <span>{option}</span>
-            </label>
-          ))}
-        </div>
-      );
-    }
-    if (unit.kind === 'attachment') {
-      const image = imagesById.get(draft.imageId);
-      return (
-        <div className="business-fill-attachment">
-          <select
-            value={draft.imageId}
-            aria-label={`${unit.name}的图片`}
-            onChange={(event) => updateDraft(unit.key, { imageId: event.target.value })}
-            disabled={saving}
-          >
-            <option value="">不选择</option>
-            {imageGroups.map(([group, images]) => (
-              <optgroup key={group} label={group}>
-                {images.map((item) => <option key={item.image_id} value={item.image_id}>{item.label} · {item.name}</option>)}
-              </optgroup>
-            ))}
-          </select>
-          {image && <img src={image.asset_url} alt={image.name} />}
-        </div>
-      );
-    }
-    return (
-      <textarea
-        value={draft.value}
-        rows={Math.min(4, Math.max(1, draft.value.split('\n').length))}
-        aria-label={unit.name}
-        onChange={(event) => updateDraft(unit.key, { value: event.target.value })}
-        disabled={saving}
-      />
-    );
+  // 跳到填写项在版式中的第一处位置并聚焦，短暂高亮便于识别；填写项 key 含分隔符，DOM 中以首个字段 ID 标识。
+  const locateUnit = (unit: BusinessFillReviewUnit) => {
+    const target = paperRef.current?.querySelector<HTMLElement>(`[data-unit-field="${CSS.escape(unit.field_ids[0])}"]`);
+    if (!target) return;
+    lastFocusedKeyRef.current = unit.key;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    (target.querySelector<HTMLElement>('textarea, input, button') || target).focus({ preventScroll: true });
+    target.classList.add('is-located');
+    window.setTimeout(() => target.classList.remove('is-located'), 1400);
   };
 
-  const describeNote = (unit: BusinessFillReviewUnit) => {
-    const draft = drafts[unit.key];
-    if (draft && isFilled(unit, draft)) return '';
-    if (unit.blank) return '未使用，留空';
-    if (unit.unresolved_reason) return unit.unresolved_reason;
-    return unit.fill_by === 'manual' ? '保留人工处理占位' : '';
+  // 从最近聚焦的填写项往后找下一个待处理项，到末尾后回到开头。
+  const locateNextPending = () => {
+    if (!pendingUnits.length) return;
+    const currentIndex = layoutIndex.orderedUnits.findIndex((unit) => unit.key === lastFocusedKeyRef.current);
+    const next = pendingUnits.find((unit) => layoutIndex.orderedUnits.indexOf(unit) > currentIndex) || pendingUnits[0];
+    locateUnit(next);
+  };
+
+  const trackFocus = (event: FocusEvent<HTMLDivElement>) => {
+    const fieldId = (event.target as HTMLElement).closest<HTMLElement>('[data-unit-field]')?.dataset.unitField;
+    const unit = fieldId ? unitsByFieldId.get(fieldId) : undefined;
+    if (unit) lastFocusedKeyRef.current = unit.key;
+  };
+
+  const scrollToChapter = (index: number) => {
+    paperRef.current?.querySelector(`[data-chapter-index="${index}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
+  // 以纸面顶部为准高亮当前所在章节。
+  const trackChapter = () => {
+    const container = paperRef.current;
+    if (!container) return;
+    const top = container.getBoundingClientRect().top + 32;
+    let current = 0;
+    container.querySelectorAll<HTMLElement>('[data-chapter-index]').forEach((section, index) => {
+      if (section.getBoundingClientRect().top <= top) current = index;
+    });
+    setActiveChapter(current);
   };
 
   return (
@@ -176,55 +171,58 @@ function BusinessFillReviewDialog({
     }}>
       <Dialog.Portal>
         <Dialog.Overlay className="content-regenerate-modal" />
-        <Dialog.Content className="outline-selection-dialog business-fill-review-dialog">
+        <Dialog.Content className="outline-selection-dialog business-fill-review-dialog" aria-describedby={undefined}>
           <header className="outline-selection-head">
-            <div>
-              <Dialog.Title>{editing ? '编辑商务模版字段值' : '确认商务模版字段值'}</Dialog.Title>
-              <Dialog.Description>
-                {editing
-                  ? '修改副 Agent 提取的文字、勾选项和附件图片；保存后以空白底稿重新回填商务模版 Word，在 Word 中的手工修改会被覆盖。'
-                  : '核对副 Agent 填写的内容，可修改文字、勾选项和附件图片；确认后回填商务模版 Word。'}
-              </Dialog.Description>
-            </div>
-            <span aria-live="polite">已填 {filledCount} / {units.length}</span>
+            <Dialog.Title>{editing ? '编辑商务模版字段值' : '确认商务模版字段值'}</Dialog.Title>
+            <span aria-live="polite">已填 {filledCount} / {countedUnits.length}</span>
           </header>
 
-          <p className="business-fill-review-hint">清空的字段会在 Word 中保留占位；附件从资信库图片中选择，每个位置一张。</p>
+          <p className="business-fill-review-notice">
+            <InfoCircledIcon aria-hidden="true" />
+            <span>本页面格式错位并不代表导出后也错位，请放心填写</span>
+          </p>
 
-          <div className="outline-selection-table">
-            <div className="business-fill-row is-header" aria-hidden="true">
-              <span>字段名称</span>
-              <span>值</span>
-              <span>说明</span>
-            </div>
-            <div className="outline-selection-list">
-              {!review && <div className="business-fill-review-empty">正在读取字段值...</div>}
-              {units.map((unit, index) => {
-                const startsTable = Boolean(unit.table_id) && units[index - 1]?.table_id !== unit.table_id;
+          <div className="business-fill-review-body">
+            <nav className="business-fill-nav" aria-label="商务模版章节">
+              {chapters.map((chapter, index) => {
+                const chapterUnits = layoutIndex.chapterUnits[index].filter((unit) => !unit.signature);
+                const filled = chapterUnits.filter((unit) => isFilled(unit, draftOf(unit))).length;
+                const pending = chapterUnits.filter((unit) => isPending(unit, draftOf(unit))).length;
                 return (
-                  <Fragment key={unit.key}>
-                    {startsTable && (
-                      <div className="business-fill-table-title">
-                        清单表 {tableNumbers.get(unit.table_id!)}{unit.section ? ` · ${unit.section}` : ''}
-                      </div>
-                    )}
-                    <div className="business-fill-row">
-                      <div className="business-fill-name">
-                        <strong title={unit.instruction || unit.name}>{unit.table_id ? `第${unit.row}行 · ${unit.name}` : unit.name}</strong>
-                        {!unit.table_id && unit.section && <span>{unit.section}</span>}
-                      </div>
-                      {renderEditor(unit)}
-                      <small>{describeNote(unit)}</small>
-                    </div>
-                  </Fragment>
+                  <button
+                    key={chapter.id || index}
+                    type="button"
+                    className={index === activeChapter ? 'is-active' : undefined}
+                    onClick={() => scrollToChapter(index)}
+                  >
+                    <strong>{chapter.title}</strong>
+                    <span>{chapterUnits.length ? `已填 ${filled} · 待处理 ${pending}` : '无需填写'}</span>
+                    {!chapter.auto_fill && <em>人工填写</em>}
+                  </button>
                 );
               })}
+            </nav>
+            <div className="business-fill-paper" ref={paperRef} onScroll={trackChapter} onFocus={trackFocus}>
+              {review ? (
+                <BusinessFillDocument
+                  chapters={chapters}
+                  baseSize={review.base_size}
+                  unitsByFieldId={unitsByFieldId}
+                  occurrences={layoutIndex.occurrences}
+                  drafts={drafts}
+                  imageGroups={imageGroups}
+                  imagesById={imagesById}
+                  saving={saving}
+                  onDraftChange={updateDraft}
+                />
+              ) : (
+                <div className="business-fill-review-empty">正在读取商务模版...</div>
+              )}
             </div>
           </div>
 
           <footer className="outline-selection-actions">
             <div className="outline-selection-summary">
-              <span>{units.length - filledCount ? `${units.length - filledCount} 项未填写，将保留占位` : '全部字段已填写'}</span>
               {!editing && (
                 <div className="outline-selection-auto-answer">
                   <label>
@@ -238,6 +236,39 @@ function BusinessFillReviewDialog({
               )}
             </div>
             <div className="outline-selection-buttons">
+              <Popover.Root>
+                <Popover.Trigger asChild>
+                  <button type="button" className="secondary-action business-fill-pending-trigger" disabled={!pendingUnits.length}>
+                    {pendingUnits.length ? `待处理 ${pendingUnits.length}` : '无待处理'}
+                  </button>
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Content
+                    className="business-fill-pending-popover"
+                    side="top"
+                    align="end"
+                    sideOffset={8}
+                    onCloseAutoFocus={(event) => event.preventDefault()}
+                  >
+                    <ul>
+                      {pendingUnits.map((unit) => (
+                        <li key={unit.key}>
+                          <Popover.Close asChild>
+                            <button type="button" onClick={() => locateUnit(unit)}>
+                              <strong>{unit.name}</strong>
+                              <span>{chapters[layoutIndex.firstChapter.get(unit.key) ?? 0]?.title}</span>
+                              <small>{describeUnitState(unit, draftOf(unit))}</small>
+                            </button>
+                          </Popover.Close>
+                        </li>
+                      ))}
+                    </ul>
+                  </Popover.Content>
+                </Popover.Portal>
+              </Popover.Root>
+              <button type="button" className="secondary-action" onClick={locateNextPending} disabled={!pendingUnits.length}>
+                下一个待处理
+              </button>
               <button type="button" className="secondary-action" onClick={() => {
                 reportInteraction();
                 onDismiss();

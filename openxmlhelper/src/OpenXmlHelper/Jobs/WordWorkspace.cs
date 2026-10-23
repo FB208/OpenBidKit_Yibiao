@@ -193,7 +193,7 @@ static class WordWorkspace
     }
 
     /** 段落直接层级优先，否则使用段落样式继承得到的层级。 */
-    static int ReadOutlineLevel(Wp.Paragraph? paragraph, IReadOnlyDictionary<string, int>? styleOutlineLevels)
+    public static int ReadOutlineLevel(Wp.Paragraph? paragraph, IReadOnlyDictionary<string, int>? styleOutlineLevels)
     {
         var directLevel = paragraph?.ParagraphProperties?.OutlineLevel?.Val?.Value;
         if (directLevel is not null) return directLevel.Value;
@@ -205,7 +205,7 @@ static class WordWorkspace
     }
 
     /** 解析 styles.xml 中每个样式通过 basedOn 继承后的真实大纲层级。 */
-    static Dictionary<string, int> ReadStyleOutlineLevels(MainDocumentPart part)
+    public static Dictionary<string, int> ReadStyleOutlineLevels(MainDocumentPart part)
     {
         var styles = part.StyleDefinitionsPart?.Styles?.Elements<Wp.Style>()
             .Where(style => !string.IsNullOrWhiteSpace(style.StyleId?.Value))
@@ -243,7 +243,7 @@ static class WordWorkspace
         }
     }
 
-    static bool HasHeadingStyle(Wp.Paragraph? paragraph)
+    public static bool HasHeadingStyle(Wp.Paragraph? paragraph)
     {
         var style = paragraph?.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "";
         return style.StartsWith("Heading", StringComparison.OrdinalIgnoreCase)

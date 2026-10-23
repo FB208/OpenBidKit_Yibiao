@@ -1835,7 +1835,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       return activeTaskControls.get('content-generation')?.suppressBusinessFillReviewAutoConfirmation(payload) || { success: true };
     },
     getBusinessFillReview() {
-      return loadBusinessFillReview({ workspaceStore: technicalPlanStore, credentialLibraryService });
+      return loadBusinessFillReview({ workspaceStore: technicalPlanStore, credentialLibraryService, openXmlHelperService });
     },
     // 商务模版填写完成后编辑字段值；与正文并行不冲突，正文任务运行中时同步任务内存中的状态，避免后续 checkpoint 覆盖。
     async saveBusinessFillReview(payload = {}) {

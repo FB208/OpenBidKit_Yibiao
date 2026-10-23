@@ -281,17 +281,19 @@ function collectDefaultSelectedIds(items, outlineMode) {
 }
 
 /**
- * 收集已确认的模板填写叶子，交给模版提取；带原文位置时提取直接按位置抽章。
- * 位于带行号原文中的条目没有 Word 原件可抽，留在目录中按待模板填写处理。
+ * 收集要抽进商务模版的已确认叶子：带 Word 原文位置的叶子不论处理方式都抽取，处理方式只决定字段是否自动填写（auto_fill）；
+ * 没有原文位置时只按标题抽取模板填写叶子。位于带行号原文中的条目没有 Word 原件可抽。
  */
 function collectTemplateItems(items) {
   return collectOutlineLeaves(items)
-    .filter(({ item }) => item.content_mode === 'template-fill'
-      && normalizeSourcePath(item.source?.source) !== MARKDOWN_STRUCTURE_FILE)
+    .filter(({ item }) => (item.source
+      ? normalizeSourcePath(item.source.source) !== MARKDOWN_STRUCTURE_FILE
+      : item.content_mode === 'template-fill'))
     .map(({ item, path }) => ({
       id: item.id,
       title: item.title,
       path: path.join(' / '),
+      auto_fill: item.content_mode === 'template-fill',
       ...(item.source ? { source: item.source } : {}),
     }));
 }

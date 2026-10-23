@@ -31,13 +31,13 @@ function createTemplateExtractionPrompt(sourcePaths = []) {
     : '- 无';
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。
 
-任务：根据用户已确认且处理模式为“模板填写”的目录，从招标 Word 原件抽取投标模版，识别模版中需要填写的位置，并写入 Word 内容控件和字段清单。本任务只提取和标记，不生成任何字段值，也不填写模版。
+任务：根据用户已确认的目录，从招标 Word 原件抽取完整的投标模版，识别模版中需要填写的位置，并写入 Word 内容控件和字段清单。本任务只提取和标记，不生成任何字段值，也不填写模版。
 
-字段用途：后续由程序从企业资信库和招标文件信息自动填写 fill_by=ai 的字段，附件从资信库图片中选择；fill_by=manual 只用于签字、签名、手印、仅需盖章的位置和资信库中没有的附件材料，由用户人工处理。
+字段用途：后续由程序从企业资信库和招标文件信息自动填写 fill_by=ai 的字段，附件从资信库图片中选择；fill_by=manual 只用于签字、签名、手印、仅需盖章的位置和资信库中没有的附件材料，由用户人工处理。auto_fill=false 的目录由用户人工填写，程序写入字段时会把这些章节中的字段统一改为 manual（与自动填写章节同名的字段沿用程序填写），分类时仍按位置语义命名，fill_by 按常规规则填写即可。
 
 必须完成的产物：当前工作目录根目录中的 ${TEMPLATE_CLASSIFICATION_FILE}、bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE}。程序会为尚不存在的分类文件预建空文件；空文件不算完成，首次填充必须使用 write，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。已有内容修正可用 edit 或 write。必须使用上述精确文件名，不得改名、移到子目录或仅在回复中输出。分类文件由你填写，最终 Word 和字段清单必须由 openxml 的 apply-template-fields 生成，不得手工写入。全部产物有效后才允许结束任务。
 
-当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 的 items 只包含最终确认的“模板填写”目录（path 是从一级目录到本目录的标题链），本任务必须只以该文件作为抽取范围依据，不得处理目录生成、人工填写、AI 生成或其他模式目录。
+当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 的 items 是最终确认、需要抽进投标模版的全部目录（path 是从一级目录到本目录的标题链，auto_fill 表示字段是否自动填写），本任务必须只以该文件作为抽取范围依据，每个目录都要抽取，不得遗漏或增加。
 
 程序固定绑定的招标 Word 原件：
 ${sourceList}
@@ -45,7 +45,7 @@ ${sourceList}
 必须按以下顺序执行：
 1. 阅读 ${TEMPLATE_OUTLINE_INPUT_FILE}。
 2. 工作区中的 ${AGENT_BLOCKS_FILE} 已由程序生成，确认目录前已经读过：每行一个非空原文块，格式为“块号 [标记] 文本”；[标题N] 表示可用 sourceTitle 定位的原文标题，空块已省略但块号保持原值。需要核对时按块号用 read 定点读取相关部分，不必重新通读；只有该文件缺失时才调用一次 openxml，action=list-blocks 重新生成。
-3. 正常情况下只调用一次 openxml，action=extract-chapters，每个目录抽取一章，title 使用目录标题。目录带 source 时，直接以 source.start 作为 startBlock、source.end 作为 endBlock（不包含在本章内），有 source.source 时填入该章的 source；这些位置在确认目录时已由程序核对。目录没有 source 时，在原文结构中找到真实章节位置和完整边界：带 [标题N] 标记的原文标题可提供 sourceTitle；没有该标记时必须提供标题所在的 startBlock 和下一同级章节或附件开始位置 endBlock，endBlock 不包含在本章内；不得把两个已选目录之间的其他表单，或最后一个已选目录之后的文档尾部一并抽入；多份原件时填写 source。后续扫描若明确证明抽章边界错误，应修正相关边界后重新抽取并扫描。
+3. 正常情况下只调用一次 openxml，action=extract-chapters，每个目录抽取一章，按 items 顺序排列，id 填该目录的 id，title 使用目录标题；程序会按 id 核对是否齐全并标记是否自动填写。目录带 source 时，直接以 source.start 作为 startBlock、source.end 作为 endBlock（不包含在本章内），有 source.source 时填入该章的 source；这些位置在确认目录时已由程序核对。目录没有 source 时，在原文结构中找到真实章节位置和完整边界：带 [标题N] 标记的原文标题可提供 sourceTitle；没有该标记时必须提供标题所在的 startBlock 和下一同级章节或附件开始位置 endBlock，endBlock 不包含在本章内；不得把两个已选目录之间的其他表单，或最后一个已选目录之后的文档尾部一并抽入；多份原件时填写 source。后续扫描若明确证明抽章边界错误，应修正相关边界后重新抽取并扫描。
 4. 调用一次 openxml，action=scan-template-fields。工具结果直接返回 default_suggested_fill_by、contexts 和 candidates，正常情况下据此逐项分类，无需再次读取 投标模版字段候选.json；工具结果被截断或信息明显缺失时，可按章节、context_id 或 candidate_id 筛选该文件的相关部分，分批完成分类，无需重新读取整份候选。所有候选最终均须得到分类。候选说明：
    - context 中的【▢…】标出当前候选的准确位置，同一段落的多个候选以此区分；表格候选的 context 按网格列列出同行内容，【▢第N列】是当前单元格。
    - suggested_name 是程序按相邻标签给出的建议名称，可按语义修正；suggested_fill_by 是建议值，未提供时使用顶层默认值。
@@ -71,11 +71,12 @@ ${sourceList}
 11. apply-template-fields 已内置分类校验、Word 校验及产物检查，成功后程序自动结束任务，无需 task_complete。失败时继续修复，不得结束任务；成功后不再检查文件、重复应用字段或输出总结。`;
 }
 
-// 将模板工具绑定到当前业务工作区的原件和输出位置。
-function buildOpenXmlToolOptions(workspaceStore, openXmlHelperService, onStep) {
+// 将模板工具绑定到当前业务工作区的原件和输出位置；抽章按已确认目录核对齐全并标记是否自动填写。
+function buildOpenXmlToolOptions(workspaceStore, openXmlHelperService, onStep, items) {
   return {
     openXmlHelperService,
     onStep,
+    templateChapters: items,
     listBusinessSources: () => workspaceStore.listTenderSourceDocxRelativePaths(),
     resolveAgentSources: (hint) => workspaceStore.resolveTenderSourceDocxPath(hint),
     bidTemplateSourcePath: workspaceStore.getBidTemplateSourcePath(),
@@ -125,7 +126,7 @@ async function runTemplateExtractionTask({
     initial_stage: 'template-extraction',
     initial_stage_index: 0,
     active_tools: TEMPLATE_EXTRACTION_TOOLS,
-    open_xml_tool: buildOpenXmlToolOptions(workspaceStore, openXmlHelperService, onStep),
+    open_xml_tool: buildOpenXmlToolOptions(workspaceStore, openXmlHelperService, onStep, items),
     max_retries: 1,
     onActivity,
     onCheckpoint,

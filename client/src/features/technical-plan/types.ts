@@ -304,6 +304,10 @@ export interface BusinessFillReviewUnit {
   name: string;
   kind: 'text' | 'choice' | 'attachment';
   fill_by: 'ai' | 'manual';
+  /** 该填写项展开到的模版字段，同名字段在版式中的多处位置共用一个值。 */
+  field_ids: string[];
+  /** 签字、签章、手印、盖章位置，只能线下处理。 */
+  signature?: boolean;
   /** 字段描述的对象。 */
   subject?: string;
   /** 所在章节与表格标题。 */
@@ -328,9 +332,55 @@ export interface BusinessFillReviewImage {
   asset_url: string;
 }
 
+/** 商务模版版式片段：文字（可带加粗、下划线）、行内字段、换行或制表位。 */
+export interface BusinessFillLayoutSegment {
+  text?: string;
+  bold?: boolean;
+  underline?: boolean;
+  field_id?: string;
+  break?: boolean;
+  tab?: boolean;
+}
+
+export interface BusinessFillLayoutCell {
+  col_span?: number;
+  row_span?: number;
+  /** 只在单元格显式去掉四边边框时为 false。 */
+  borders?: boolean;
+  blocks: BusinessFillLayoutBlock[];
+}
+
+/** 商务模版版式块：段落、表格或块级字段控件；缩进以 em 计，size 为磅值。 */
+export interface BusinessFillLayoutBlock {
+  type: 'paragraph' | 'table' | 'field';
+  index?: number;
+  align?: 'center' | 'right' | 'justify';
+  indent?: { first_line?: number; left?: number };
+  heading?: boolean;
+  label?: string;
+  size?: number;
+  segments?: BusinessFillLayoutSegment[];
+  columns?: number[];
+  borders?: boolean;
+  rows?: Array<{ cells: BusinessFillLayoutCell[] }>;
+  field_id?: string;
+  blocks?: BusinessFillLayoutBlock[];
+}
+
+/** 商务模版章节；auto_fill 为 false 时章节字段由用户人工填写。 */
+export interface BusinessFillReviewChapter {
+  id?: string;
+  title: string;
+  auto_fill: boolean;
+  blocks: BusinessFillLayoutBlock[];
+}
+
 export interface BusinessFillReview {
   units: BusinessFillReviewUnit[];
   images: BusinessFillReviewImage[];
+  /** 正文默认字号（磅）。 */
+  base_size: number;
+  chapters: BusinessFillReviewChapter[];
 }
 
 /** 用户确认的填写项值，空值不提交。 */

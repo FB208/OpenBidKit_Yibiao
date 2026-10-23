@@ -7,6 +7,7 @@ const LIST_BLOCKS_ACTION = 'list-blocks';
 const EXTRACT_CHAPTERS_ACTION = 'extract-chapters';
 const SCAN_TEMPLATE_FIELDS_ACTION = 'scan-template-fields';
 const APPLY_TEMPLATE_FIELDS_ACTION = 'apply-template-fields';
+const READ_TEMPLATE_LAYOUT_ACTION = 'read-template-layout';
 const AGENT_BLOCKS_FILE = '招标原文结构.txt';
 const AGENT_TEMPLATE_SOURCE_FILE = '投标模版源文件.docx';
 const AGENT_FIELD_CANDIDATES_FILE = '投标模版字段候选.json';
@@ -119,6 +120,25 @@ async function readTenderBlockOutline({ openXmlHelperService, sources, signal })
   }
 }
 
+/** 调用助手读取投标模版版式（段落、表格和字段控件位置），供商务模版确认弹窗还原表单。 */
+async function readTemplateLayout({ openXmlHelperService, input, signal }) {
+  const result = await openXmlHelperService.runJob({
+    action: READ_TEMPLATE_LAYOUT_ACTION,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    request: { input },
+    signal,
+  });
+  try {
+    const layoutPath = path.join(result.jobDir, 'template-layout.json');
+    if (!fs.existsSync(layoutPath)) {
+      throw new Error('助手没有写出商务模版版式');
+    }
+    return JSON.parse(fs.readFileSync(layoutPath, 'utf8'));
+  } finally {
+    removeJobDir(result);
+  }
+}
+
 function normalizeRelativePath(filePath) {
   const relativePath = String(filePath || '').trim().replace(/\\/g, '/');
   if (!relativePath || path.isAbsolute(relativePath)) {
@@ -140,6 +160,7 @@ function createPiOpenXmlTool({
   bidTemplateRelativePath,
   bidTemplateFieldsPath,
   bidTemplateFieldsRelativePath,
+  templateChapters,
   reportTaskFailure,
   onStep,
 }) {
@@ -174,7 +195,7 @@ function createPiOpenXmlTool({
         description: '依次列块、抽章、扫描待填候选、应用字段标记。',
       }),
       chapters: Type.Optional(Type.Array(Type.Object({
-        id: Type.Optional(Type.String()),
+        id: Type.Optional(Type.String({ description: '已确认模板目录中该目录的 id。' })),
         title: Type.String({ minLength: 1, description: '投标模版里使用的一级目录标题。' }),
         sourceTitle: Type.Optional(Type.String({ description: '招标 Word 里的真实标题，仅适用于招标原文结构中标记为 [标题N] 的块。' })),
         source: Type.Optional(Type.String({ description: '该章所在原件在招标原文结构.txt 中“原件：”后列出的完整路径；多份 Word 原件时必填。' })),
@@ -218,7 +239,7 @@ function createPiOpenXmlTool({
 
         if (action === EXTRACT_CHAPTERS_ACTION) {
           const chapters = resolveChapterSources(
-            normalizeChapters(params.chapters),
+            bindTemplateChapters(normalizeChapters(params.chapters), templateChapters),
             businessSources,
             resolveAgentSources,
           );
@@ -385,6 +406,30 @@ function normalizeChapters(chapters) {
     .filter((item) => item.title);
 }
 
+/**
+ * 按已确认目录核对抽章：每个目录恰好抽一章，按目录顺序排列，并注入是否自动填写。
+ * 未提供已确认目录时（如其他调用方）保持原样。
+ */
+function bindTemplateChapters(chapters, templateChapters) {
+  if (!Array.isArray(templateChapters)) return chapters;
+  const order = new Map(templateChapters.map((item, index) => [item.id, index]));
+  const seen = new Set();
+  const problems = [];
+  for (const chapter of chapters) {
+    if (!order.has(chapter.id)) problems.push(`「${chapter.title}」的 id 不是已确认目录的 id`);
+    else if (seen.has(chapter.id)) problems.push(`「${chapter.title}」重复抽取`);
+    seen.add(chapter.id);
+  }
+  const missing = templateChapters.filter((item) => !seen.has(item.id)).map((item) => item.title);
+  if (missing.length) problems.push(`以下目录尚未抽取：${missing.join('、')}`);
+  if (problems.length) {
+    throw new Error(`抽章与已确认目录不一致：${problems.join('；')}。每个已确认目录抽一章，id 填该目录的 id。`);
+  }
+  return [...chapters]
+    .sort((left, right) => order.get(left.id) - order.get(right.id))
+    .map((chapter) => ({ ...chapter, auto_fill: templateChapters[order.get(chapter.id)].auto_fill !== false }));
+}
+
 function normalizeTemplateFields(fields) {
   return (Array.isArray(fields) ? fields : []).map((item) => ({
     candidate_id: String(item?.candidate_id || '').trim(),
@@ -432,4 +477,5 @@ module.exports = {
   TEMPLATE_FIELD_CLASSIFICATION_SCHEMA,
   createPiOpenXmlTool,
   readTenderBlockOutline,
+  readTemplateLayout,
 };

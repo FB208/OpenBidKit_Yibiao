@@ -35,12 +35,16 @@ static class ApplyTemplateFieldsAction
             tempFieldsPath = $"{fieldsOutputPath}.{Guid.NewGuid():N}.tmp";
             WordWorkspace.CopyToWritable(inputPath, tempDocumentPath);
 
+            var chapterRanges = TemplateChapterRanges.Read(inputPath);
             TemplateFieldDefinitionFile definitions;
             using (var document = WordprocessingDocument.Open(tempDocumentPath, true))
             {
-                var candidates = TemplateFieldScanner.Scan(document);
+                var candidates = TemplateFieldScanner.Scan(document, chapterRanges);
                 var normalized = NormalizeSelections(request, candidates);
                 var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
+                var body = mainPart.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
+                // 写入会插入附件段落、把跨段勾选项包进块级控件，先记下各章首块，写完再换算块号。
+                var chapterStarts = chapterRanges.Select(item => body.ChildElements[item.StartBlock]).ToList();
                 var nextWordId = mainPart.Document.Descendants<Wp.SdtId>()
                     .Select(item => item.Val?.Value ?? 0)
                     .DefaultIfEmpty(0)
@@ -60,7 +64,12 @@ static class ApplyTemplateFieldsAction
                             Name = part.Name,
                             Subject = item.Selection.Subject,
                             Section = ResolveSection(item.Candidate),
-                            FillBy = item.Selection.FillBy,
+                            FillBy = part.FillBy,
+                            // 人工字段的位置标签或 Agent 定的字段名符合扫描器的签字、签章、手印、盖章规则时，记为签章位置。
+                            Signature = part.FillBy == "manual"
+                                && (item.Candidate.SuggestedFillBy == "manual" || TemplateFieldScanner.SuggestFillBy(part.Name, "") == "manual")
+                                ? true
+                                : null,
                             Instruction = part.Instruction,
                             Kind = kind,
                             Options = kind == TemplateFieldKinds.ChoiceField ? item.Candidate.Options : null,
@@ -83,6 +92,7 @@ static class ApplyTemplateFieldsAction
                         : TemplateFieldSdtWriter.ApplyAttachmentParts(application.Candidate, application.Fields));
                 }
 
+                definitions.Chapters = ResolveFinalChapters(body, chapterRanges, chapterStarts);
                 mainPart.Document.Save();
                 // 原件自带的不规范写法由 Word/WPS 兼容，只校验本动作写入且仍留在文档中的元素。
                 var validator = new OpenXmlValidator(FileFormatVersions.Microsoft365);
@@ -125,6 +135,31 @@ static class ApplyTemplateFieldsAction
         }
     }
 
+    /// <summary>按各章首块写入后所在的顶层块换算最终块号；章节首尾相接，最后一章止于正文末尾（不含分节属性）。</summary>
+    static List<TemplateChapterRange> ResolveFinalChapters(
+        Wp.Body body,
+        IReadOnlyList<TemplateChapterRange> chapterRanges,
+        IReadOnlyList<OpenXmlElement> chapterStarts)
+    {
+        var blocks = body.ChildElements.ToList();
+        var blockCount = blocks.Count(item => item is not Wp.SectionProperties);
+        var starts = chapterStarts.Select((element, index) =>
+        {
+            var top = element.Parent is Wp.Body ? element : element.Ancestors().FirstOrDefault(item => item.Parent is Wp.Body);
+            var position = top is null ? -1 : blocks.IndexOf(top);
+            if (position < 0) throw new InvalidOperationException($"写入字段后找不到章节起点：{chapterRanges[index].Title}");
+            return position;
+        }).ToList();
+        return chapterRanges.Select((item, index) => new TemplateChapterRange
+        {
+            Id = item.Id,
+            Title = item.Title,
+            AutoFill = item.AutoFill,
+            StartBlock = starts[index],
+            EndBlock = index + 1 < starts.Count ? starts[index + 1] : blockCount,
+        }).ToList();
+    }
+
     /// <summary>重新打开保存后的模版，确认每个字段恰好对应一个内容控件且控件 id 唯一。</summary>
     static void VerifyFieldControls(string documentPath, TemplateFieldDefinitionFile definitions)
     {
@@ -160,11 +195,13 @@ static class ApplyTemplateFieldsAction
         }
     }
 
-    /// <summary>规范化后的分类：Fields 为最终字段的名称与说明，拆分的附件按部分顺序展开。</summary>
+    /// <summary>规范化后的分类：Fields 为最终字段的名称、说明与填写方式，拆分的附件按部分顺序展开。</summary>
     sealed record NormalizedSelection(
         TemplateFieldCandidate Candidate,
         TemplateFieldSelection Selection,
-        IReadOnlyList<TemplateFieldPart> Fields);
+        IReadOnlyList<NormalizedField> Fields);
+
+    sealed record NormalizedField(string Name, string? Instruction, string FillBy);
 
     static List<NormalizedSelection> NormalizeSelections(
         ApplyTemplateFieldsRequest request,
@@ -247,18 +284,33 @@ static class ApplyTemplateFieldsAction
             throw new InvalidOperationException($"附件拆分无效：{string.Join("；", partErrors)}");
         }
 
-        var normalized = selections.Select(item => new NormalizedSelection(
-            candidateMap[item.CandidateId],
-            item,
-            item.Parts is { } parts
-                ? parts.Select(part => new TemplateFieldPart { Name = part.Name, Instruction = part.Instruction ?? item.Instruction }).ToList()
-                : [new TemplateFieldPart { Name = item.Name, Instruction = item.Instruction }])).ToList();
+        // 非自动填写章节的字段改为人工；同名字段在自动填写章节中由程序填写时，这些位置沿用同一个值。拆分的附件按各部分名称分别判断。
+        IEnumerable<string> SelectionNames(TemplateFieldSelection item) => item.Parts?.Select(part => part.Name) ?? [item.Name];
+        var autoFilledNames = selections
+            .Where(item => candidateMap[item.CandidateId].Chapter?.AutoFill != false && item.FillBy == "ai")
+            .SelectMany(SelectionNames)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var normalized = selections.Select(item =>
+        {
+            var manualChapter = candidateMap[item.CandidateId].Chapter?.AutoFill == false;
+            NormalizedField ToField(string name, string? instruction) => new(
+                name,
+                instruction,
+                manualChapter ? (autoFilledNames.Contains(name) ? "ai" : "manual") : item.FillBy);
+            return new NormalizedSelection(
+                candidateMap[item.CandidateId],
+                item,
+                item.Parts is { } parts
+                    ? parts.Select(part => ToField(part.Name, part.Instruction ?? item.Instruction)).ToList()
+                    : [ToField(item.Name, item.Instruction)]);
+        }).ToList();
         var expanded = normalized
             .SelectMany(item => item.Fields.Select(field => (
                 field.Name,
                 field.Instruction,
                 item.Selection.Subject,
-                item.Selection.FillBy,
+                field.FillBy,
                 item.Selection.CandidateId,
                 Kind: TemplateFieldKinds.ToFieldKind(item.Candidate.Kind))))
             .ToList();
@@ -282,12 +334,13 @@ static class ApplyTemplateFieldsAction
         return normalized;
     }
 
-    /// <summary>章节名与表格标题以“ / ”连接，均为空时不写。</summary>
+    /// <summary>章节名与表格标题以“ / ”连接，两者相同时只写一次，均为空时不写。</summary>
     static string? ResolveSection(TemplateFieldCandidate candidate)
     {
         var parts = new[] { candidate.ChapterName, candidate.TableTitle }
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Select(item => item!.Trim())
+            .Distinct(StringComparer.Ordinal)
             .ToList();
         return parts.Count > 0 ? string.Join(" / ", parts) : null;
     }

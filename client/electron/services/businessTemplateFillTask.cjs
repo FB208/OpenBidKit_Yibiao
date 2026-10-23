@@ -3,6 +3,7 @@ const Ajv = require('ajv');
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
 const { CREDENTIAL_IMAGE_FIELD_LABELS } = require('./credentialLibraryService.cjs');
+const { readTemplateLayout } = require('./pi/piOpenXmlTool.cjs');
 
 const BUSINESS_TEMPLATE_FILL_STAGE = 'business-template-fill';
 const FIELDS_INPUT_FILE = '商务模版待填字段.json';
@@ -582,24 +583,36 @@ function imageOwnerLabels(snapshot = {}) {
   return labels;
 }
 
-// 确认弹窗数据：全部填写项及当前值，以及资信库图片目录。
-function loadBusinessFillReview({ workspaceStore, credentialLibraryService }) {
-  const fields = workspaceStore.readBidTemplateFields().fields || [];
+// 确认弹窗数据：全部填写项及当前值、资信库图片目录，以及按章节分组的模版版式。
+// 版式读取空白底稿（正文填写开始前已创建），其块结构与已填写的模版一致。
+async function loadBusinessFillReview({ workspaceStore, credentialLibraryService, openXmlHelperService }) {
+  const template = workspaceStore.readBidTemplateFields();
+  const fields = template.fields || [];
   const fieldsById = new Map(fields.map(field => [field.id, field]));
   const snapshot = credentialLibraryService.load();
   const owners = imageOwnerLabels(snapshot);
+  const layout = await readTemplateLayout({ openXmlHelperService, input: workspaceStore.getBidTemplateBlankRelativePath() });
   return {
     units: groupFieldUnits(fields).map(unit => ({
       key: unit.key,
       name: unit.name,
       kind: unit.kind,
       fill_by: unit.fill_by,
+      field_ids: unit.field_ids,
+      ...(unit.field_ids.every(id => fieldsById.get(id)?.signature) ? { signature: true } : {}),
       ...(unit.subject ? { subject: unit.subject } : {}),
       ...(unit.section ? { section: unit.section } : {}),
       ...(unit.instruction ? { instruction: unit.instruction } : {}),
       ...(unit.options ? { options: unit.options } : {}),
       ...(unit.table_id ? { table_id: unit.table_id, row: unit.row } : {}),
       ...readUnitState(unit, fieldsById),
+    })),
+    base_size: layout.base_size,
+    chapters: (template.chapters || []).map(chapter => ({
+      ...(chapter.id ? { id: chapter.id } : {}),
+      title: chapter.title,
+      auto_fill: chapter.auto_fill !== false,
+      blocks: layout.blocks.filter(block => block.index >= chapter.start_block && block.index < chapter.end_block),
     })),
     images: (snapshot.images || []).map(image => ({
       image_id: image.imageId,

@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using DocumentFormat.OpenXml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
@@ -69,6 +71,10 @@ sealed class TemplateFieldCandidate
     [JsonIgnore]
     public string? ChapterName { get; set; }
 
+    /// <summary>候选所在章节；写入字段时据此判断是否自动填写。</summary>
+    [JsonIgnore]
+    public TemplateChapterRange? Chapter { get; set; }
+
     [JsonIgnore]
     public string? TableTitle { get; set; }
 
@@ -110,10 +116,34 @@ sealed class TemplateChapterRange
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Id { get; set; }
     public string Title { get; set; } = "";
+    /// <summary>章节字段是否自动填写；目录处理方式不是“模板填写”时为 false。</summary>
+    [JsonPropertyName("auto_fill")]
+    public bool AutoFill { get; set; } = true;
     [JsonPropertyName("start_block")]
     public int StartBlock { get; set; }
     [JsonPropertyName("end_block")]
     public int EndBlock { get; set; }
+}
+
+/// <summary>读取抽章时与源模版一同写出的章节范围边车文件。</summary>
+static class TemplateChapterRanges
+{
+    public static List<TemplateChapterRange> Read(string inputPath)
+    {
+        var chapterPath = Path.ChangeExtension(inputPath, ".chapters.json");
+        if (!File.Exists(chapterPath))
+        {
+            throw new InvalidOperationException("投标模版章节范围文件不存在，请重新抽取章节");
+        }
+        var payload = JsonSerializer.Deserialize<TemplateChapterRangeFile>(
+            File.ReadAllText(chapterPath, Encoding.UTF8),
+            JsonOptions.File);
+        if (payload is null || payload.Version != 1 || payload.Chapters is not { Count: > 0 })
+        {
+            throw new InvalidOperationException("投标模版章节范围文件无效");
+        }
+        return payload.Chapters;
+    }
 }
 
 sealed class TemplateFieldSelection
@@ -141,6 +171,8 @@ sealed class TemplateFieldPart
 sealed class TemplateFieldDefinitionFile
 {
     public int Version { get; set; } = 2;
+    /// <summary>最终模版的章节范围，块号为正文顶层块序号，供确认弹窗按章节展示版式。</summary>
+    public List<TemplateChapterRange> Chapters { get; set; } = [];
     public List<TemplateFieldDefinition> Fields { get; set; } = [];
 }
 
@@ -155,6 +187,9 @@ sealed class TemplateFieldDefinition
     public string? Section { get; set; }
     [JsonPropertyName("fill_by")]
     public string FillBy { get; set; } = "";
+    /// <summary>签字、签章、手印、盖章位置，只能线下处理。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Signature { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Instruction { get; set; }
     public string Kind { get; set; } = TemplateFieldKinds.TextField;
