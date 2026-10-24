@@ -3674,6 +3674,32 @@
   }
 }
 
+.document-format-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--yb-primary-deep);
+  background: rgba(33, 116, 253, 0.08);
+  border: 1px solid rgba(33, 116, 253, 0.18);
+  border-radius: var(--yb-radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.document-format-notice svg {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.document-format-notice strong {
+  font-weight: 800;
+}
+
 .analysis-section-hint {
   display: flex;
   flex-wrap: wrap;

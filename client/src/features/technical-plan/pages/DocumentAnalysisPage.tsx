@@ -188,7 +188,6 @@ function DocumentAnalysisPage({
   const activeMarkdown = activeTenderSource
     ? tenderSourceMarkdowns[activeTenderSource.id] || ''
     : tenderMarkdown;
-  const readerEmptyText = '当前步骤只负责把招标文件解析成 Markdown，后续步骤会基于这里的内容完成设置和 AI 标书理解。';
   const documentTabs = [
     ...(tenderFiles.length ? tenderFiles.map((file, index) => ({ id: `tender:${file.id}`, label: `招标文件${index + 1}` })) : [{ id: 'tender', label: '招标文件' }]),
   ];
@@ -229,6 +228,14 @@ function DocumentAnalysisPage({
             </UploadEmpty>
           )}
         </UploadRow>
+        <p className="document-format-notice" role="note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5" />
+            <path d="M12 8h.01" strokeWidth="2.4" />
+          </svg>
+          <span>仅<strong>.docx、.doc、.wps</strong>三种格式支持商务标生成，其他格式请您先手动转换</span>
+        </p>
       </UploadBoard>
 
       {selectedSectionTitle && (
@@ -285,7 +292,6 @@ function DocumentAnalysisPage({
         ) : (
           <div className="markdown-empty-state">
             <strong>尚未导入招标文件</strong>
-            <p>{readerEmptyText}</p>
           </div>
         )}
       </section>
