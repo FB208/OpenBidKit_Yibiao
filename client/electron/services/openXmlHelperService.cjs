@@ -612,6 +612,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
             margin_bottom_cm: chrome.layout.marginBottomCm,
             text_layout: chrome.textLayout,
           },
+          // 整本导出并入的已填商务模版（工作区相对路径）及各章节块号。
+          ...(options.businessTemplate ? { business_template: options.businessTemplate } : {}),
         },
         // 整本转换使用正式任务队列，避免占用样张预览队列及其两分钟时限。
         timeoutMs: options.wholeDocument ? 30 * 60 * 1000 : TEMPLATE_PREVIEW_TIMEOUT_MS,
@@ -621,6 +623,9 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, TEMPLATE_PREVIEW_FILE))),
         roles: Array.isArray(result.paragraphRoles) ? result.paragraphRoles : [],
         imageWarnings: result.imageWarnings,
+        businessFieldIds: result.businessFieldIds || [],
+        businessWarnings: result.businessWarnings || [],
+        pendingMarkCount: result.pendingMarkCount || 0,
       };
     } finally {
       // 目录被占用时 rmSync 会抛错，计数放在内层 finally，保证任务结束后一定归还。

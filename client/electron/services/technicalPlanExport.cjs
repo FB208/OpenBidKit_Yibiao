@@ -2,7 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cheerio = require('cheerio');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
-const { collectOutlineExportEntries, getPendingContentModeMessage, renderMarkdownForRestrictedHtml } = require('./exportService.cjs');
+const { countPendingUnits, renderBusinessTemplateForExport } = require('./businessTemplateFillTask.cjs');
+const { collectOutlineExportEntries, formatPendingMark, getPendingContentModeMessage, renderMarkdownForRestrictedHtml } = require('./exportService.cjs');
 const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 
 /** 转义程序插入的项目名、目录标题和占位提示。 */
@@ -40,8 +41,11 @@ function aiSectionFile(item) {
   return `正文/${encodeURIComponent(item.id)}.html`;
 }
 
-/** 整本导出读取当前产物，检查问题交给现有正文任务修复。 */
-function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, startContentGeneration }) {
+/**
+ * 整本导出读取当前产物，检查问题交给现有正文任务修复。
+ * 非 AI 叶子没有手写内容时，按节点 ID 并入商务模版中对应的章节，章节按模版原样导出。
+ */
+function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService, startContentGeneration }) {
   return {
     /**
      * 保存对话框与转换使用同一次点击时的目录和模板。
@@ -89,6 +93,21 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
      */
     async build(snapshot, { onProgress, stats, developerLogger, layoutCheck = false }) {
       const entries = collectOutlineExportEntries(snapshot.outline, snapshot.export_template_scope === 'ai-only');
+      const templateChapters = new Map((technicalPlanStore.hasBidTemplate() ? technicalPlanStore.readBidTemplateFields().chapters || [] : [])
+        .filter(chapter => chapter.id)
+        .map(chapter => [chapter.id, chapter]));
+      const businessIds = new Set(entries
+        .filter(({ item }) => !item.children?.length && item.content_mode !== 'ai-generate'
+          && !String(item.content || '').trim() && templateChapters.has(item.id))
+        .map(({ item }) => item.id));
+      // 页面归属：模版章节单独成组并使用模版页面；父目录跟随首个子目录，避免孤立标题页。
+      const pageKinds = new Array(entries.length);
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const { item, level, sectionTemplate } = entries[index];
+        pageKinds[index] = item.children?.length && entries[index + 1]?.level > level
+          ? pageKinds[index + 1]
+          : businessIds.has(item.id) ? 'business' : String(sectionTemplate);
+      }
       const assets = new Map();
       const ranges = [];
       const layoutSources = [];
@@ -108,17 +127,22 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         return `<p>YIBIAOLAYOUT:${name}</p>\n${html}`;
       };
       // 合并相邻同样式范围，完整章节只排版一次；混合父标题跟随首个子节点的页面。
-      const append = (html, useTemplate, sectionTemplate) => {
+      const append = (html, useTemplate, pageKind) => {
         const previous = ranges.at(-1);
-        if (previous?.useTemplate === useTemplate && previous.sectionTemplate === sectionTemplate) previous.html += `\n${html}`;
-        else ranges.push({ html, useTemplate, sectionTemplate });
+        if (previous && !previous.business && previous.useTemplate === useTemplate && previous.pageKind === pageKind) previous.html += `\n${html}`;
+        else ranges.push({ html, useTemplate, pageKind });
       };
-      append(`<p style="text-align:center"><em>内容由 AI 生成</em></p><p style="text-align:center"><strong>${escapeHtml(snapshot.project_name || '投标技术文件')}</strong></p>`,
-        snapshot.export_template_scope !== 'ai-only', entries[0].sectionTemplate);
+      const reportEntry = (index, label) => onProgress?.({ phase: 'running', progress: 10 + Math.round((index + 1) / entries.length * 40), message: `正在读取正文 ${index + 1}/${entries.length}：${label}`, warnings: [], ...stats });
       for (const [index, entry] of entries.entries()) {
-        const { item, level, useTemplate, sectionTemplate } = entry;
+        const { item, level, useTemplate } = entry;
         if (level > 6) throw new Error('当前转换器最多支持六级章节标题');
         const label = `${item.number} ${item.title}`;
+        if (businessIds.has(item.id)) {
+          // 模版章节使用自带的标题段，不另写程序标题。
+          ranges.push({ business: { id: item.id, title: item.title, level }, useTemplate, pageKind: 'business' });
+          reportEntry(index, label);
+          continue;
+        }
         let body = '';
         try {
           if (!item.children?.length) {
@@ -129,7 +153,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
                 if (layoutCheck) throw new Error(section.detail);
                 skippedCount += 1;
                 warnings.push(`小节 ${label} 未导出正文：${section.reason}`);
-                body = '<p><em>[本小节未完成，未导出正文]</em></p>';
+                body = `<p><em>${escapeHtml(formatPendingMark('本节正文（未生成完成）'))}</em></p>`;
               } else if (layoutCheck) {
                 const problems = findHtmlStructureIssues(section.body);
                 if (problems.length) throw new Error(`正文结构不完整：${problems.slice(0, 3).join('；')}`);
@@ -154,7 +178,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
               for (const reason of failures) recordImageFailure(label, reason);
             } else {
               const message = getPendingContentModeMessage(item);
-              body = message ? `<p><em>[${escapeHtml(message)}]</em></p>` : '';
+              body = message ? `<p><em>${escapeHtml(formatPendingMark(message))}</em></p>` : '';
             }
           }
         } catch (error) {
@@ -162,15 +186,28 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         }
         // 显式记录目录编号，正文内部标题不能改变后续目录编号。
         const heading = `<h${level} data-yb-outline-number="${item.number}">${escapeHtml(item.title)}</h${level}>`;
-        append(`${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}`, useTemplate, sectionTemplate);
-        onProgress?.({ phase: 'running', progress: 10 + Math.round((index + 1) / entries.length * 40), message: `正在读取正文 ${index + 1}/${entries.length}：${label}`, warnings: [], ...stats });
+        append(`${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}`, useTemplate, pageKinds[index]);
+        reportEntry(index, label);
       }
-      const html = ranges.map(range => `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.sectionTemplate}">${range.html}</section>`).join('\n');
-      developerLogger?.write('export.technical_plan.html.assembled', { section_count: entries.length, skipped_section_count: warnings.length, html_chars: html.length, image_count: cheerio.load(html)('img').length });
+      const html = ranges.map(range => (range.business
+        ? `<section data-yb-business-chapter="${escapeHtml(range.business.id)}" data-yb-business-level="${range.business.level}" data-yb-business-title="${escapeHtml(range.business.title)}" data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="business"></section>`
+        : `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.pageKind}">${range.html}</section>`)).join('\n');
+      developerLogger?.write('export.technical_plan.html.assembled', { section_count: entries.length, skipped_section_count: warnings.length, business_chapter_count: businessIds.size, html_chars: html.length, image_count: cheerio.load(html)('img').length });
+      let business = null;
+      if (businessIds.size) {
+        onProgress?.({ phase: 'running', progress: 52, message: '正在按已确认的字段值生成商务模版。', warnings: [], ...stats });
+        business = await renderBusinessTemplateForExport({ workspaceStore: technicalPlanStore, credentialLibraryService, openXmlHelperService });
+      }
       onProgress?.({ phase: 'running', progress: 55, message: '正在按当前模板转换整本 Word。', warnings: [], ...stats });
-      const result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
-        assetRoot: snapshot.workspaceDir, copyAssets: true, assets, wholeDocument: true,
-      });
+      let result;
+      try {
+        result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
+          assetRoot: snapshot.workspaceDir, copyAssets: true, assets, wholeDocument: true,
+          ...(business ? { businessTemplate: { input: business.input, chapters: [...businessIds].map(id => templateChapters.get(id)) } } : {}),
+        });
+      } finally {
+        business?.cleanup();
+      }
       for (const { assetRef, reason } of result.imageWarnings) {
         for (const label of imageSections.get(assetRef)) recordImageFailure(label, reason);
       }
@@ -180,11 +217,24 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         warnings.push(`小节 ${label} 有 ${reasons.length} 张图片无法导出，已在原位置用文字标出：${[...new Set(reasons)].join('；')}`);
       }
       if (failedImageCount) developerLogger?.write('export.technical_plan.images.skipped', { image_count: failedImageCount, sections: Object.fromEntries(imageFailures) });
+      // 商务模版未填写项与已删除的资信库图片都在原位置保留占位，签章位置已留白，不计入未填写。
+      const businessNotes = business ? [
+        ...[countPendingUnits(business.fields, result.businessFieldIds)].filter(Boolean)
+          .map(count => `商务模版有 ${count} 项未填写，已在原位置保留占位，请打开文档补充`),
+        ...(business.missingImages.size ? [`商务模版有 ${business.missingImages.size} 项所选资信库图片已删除，已在原位置保留占位`] : []),
+        ...result.businessWarnings,
+      ] : [];
+      warnings.push(...businessNotes);
+      // 正文、商务占位和程序提示中需要用户补充的位置统一为“【待填写】”，提示总数和搜索关键词。
+      const pendingNote = result.pendingMarkCount ? `文档中共有 ${result.pendingMarkCount} 处“待填写”，可在 Word 中搜索后逐项处理` : '';
+      if (pendingNote) warnings.push(pendingNote);
       return {
         buffer: Buffer.from(result.bytes), warnings, stats,
         ...(warnings.length ? { message: `Word 已导出，${[
           skippedCount ? `其中 ${skippedCount} 个 AI 小节未完成，仅保留标题，请完成后重新导出` : '',
           failedImageCount ? `${failedImageCount} 张图片无法导出，已在原位置用文字标出，请打开文档核对` : '',
+          ...businessNotes,
+          pendingNote,
         ].filter(Boolean).join('；')}。` } : {}),
         ...(layoutCheck ? { layoutSources } : {}),
       };

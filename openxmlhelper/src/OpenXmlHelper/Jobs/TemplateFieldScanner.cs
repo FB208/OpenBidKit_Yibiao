@@ -15,13 +15,13 @@ static class TemplateFieldScanner
     const int CellContextTextLimit = 40;
 
     static readonly Regex PlaceholderPattern = new(
-        @"_{2,}|＿{2,}|【\s*(?:待填写|人工处理)\s*[：:]?[^】]*】|\(\s*\)|（\s*）",
+        @"_{2,}|＿{2,}|【\s*待填写\s*[：:]?[^】]*】|\(\s*\)|（\s*）",
         PatternOptions);
     static readonly Regex TrailingLabelPattern = new(
         @"(?<label>[\p{L}\p{N}（）()《》/·\-]{2,30})[：:]\s*$",
         PatternOptions);
     static readonly Regex ExplicitNamePattern = new(
-        @"【\s*(?:待填写|人工处理)\s*[：:]\s*(?<name>[^】]+)】",
+        @"【\s*待填写\s*[：:]\s*(?<name>[^】]+)】",
         PatternOptions);
     static readonly Regex SignaturePattern = new(@"签字|签名|签章|手印", PatternOptions);
     static readonly Regex StampPattern = new(@"盖章|公章|印章", PatternOptions);

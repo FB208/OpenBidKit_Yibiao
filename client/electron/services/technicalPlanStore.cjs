@@ -1034,7 +1034,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         `${path.basename(bidTemplateBlankPath)}.`,
       ];
       for (const name of fs.readdirSync(templateDir)) {
-        if (tempPrefixes.some((prefix) => name.startsWith(prefix) && name.includes('.tmp'))) {
+        // 整本导出临时生成的商务模版正常会在导出后删除，这里清理异常退出留下的文件。
+        if (tempPrefixes.some((prefix) => name.startsWith(prefix) && name.includes('.tmp')) || name.startsWith('bid-template-export-')) {
           templateFiles.push(path.join(templateDir, name));
         }
       }

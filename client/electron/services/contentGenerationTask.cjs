@@ -2628,7 +2628,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         let layoutSnapshot;
         // 格式自检及修复为 Step02 可选项；关闭时不传检测入口，审计或去表格后直接转换 Word。
         const layoutExporter = !targetItemId && storedPlan.contentGenerationOptions?.layoutCheck === true
-          ? createTechnicalPlanExport({ technicalPlanStore: workspaceStore, templateStore, agentService, openXmlHelperService }) : null;
+          ? createTechnicalPlanExport({ technicalPlanStore: workspaceStore, templateStore, agentService, openXmlHelperService, credentialLibraryService }) : null;
         result = await runContentGenerationAgent({
           agentService, aiService, resume: continuingBody || continuingLayout, planning,
           generationOptions: storedPlan.contentGenerationOptions,

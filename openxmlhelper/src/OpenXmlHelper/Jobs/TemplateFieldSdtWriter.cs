@@ -114,7 +114,7 @@ static class TemplateFieldSdtWriter
 
         var blank = value.Blank == true;
         // 留空只清除待填写占位；勾选项等原有内容保持原样。
-        if (blank && !PlaceholderTexts(name).Any(text => control.InnerText.Contains(text, StringComparison.Ordinal))) return written;
+        if (blank && !control.InnerText.Contains(PlaceholderText(name), StringComparison.Ordinal)) return written;
         var lines = blank ? [""] : (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         switch (control)
         {
@@ -267,8 +267,8 @@ static class TemplateFieldSdtWriter
     const long EmusPerPixel = 9_525L;
     const long DefaultCellMarginTwips = 108L;
 
-    /// <summary>字段占位文字：AI 填写为“待填写”，人工处理为“人工处理”。</summary>
-    static string[] PlaceholderTexts(string name) => [$"【待填写：{name}】", $"【人工处理：{name}】"];
+    /// <summary>字段占位文字：AI 填写与人工处理相同，与正文和导出提示统一为“【待填写】”，用户搜索一个关键词即可找到。</summary>
+    static string PlaceholderText(string name) => $"【待填写：{name}】";
 
     /// <summary>文本框兼容显示（mc:Fallback）只有纯文字占位，按同名占位的出现顺序同步写入相同文字。</summary>
     static void FillFallback(Wp.SdtElement control, string name, IReadOnlyList<string> lines)
@@ -280,8 +280,8 @@ static class TemplateFieldSdtWriter
             .Where(item => item.GetFirstChild<Wp.SdtProperties>()?.GetFirstChild<Wp.SdtAlias>()?.Val?.Value == name)
             .ToList()
             .IndexOf(control);
-        var placeholders = PlaceholderTexts(name);
-        var runs = fallback.Descendants<Wp.Run>().Where(item => placeholders.Contains(ReadRunText(item))).ToList();
+        var placeholder = PlaceholderText(name);
+        var runs = fallback.Descendants<Wp.Run>().Where(item => ReadRunText(item) == placeholder).ToList();
         if (index < 0 || index >= runs.Count) return;
         runs[index].InsertBeforeSelf(CreateValueRun(lines, runs[index]));
         runs[index].Remove();
@@ -636,10 +636,9 @@ static class TemplateFieldSdtWriter
                 Fill = PlaceholderFill,
             },
             throwOnError: true);
-        var prefix = field.FillBy == "manual" ? "人工处理" : "待填写";
         return new Wp.Run(
             properties,
-            new Wp.Text($"【{prefix}：{field.Name}】") { Space = SpaceProcessingModeValues.Preserve });
+            new Wp.Text(PlaceholderText(field.Name)) { Space = SpaceProcessingModeValues.Preserve });
     }
 
     static Wp.Run CreateTextRun(string text, Wp.Run sourceRun)

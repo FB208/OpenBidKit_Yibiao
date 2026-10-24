@@ -58,7 +58,26 @@ static class RestrictedHtmlDocumentRenderer
     static IDocument? _parsedHtml;
 
     /// <summary>一次样张渲染的产物：块数、按文档顺序排列的段落角色，以及改为文字提示的配图。</summary>
-    public readonly record struct RenderResult(int BlockCount, IReadOnlyList<string> ParagraphRoles, IReadOnlyList<ImageWarning> ImageWarnings);
+    public readonly record struct RenderResult(int BlockCount, IReadOnlyList<string> ParagraphRoles, IReadOnlyList<ImageWarning> ImageWarnings)
+    {
+        /// <summary>整本导出并入的商务模版章节中出现的字段 ID。</summary>
+        public IReadOnlyList<string> BusinessFieldIds { get; init; } = [];
+
+        /// <summary>并入商务模版时去掉的、无法迁移的内容说明。</summary>
+        public IReadOnlyList<string> BusinessWarnings { get; init; } = [];
+
+        /// <summary>整本导出正文中“【待填写”标记的处数。</summary>
+        public int PendingMarkCount { get; init; }
+    }
+
+    /// <summary>整本导出中商务模版章节所在页面组的取值；其余为 true / false 表示是否套用模板页面。</summary>
+    const string BusinessPageTemplate = "business";
+
+    // 正文、商务占位和程序提示统一使用；不带说明的“【待填写】”同样计数。
+    const string PendingMarkPrefix = "【待填写";
+
+    /// <summary>导出 Word 中程序写入的待补充提示，与正文和商务占位统一为【待填写：说明】，用户搜索一个关键词即可逐项处理。</summary>
+    public static string PendingMark(string note) => $"{PendingMarkPrefix}：{note}】";
 
     /// <summary>新建骨架、直接写入 HTML 正文，再统一应用模板格式。</summary>
     public static RenderResult Render(
@@ -68,11 +87,12 @@ static class RestrictedHtmlDocumentRenderer
         JsonElement exportFormat,
         ChromeAssets? chrome = null,
         bool wholeDocument = false,
-        IReadOnlyDictionary<string, string>? assetTypes = null)
+        IReadOnlyDictionary<string, string>? assetTypes = null,
+        BusinessTemplateSource? businessTemplate = null)
     {
         chrome ??= ChromeAssets.Empty;
         var assets = new FigureAssets(assetTypes);
-        if (wholeDocument) return RenderWholeDocument(assetRoot, outputPath, html, exportFormat, chrome, assets);
+        if (wholeDocument) return RenderWholeDocument(assetRoot, outputPath, html, exportFormat, chrome, assets, businessTemplate);
         var format = new FormatReader(exportFormat);
         var prepared = PrepareHtml(html, format);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -94,8 +114,11 @@ static class RestrictedHtmlDocumentRenderer
         return new RenderResult(blockCount, CollectParagraphRoles(document), assets.Warnings);
     }
 
-    /// <summary>在同一 Word 包内转换各样式范围，共享图片关系；仅在页面范围切换时分节。</summary>
-    static RenderResult RenderWholeDocument(string assetRoot, string outputPath, string html, JsonElement exportFormat, ChromeAssets chrome, FigureAssets assets)
+    /// <summary>
+    /// 在同一 Word 包内转换各样式范围，共享图片关系；仅在页面范围切换时分节。
+    /// 商务模版章节以空的 business 范围标记，按模版原样并入，单独成页面组并使用模版的页面设置。
+    /// </summary>
+    static RenderResult RenderWholeDocument(string assetRoot, string outputPath, string html, JsonElement exportFormat, ChromeAssets chrome, FigureAssets assets, BusinessTemplateSource? businessTemplate)
     {
         var format = new FormatReader(exportFormat);
         var basicPage = new Dictionary<string, JsonElement>();
@@ -111,23 +134,49 @@ static class RestrictedHtmlDocumentRenderer
         CreateSkeleton(document, basic, ChromeAssets.Empty);
         var mainPart = document.MainDocumentPart!;
         var body = mainPart.Document!.Body!;
+        using var merger = businessTemplate is null ? null : BusinessTemplateMerger.Open(businessTemplate, mainPart);
         var result = new List<OpenXmlElement>();
         var blockCount = 0;
         var index = 0;
         while (index < ranges.Count)
         {
-            var pageTemplate = ranges[index].GetAttribute("data-yb-export-page-template") == "true";
+            var pageKind = ranges[index].GetAttribute("data-yb-export-page-template") ?? "false";
+            var businessPage = pageKind == BusinessPageTemplate;
+            // 模版页面的页眉页脚沿用样式范围：范围为全文时组内范围都套用模板，否则留空。
+            var pageTemplate = businessPage
+                ? ranges.Skip(index).TakeWhile(item => item.GetAttribute("data-yb-export-page-template") == BusinessPageTemplate)
+                    .Any(item => item.GetAttribute("data-yb-export-template") == "true")
+                : pageKind == "true";
             var pageFormat = pageTemplate ? format : basic;
             // 首页不同为封面预留；整本导出尚未接入封面，暂不应用该设置。
             var section = CreateSectionProperties(mainPart, pageFormat, pageTemplate ? chrome : ChromeAssets.Empty, firstPageDifferent: false);
+            if (businessPage)
+            {
+                (merger ?? throw new InvalidOperationException("整本导出缺少商务模版")).ApplyPageSettings(section, pageTemplate && chrome.HasLayout);
+            }
             AddEmptyChromeReferences(mainPart, section);
             section.RemoveAllChildren<Wp.PageNumberType>();
             if (result.Count == 0 && format.Bool(format.Section("page"), "page_number_enabled", false))
                 section.AddChild(new Wp.PageNumberType { Start = Math.Max(1, format.Integer(format.Section("page"), "page_number_start", 1)) }, true);
             var pageElements = new List<OpenXmlElement>();
+            var afterChapter = false;
             do
             {
                 var range = ranges[index++];
+                var chapterId = range.GetAttribute("data-yb-business-chapter");
+                if (!string.IsNullOrEmpty(chapterId))
+                {
+                    if (!businessPage) throw new InvalidOperationException("商务模版章节必须位于 business 页面范围");
+                    // 组首或父目录标题之后的章节去掉开头分页；相邻章节之间保留模版自带的分页。
+                    pageElements.AddRange(merger!.ImportChapter(
+                        chapterId,
+                        range.GetAttribute("data-yb-business-title") ?? "",
+                        int.TryParse(range.GetAttribute("data-yb-business-level"), out var level) ? level : 1,
+                        stripLeadingPageBreak: !afterChapter));
+                    afterChapter = true;
+                    continue;
+                }
+                afterChapter = false;
                 var rangeFormat = range.GetAttribute("data-yb-export-template") == "true" ? format : basic;
                 body.RemoveAllChildren();
                 body.AppendChild(section.CloneNode(true));
@@ -142,12 +191,12 @@ static class RestrictedHtmlDocumentRenderer
                     pageElements.Add(element);
                 }
             }
-            while (index < ranges.Count && (ranges[index].GetAttribute("data-yb-export-page-template") == "true") == pageTemplate);
+            while (index < ranges.Count && (ranges[index].GetAttribute("data-yb-export-page-template") ?? "false") == pageKind);
 
             body.RemoveAllChildren();
             body.Append(pageElements);
             body.AppendChild(section);
-            if (!ChapterFrameEnabled(pageFormat)) ApplyTwoColumnHeadingSections(mainPart, body, pageFormat);
+            if (!businessPage && !ChapterFrameEnabled(pageFormat)) ApplyTwoColumnHeadingSections(mainPart, body, pageFormat);
             RemoveLeadingPageBreak(body);
             // 同一页面范围内的父标题和正文连续；仅在模板页面切换时另起一页。
             if (index < ranges.Count)
@@ -175,8 +224,25 @@ static class RestrictedHtmlDocumentRenderer
         mainPart.Document.Save();
         foreach (var part in mainPart.HeaderParts) part.Header.Save();
         foreach (var part in mainPart.FooterParts) part.Footer.Save();
-        return new RenderResult(blockCount, CollectParagraphRoles(document), assets.Warnings);
+        return new RenderResult(blockCount, CollectParagraphRoles(document), assets.Warnings)
+        {
+            BusinessFieldIds = merger?.FieldIds ?? [],
+            BusinessWarnings = merger?.Warnings ?? [],
+            PendingMarkCount = CountPendingMarks(body),
+        };
     }
+
+    /// <summary>按段落拼接文字统计标记，标记跨 run 也能计入；文本框兼容显示与主显示重复，不计入。</summary>
+    static int CountPendingMarks(Wp.Body body) => body.Descendants<Wp.Text>()
+        .Where(text => !text.Ancestors<AlternateContentFallback>().Any())
+        .GroupBy(text => text.Ancestors<Wp.Paragraph>().FirstOrDefault())
+        .Sum(group =>
+        {
+            var text = string.Concat(group.Select(item => item.Text));
+            var count = 0;
+            for (var index = text.IndexOf(PendingMarkPrefix, StringComparison.Ordinal); index >= 0; index = text.IndexOf(PendingMarkPrefix, index + PendingMarkPrefix.Length, StringComparison.Ordinal)) count++;
+            return count;
+        });
 
     /// <summary>自检副本的定位段落转为零宽书签，不进入可见正文或改变分页。</summary>
     static void ApplyLayoutBookmarks(Wp.Body body, int bookmarkId)
@@ -1524,14 +1590,14 @@ static class RestrictedHtmlDocumentRenderer
     /// <summary>
     /// 去掉正文首个段落的分页属性。
     /// 样张直接以一级标题开头，正式导出前面还有标题块；不去掉的话预览会凭空多出一页空白，
-    /// 让人以为模板设置有问题。
+    /// 让人以为模板设置有问题。整本导出的商务章节可能从模版样式继承段前分页，因此显式写入不分页。
     /// </summary>
     static void RemoveLeadingPageBreak(Wp.Body content)
     {
         var first = content.ChildElements.FirstOrDefault(item => item is not Wp.SectionProperties);
         if (first is Wp.Paragraph paragraph)
         {
-            paragraph.ParagraphProperties?.RemoveAllChildren<Wp.PageBreakBefore>();
+            (paragraph.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore { Val = false };
         }
     }
 

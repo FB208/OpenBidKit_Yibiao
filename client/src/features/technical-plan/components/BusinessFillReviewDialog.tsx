@@ -4,7 +4,7 @@ import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
 import type { BusinessFillReview, BusinessFillReviewImage, BusinessFillReviewUnit, BusinessFillReviewValue } from '../types';
-import BusinessFillDocument, { collectFieldIds, createDraft, describeUnitState, isFilled, isPending, type UnitDraft } from './BusinessFillDocument';
+import BusinessFillDocument, { collectFieldIds, createDraft, describeUnitState, findIdleListUnitKeys, isFilled, isPending, type UnitDraft } from './BusinessFillDocument';
 
 interface BusinessFillReviewDialogProps {
   open: boolean;
@@ -96,9 +96,11 @@ function BusinessFillReviewDialog({
   }, [chapters, unitsByFieldId]);
 
   const draftOf = (unit: BusinessFillReviewUnit) => drafts[unit.key] || createDraft(unit);
-  const pendingUnits = layoutIndex.orderedUnits.filter((unit) => isPending(unit, draftOf(unit)));
-  // 签章位置不计入；未使用的空行只有填写后才计入。
-  const countedUnits = units.filter((unit) => !unit.signature && (!unit.blank || isFilled(unit, draftOf(unit))));
+  // 清单表按当前输入逐行判断，未使用的空行导出时留空，不计入待处理和总数。
+  const idleKeys = findIdleListUnitKeys(units, (unit) => !unit.signature && isFilled(unit, draftOf(unit)));
+  const pendingUnits = layoutIndex.orderedUnits.filter((unit) => isPending(unit, draftOf(unit), idleKeys.has(unit.key)));
+  // 签章位置和未使用的空行不计入。
+  const countedUnits = units.filter((unit) => !unit.signature && !idleKeys.has(unit.key));
   const filledCount = countedUnits.filter((unit) => isFilled(unit, draftOf(unit))).length;
 
   // 首次修改字段值时通知 Main 停止本次自动确认。
@@ -187,7 +189,7 @@ function BusinessFillReviewDialog({
               {chapters.map((chapter, index) => {
                 const chapterUnits = layoutIndex.chapterUnits[index].filter((unit) => !unit.signature);
                 const filled = chapterUnits.filter((unit) => isFilled(unit, draftOf(unit))).length;
-                const pending = chapterUnits.filter((unit) => isPending(unit, draftOf(unit))).length;
+                const pending = chapterUnits.filter((unit) => isPending(unit, draftOf(unit), idleKeys.has(unit.key))).length;
                 return (
                   <button
                     key={chapter.id || index}
@@ -210,6 +212,7 @@ function BusinessFillReviewDialog({
                   unitsByFieldId={unitsByFieldId}
                   occurrences={layoutIndex.occurrences}
                   drafts={drafts}
+                  idleKeys={idleKeys}
                   imageGroups={imageGroups}
                   imagesById={imagesById}
                   saving={saving}
@@ -257,7 +260,7 @@ function BusinessFillReviewDialog({
                             <button type="button" onClick={() => locateUnit(unit)}>
                               <strong>{unit.name}</strong>
                               <span>{chapters[layoutIndex.firstChapter.get(unit.key) ?? 0]?.title}</span>
-                              <small>{describeUnitState(unit, draftOf(unit))}</small>
+                              <small>{describeUnitState(unit, draftOf(unit), idleKeys.has(unit.key))}</small>
                             </button>
                           </Popover.Close>
                         </li>

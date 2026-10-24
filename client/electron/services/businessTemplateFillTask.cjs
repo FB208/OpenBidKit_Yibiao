@@ -1,4 +1,6 @@
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const Ajv = require('ajv');
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
@@ -105,6 +107,40 @@ function groupFieldUnits(fields = []) {
     unit.field_ids.push(field.id);
   }
   return units;
+}
+
+// 逐行清单表按行决定是否保留占位：有任一格已填的行保留空格的占位；一行都没填时只保留第一行，其余行为未使用的空行。
+// 签章格子不算已填。确认弹窗（BusinessFillDocument.tsx 的 findIdleListUnitKeys）按同一规则实时计算，改动时同步。
+function findIdleListUnits(units, isUnitFilled) {
+  const tables = new Map();
+  for (const unit of units) {
+    if (!unit.table_id) continue;
+    if (!tables.has(unit.table_id)) tables.set(unit.table_id, []);
+    tables.get(unit.table_id).push(unit);
+  }
+  const idle = new Set();
+  for (const tableUnits of tables.values()) {
+    const used = new Set(tableUnits.filter(isUnitFilled).map(unit => unit.row));
+    const kept = used.size ? used : new Set([Math.min(...tableUnits.map(unit => unit.row))]);
+    for (const unit of tableUnits) {
+      if (!kept.has(unit.row)) idle.add(unit.key);
+    }
+  }
+  return idle;
+}
+
+// 导出时清单表按行处理：未使用的行写入留空，保留占位的空格去掉 AI 留下的留空标记，字段值本身不变。
+function applyListRowMarks(fields = []) {
+  const fieldsById = new Map(fields.map(field => [field.id, field]));
+  const units = groupFieldUnits(fields).filter(unit => unit.table_id);
+  const idle = findIdleListUnits(units, unit => !unit.field_ids.every(id => fieldsById.get(id)?.signature)
+    && hasFilledValue(readUnitState(unit, fieldsById)));
+  const idleByField = new Map(units.flatMap(unit => unit.field_ids.map(id => [id, idle.has(unit.key)])));
+  return fields.map((field) => {
+    if (!idleByField.has(field.id) || hasFilledValue(field)) return field;
+    const rest = Object.fromEntries(Object.entries(field).filter(([key]) => key !== 'blank'));
+    return idleByField.get(field.id) ? { ...rest, blank: true } : rest;
+  });
 }
 
 // 副 Agent 只填写 fill_by=ai 的填写项，附件从资信库图片中推荐。
@@ -739,7 +775,16 @@ async function runBusinessTemplateFill({
 }
 
 // 以空白底稿按字段值重新生成商务模版 Word，返回所选图片已从资信库删除的字段名称。
-async function renderBusinessTemplate({ workspaceStore, credentialLibraryService, openXmlHelperService, fields, signal }) {
+// blankSignatures 时签章位置写入留空，清除“待填写”占位，供整本导出线下盖章。
+async function renderBusinessTemplate({
+  workspaceStore,
+  credentialLibraryService,
+  openXmlHelperService,
+  fields,
+  signal,
+  output = workspaceStore.getBidTemplateRelativePath(),
+  blankSignatures = false,
+}) {
   const imagePaths = new Map((credentialLibraryService.load().images || []).map(image => [image.imageId, `credential-library/${image.relativePath}`]));
   const missingImages = new Set();
   const values = [];
@@ -752,12 +797,13 @@ async function renderBusinessTemplate({ workspaceStore, credentialLibraryService
     } else if (Object.hasOwn(field, 'selected')) values.push({ id: field.id, selected: field.selected });
     else if (Object.hasOwn(field, 'blank')) values.push({ id: field.id, blank: true });
     else if (Object.hasOwn(field, 'value')) values.push({ id: field.id, value: field.value });
+    else if (blankSignatures && field.signature) values.push({ id: field.id, blank: true });
   }
   await openXmlHelperService.runJob({
     action: 'fill-template-fields',
     request: {
       input: workspaceStore.getBidTemplateBlankRelativePath(),
-      output: workspaceStore.getBidTemplateRelativePath(),
+      output,
       values,
     },
     timeoutMs: FILL_RENDER_TIMEOUT_MS,
@@ -789,6 +835,39 @@ async function editBusinessFillValues({ workspaceStore, credentialLibraryService
   return { ...state, ...stats, ...excludeMissingImages(stats, missingImages), confirmed_by: 'user', updated_at: new Date().toISOString() };
 }
 
+// 整本导出用：以空白底稿和已确认的字段值临时生成一份商务模版，签章位置留白；用户在 Word 中对 bid-template.docx 的修改不带入。
+// 清单表按行保留占位，返回的字段带导出时的留空结果，未填写项统计与 Word 中的标记一致。
+async function renderBusinessTemplateForExport({ workspaceStore, credentialLibraryService, openXmlHelperService }) {
+  workspaceStore.ensureBidTemplateBlank();
+  const template = workspaceStore.readBidTemplateFields();
+  const fields = applyListRowMarks(template.fields || []);
+  const name = `bid-template-export-${crypto.randomUUID()}.docx`;
+  const output = path.posix.join(path.posix.dirname(workspaceStore.getBidTemplateRelativePath()), name);
+  const outputPath = path.join(path.dirname(workspaceStore.getBidTemplatePath()), name);
+  const cleanup = () => fs.rmSync(outputPath, { force: true });
+  try {
+    const missingImages = await renderBusinessTemplate({
+      workspaceStore, credentialLibraryService, openXmlHelperService, fields, output, blankSignatures: true,
+    });
+    return { input: output, chapters: template.chapters || [], fields, missingImages, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
+// 并入导出的章节中仍待处理的填写项数，口径与确认弹窗一致：未填写、不是未使用的空行，也不是签章位置。
+function countPendingUnits(fields = [], fieldIds = []) {
+  const exported = new Set(fieldIds);
+  const fieldsById = new Map(fields.map(field => [field.id, field]));
+  return groupFieldUnits(fields).filter((unit) => {
+    if (!unit.field_ids.some(id => exported.has(id))) return false;
+    if (unit.field_ids.every(id => fieldsById.get(id)?.signature)) return false;
+    const state = readUnitState(unit, fieldsById);
+    return !hasFilledValue(state) && !state.blank;
+  }).length;
+}
+
 module.exports = {
   BUSINESS_TEMPLATE_FILL_STAGE,
   FILL_OUTPUT_FILE,
@@ -800,6 +879,8 @@ module.exports = {
   summarizeFillStats,
   loadBusinessFillReview,
   editBusinessFillValues,
+  renderBusinessTemplateForExport,
+  countPendingUnits,
   buildCredentialLibraryInput,
   parseFillResult,
   validateBusinessTemplateFillResult,

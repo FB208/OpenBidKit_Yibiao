@@ -26,16 +26,37 @@ export function isFilled(unit: BusinessFillReviewUnit, draft: UnitDraft) {
   return Boolean(draft.value.trim());
 }
 
-/** 待处理：未填写、不是未使用的空行，也不是线下签章位置。 */
-export function isPending(unit: BusinessFillReviewUnit, draft: UnitDraft) {
-  return !isFilled(unit, draft) && !unit.blank && !unit.signature;
+/**
+ * 逐行清单表按行决定待处理：有任一格已填的行，空格待处理；一行都没填时只有第一行待处理，其余行为未使用的空行，导出时留空。
+ * 签章格子不算已填。与 Main 的 businessTemplateFillTask.cjs findIdleListUnits 同一规则，改动时同步。
+ */
+export function findIdleListUnitKeys(units: BusinessFillReviewUnit[], isUnitFilled: (unit: BusinessFillReviewUnit) => boolean) {
+  const tables = new Map<string, BusinessFillReviewUnit[]>();
+  for (const unit of units) {
+    if (!unit.table_id || unit.row === undefined) continue;
+    tables.set(unit.table_id, [...(tables.get(unit.table_id) || []), unit]);
+  }
+  const idle = new Set<string>();
+  for (const tableUnits of tables.values()) {
+    const used = new Set(tableUnits.filter(isUnitFilled).map((unit) => unit.row));
+    const kept = used.size ? used : new Set([Math.min(...tableUnits.map((unit) => unit.row as number))]);
+    for (const unit of tableUnits) {
+      if (!kept.has(unit.row)) idle.add(unit.key);
+    }
+  }
+  return idle;
+}
+
+/** 待处理：未填写、不是未使用的空行，也不是线下签章位置；与导出时带“待填写”标记的格子一致。 */
+export function isPending(unit: BusinessFillReviewUnit, draft: UnitDraft, idle: boolean) {
+  return !isFilled(unit, draft) && !idle && !unit.signature;
 }
 
 /** 填写项当前状态的说明，已填写时为空。 */
-export function describeUnitState(unit: BusinessFillReviewUnit, draft: UnitDraft) {
+export function describeUnitState(unit: BusinessFillReviewUnit, draft: UnitDraft, idle: boolean) {
   if (unit.signature) return '线下签字盖章';
   if (isFilled(unit, draft)) return '';
-  if (unit.blank) return '未使用的空行，输入内容即启用';
+  if (idle) return '未使用的空行，输入内容即启用';
   if (unit.unresolved_reason) return unit.unresolved_reason;
   return unit.fill_by === 'manual' ? '待人工填写' : '待填写';
 }
@@ -62,6 +83,8 @@ interface BusinessFillDocumentProps {
   unitsByFieldId: Map<string, BusinessFillReviewUnit>;
   occurrences: Map<string, number>;
   drafts: Record<string, UnitDraft>;
+  /** 逐行清单表中未使用、导出时留空的填写项。 */
+  idleKeys: Set<string>;
   imageGroups: Array<[string, BusinessFillReviewImage[]]>;
   imagesById: Map<string, BusinessFillReviewImage>;
   saving?: boolean;
@@ -88,6 +111,7 @@ function BusinessFillDocument({
   unitsByFieldId,
   occurrences,
   drafts,
+  idleKeys,
   imageGroups,
   imagesById,
   saving,
@@ -178,11 +202,12 @@ function BusinessFillDocument({
     if (!unit) return null;
     const draft = drafts[unit.key] || createDraft(unit);
     const filled = isFilled(unit, draft);
+    const idle = idleKeys.has(unit.key);
     const state = unit.signature ? 'is-signature'
       : filled ? 'is-filled'
-        : unit.blank ? 'is-blank'
+        : idle ? 'is-blank'
           : unit.fill_by === 'manual' ? 'is-manual' : 'is-unresolved';
-    const note = describeUnitState(unit, draft);
+    const note = describeUnitState(unit, draft, idle);
     const count = occurrences.get(unit.key) || 0;
     return (
       <Tooltip.Root key={key}>

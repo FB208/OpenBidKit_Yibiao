@@ -33,6 +33,18 @@ sealed class JobResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ImageWarning>? ImageWarnings { get; set; }
 
+    /// <summary>整本导出并入的商务模版章节中出现的字段 ID，去重；Main 据此统计未填写项。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? BusinessFieldIds { get; set; }
+
+    /// <summary>并入商务模版时去掉的、无法迁移的内容说明。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? BusinessWarnings { get; set; }
+
+    /// <summary>整本导出正文中“【待填写”标记的处数，Main 写入导出提示。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PendingMarkCount { get; set; }
+
     public static JobResult Success(string action, string? output = null, int? blockCount = null) => new()
     {
         Ok = true,

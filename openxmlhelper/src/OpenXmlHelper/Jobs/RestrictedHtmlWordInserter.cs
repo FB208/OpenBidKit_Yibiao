@@ -224,7 +224,7 @@ static partial class RestrictedHtmlWordInserter
                 assets.Warnings.Add(new ImageWarning(assetRef, error.Message));
                 var notice = document.CreateElement("p");
                 var emphasis = document.CreateElement("em");
-                emphasis.TextContent = alt.Length > 0 ? $"[图片无法导出：{alt}]" : "[图片无法导出]";
+                emphasis.TextContent = RestrictedHtmlDocumentRenderer.PendingMark(alt.Length > 0 ? $"图片“{alt}”（无法导出）" : "图片（无法导出）");
                 notice.AppendChild(emphasis);
                 parent.InsertBefore(notice, figure);
                 if (caption.Length > 0)

@@ -14,13 +14,10 @@ import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarA
 import type { BackgroundTaskState, BidAnalysisTasks, BusinessFillReviewValue, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
-import type { SectionId } from '../../../shared/types/navigation';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
 interface TechnicalPlanHomeProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
-  /** 导出 Word 后一键进入暗标合规检查。 */
-  onNavigate?: (section: SectionId) => void;
 }
 
 interface OutlineSortGuard {
@@ -173,7 +170,7 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
   });
 }
 
-function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHomeProps) {
+function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
@@ -731,19 +728,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
     } catch (error) {
       const message = error instanceof Error ? error.message : '打开文件失败';
       showToast(message, 'error');
-    }
-  };
-
-  // 整本导出后一键暗标检查：把导出的 Word 交给暗标合规检查，进入检查结果后按当前预设自动检查。
-  const checkExportedFileForBlindBid = async () => {
-    if (!exportProgress.filePath || !onNavigate) return;
-    try {
-      await window.yibiao.blindCheck.importFile(exportProgress.filePath);
-      await window.yibiao.blindCheck.saveUiState({ step: 'results' });
-      setExportProgress(initialExportProgress);
-      onNavigate('blind-check');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '导入暗标合规检查失败', 'error');
     }
   };
 
@@ -1359,7 +1343,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
             </div>
             {!exportProgress.running && (
               <div className="content-regenerate-actions">
-                {!exportProgress.error && exportProgress.filePath && onNavigate && <button className="secondary-action" type="button" onClick={() => { void checkExportedFileForBlindBid(); }}>暗标合规检查</button>}
                 {!exportProgress.error && exportProgress.filePath && <button className="primary-action" type="button" onClick={() => { void handleOpenExportedFile(); }}>打开文件</button>}
                 <Dialog.Close className={exportProgress.filePath && !exportProgress.error ? 'secondary-action' : 'primary-action'} type="button">知道了</Dialog.Close>
               </div>

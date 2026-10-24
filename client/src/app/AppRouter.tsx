@@ -43,7 +43,7 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
 
   switch (activeSection) {
     case 'technical-plan':
-      return <TechnicalPlanHome registerLeaveGuard={registerLeaveGuard} onNavigate={onSectionChange} />;
+      return <TechnicalPlanHome registerLeaveGuard={registerLeaveGuard} />;
     case 'feasibility-report':
       return <FeasibilityReportHome registerLeaveGuard={registerLeaveGuard} />;
     case 'document-knowledge-base':
