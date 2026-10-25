@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { Agent, fetch: undiciFetch } = require('undici');
 const { nativeImage } = require('electron');
 const { getGeneratedImagesDir } = require('../utils/paths.cjs');
 const { compressGeneratedImage } = require('../utils/imageCompression.cjs');
@@ -12,6 +13,7 @@ const {
   copyAiHttpError,
   createAiHttpErrorFromResponse,
   emitAiHttpErrorToWindows,
+  isAiHttpErrorHtmlPayload,
 } = require('../utils/aiHttpError.cjs');
 const {
   copyAiRequestErrorMeta,
@@ -30,6 +32,8 @@ const { buildImageStylePrompt } = require('./aiImageStyles.cjs');
 const { normalizeTokenUsage } = textTokenStatsStore;
 
 const AI_REQUEST_TIMEOUT_MS = 600000;
+const IMAGE_DOWNLOAD_ATTEMPT_TIMEOUT_MS = 60000;
+const IMAGE_DOWNLOAD_FAMILIES = [4, 6];
 const MULTIMODAL_IMAGE_MAX_EDGE = 2048;
 const MULTIMODAL_IMAGE_JPEG_QUALITY = 85;
 
@@ -469,18 +473,77 @@ function createAiResponseDataError(message, responseData) {
   return error;
 }
 
-async function downloadImage(url, options = {}) {
-  let response = null;
+function createImageDownloadDispatcher(family) {
+  return new Agent({
+    connect: {
+      family,
+      autoSelectFamily: false,
+      timeout: IMAGE_DOWNLOAD_ATTEMPT_TIMEOUT_MS,
+    },
+    headersTimeout: IMAGE_DOWNLOAD_ATTEMPT_TIMEOUT_MS,
+    bodyTimeout: IMAGE_DOWNLOAD_ATTEMPT_TIMEOUT_MS,
+  });
+}
+
+const imageDownloadDispatchers = new Map(IMAGE_DOWNLOAD_FAMILIES.map((family) => [
+  family,
+  createImageDownloadDispatcher(family),
+]));
+
+// 图片地址先用 IPv4 下载，失败后再用 IPv6。每轮最多 60 秒，两轮都失败则结束，总等待不超过 2 分钟。
+async function downloadImageOnce(url, family, options) {
+  const attemptSignal = AbortSignal.timeout(IMAGE_DOWNLOAD_ATTEMPT_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([attemptSignal, options.signal]) : attemptSignal;
   try {
-    response = await fetch(url, { signal: options.signal });
+    const response = await undiciFetch(url, {
+      signal,
+      dispatcher: imageDownloadDispatchers.get(family),
+    });
+    await ensureOk(response, `IPv${family} 图片下载失败`);
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      mime_type: response.headers.get('content-type') || 'image/png',
+    };
   } catch (error) {
-    throw markAiRequestError(error, { retryable: true });
+    if (options.signal?.aborted) {
+      throw error;
+    }
+    if (attemptSignal.aborted) {
+      throw new Error(`IPv${family} 图片下载超时`);
+    }
+    const detail = error?.cause?.code || error?.message || '图片下载失败';
+    const message = String(detail).startsWith(`IPv${family}`) ? String(detail) : `IPv${family}：${detail}`;
+    throw copyRawAiErrorResponse(error, new Error(message));
   }
-  await ensureOk(response, '图片下载失败');
-  return {
-    buffer: Buffer.from(await response.arrayBuffer()),
-    mime_type: response.headers.get('content-type') || 'image/png',
-  };
+}
+
+function selectImageDownloadHttpError(errors) {
+  return errors.find((error) => isAiHttpErrorHtmlPayload(error?.aiHttpError))
+    || errors.find((error) => error?.aiHttpError || Object.prototype.hasOwnProperty.call(error, 'raw_response_body'))
+    || null;
+}
+
+async function downloadImage(url, options = {}) {
+  const failures = [];
+  for (const family of IMAGE_DOWNLOAD_FAMILIES) {
+    if (options.signal?.aborted) {
+      throw markAiRequestError(options.signal.reason instanceof Error ? options.signal.reason : new Error('AI 请求已取消'), { retryable: false });
+    }
+    try {
+      return await downloadImageOnce(url, family, options);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw markAiRequestError(error, { retryable: false });
+      }
+      failures.push(error);
+    }
+  }
+  const error = new Error(`图片下载失败：${failures.map((item) => item?.message || '图片下载失败').join('；')}`);
+  const httpError = selectImageDownloadHttpError(failures);
+  if (httpError) {
+    copyRawAiErrorResponse(httpError, error);
+  }
+  throw markAiRequestError(error, { retryable: false });
 }
 
 // 生图结果落盘前压缩，后续正文、预览和 Word 均使用压缩后的文件。
@@ -1831,7 +1894,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
     const item = responseData.data?.[0] || {};
     const image = await runWithOperationTimeout(
       (signal) => createImageFromOpenAICompatibleItem(item, { signal }),
-      AI_REQUEST_TIMEOUT_MS,
+      IMAGE_DOWNLOAD_ATTEMPT_TIMEOUT_MS * IMAGE_DOWNLOAD_FAMILIES.length,
       request.signal,
     );
 

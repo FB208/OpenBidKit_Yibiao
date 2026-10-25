@@ -362,6 +362,8 @@ export interface AgentRunFile {
 }
 
 export interface AgentRunPayload {
+  /** 为本次任务启用 Parallel 公开网页搜索和读取，默认关闭。 */
+  parallel_search?: boolean;
   task_id?: string;
   title?: string;
   task?: string;
