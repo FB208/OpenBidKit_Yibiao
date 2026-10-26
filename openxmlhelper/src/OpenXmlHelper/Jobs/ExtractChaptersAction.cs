@@ -347,6 +347,12 @@ static class ExtractChaptersAction
         }
 
         var cloned = (OpenXmlElement)block.Element.CloneNode(true);
+        // 拼写语法检查标记（w:proofErr）不含内容，留着会让字段扫描把所在段落当作复杂段落整段跳过。
+        foreach (var proofError in cloned.Descendants<Wp.ProofError>().ToList())
+        {
+            proofError.Remove();
+        }
+
         if (cloned is Wp.Paragraph paragraph)
         {
             var section = paragraph.ParagraphProperties?.SectionProperties;

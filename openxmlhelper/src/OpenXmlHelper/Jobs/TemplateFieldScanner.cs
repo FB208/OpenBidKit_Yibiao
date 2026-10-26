@@ -669,17 +669,25 @@ static class TemplateFieldScanner
     {
         var hits = new List<ParagraphHit>();
         bool Overlaps(int start, int length) => hits.Any(hit => RangesOverlap(hit.Start, hit.Length, start, length));
-        void AddBlank(string kind, int start, int length, string? name = null)
+        void AddBlank(string kind, int start, int length, string? name = null, bool keepBrackets = false)
         {
             if (Overlaps(start, length)) return;
             var (label, hint) = ReadBlankContext(text, start, length);
-            hits.Add(new ParagraphHit(kind, start, length, name ?? SuggestBlankName(text, start, length), SuggestFillBy(label, hint)));
+            var suggestedName = name ?? SuggestBlankName(text, start, length);
+            // 空括号保留左右括号，字段只占括号内部；名称和填写方式仍按整个括号前后的文字判断。
+            if (keepBrackets) (start, length) = (start + 1, length - 2);
+            hits.Add(new ParagraphHit(kind, start, length, suggestedName, SuggestFillBy(label, hint)));
         }
 
         foreach (Match match in PlaceholderPattern.Matches(text))
         {
             var explicitName = ExplicitNamePattern.Match(match.Value).Groups["name"].Value.Trim();
-            AddBlank(TemplateFieldKinds.TextPlaceholder, match.Index, match.Length, explicitName.Length > 0 ? CleanName(explicitName) : null);
+            AddBlank(
+                TemplateFieldKinds.TextPlaceholder,
+                match.Index,
+                match.Length,
+                explicitName.Length > 0 ? CleanName(explicitName) : null,
+                keepBrackets: match.Value[0] is '（' or '(');
         }
 
         foreach (Match match in BracketHintPattern.Matches(text))
