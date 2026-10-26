@@ -793,6 +793,7 @@ export interface YibiaoBridge {
     readTenderMarkdown: () => Promise<string>;
     readContentWord: (sectionId: string) => Promise<Uint8Array | null>;
     previewContentWord: (sectionId: string) => Promise<Uint8Array | null>;
+    previewBusinessChapterWord: (nodeId: string) => Promise<Uint8Array | null>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<void>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;
@@ -800,7 +801,6 @@ export interface YibiaoBridge {
     saveOutline: (payload: SaveOutlineRequest) => Promise<Partial<TechnicalPlanState>>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<Partial<TechnicalPlanState>>;
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<Partial<TechnicalPlanState>>;
-    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
     resetContentGeneration: () => Promise<TechnicalPlanState>;
     clear: () => Promise<{ success: boolean; message?: string }>;
     openBidTemplate: () => Promise<{ success: boolean; message?: string }>;

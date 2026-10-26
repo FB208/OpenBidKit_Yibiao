@@ -3,7 +3,7 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { countPendingUnits, renderBusinessTemplateForExport } = require('./businessTemplateFillTask.cjs');
-const { collectOutlineExportEntries, formatPendingMark, getPendingContentModeMessage, renderMarkdownForRestrictedHtml } = require('./exportService.cjs');
+const { collectOutlineExportEntries, formatPendingMark, getPendingContentModeMessage } = require('./exportService.cjs');
 const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 
 /** 转义程序插入的项目名、目录标题和占位提示。 */
@@ -43,7 +43,7 @@ function aiSectionFile(item) {
 
 /**
  * 整本导出读取当前产物，检查问题交给现有正文任务修复。
- * 非 AI 叶子没有手写内容时，按节点 ID 并入商务模版中对应的章节，章节按模版原样导出。
+ * 非 AI 叶子按节点 ID 并入商务模版中对应的章节，章节按模版原样导出；没有对应章节时保留占位提示。
  */
 function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService, startContentGeneration }) {
   return {
@@ -97,8 +97,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         .filter(chapter => chapter.id)
         .map(chapter => [chapter.id, chapter]));
       const businessIds = new Set(entries
-        .filter(({ item }) => !item.children?.length && item.content_mode !== 'ai-generate'
-          && !String(item.content || '').trim() && templateChapters.has(item.id))
+        .filter(({ item }) => !item.children?.length && item.content_mode !== 'ai-generate' && templateChapters.has(item.id))
         .map(({ item }) => item.id));
       // 页面归属：模版章节单独成组并使用模版页面；父目录跟随首个子目录，避免孤立标题页。
       const pageKinds = new Array(entries.length);
@@ -108,7 +107,6 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
           ? pageKinds[index + 1]
           : businessIds.has(item.id) ? 'business' : String(sectionTemplate);
       }
-      const assets = new Map();
       const ranges = [];
       const layoutSources = [];
       const warnings = [];
@@ -170,12 +168,6 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
                 body = section.body;
                 recordImages(label, section.$('img').map((_i, img) => section.$(img).attr('data-yb-asset-ref')).get());
               }
-            } else if (String(item.content || '').trim()) {
-              const assetCount = assets.size;
-              const failures = [];
-              body = await renderMarkdownForRestrictedHtml(item.content, assets, { baseDir: snapshot.workspaceDir, developerLogger, imageFailures: failures });
-              recordImages(label, [...assets.keys()].slice(assetCount));
-              for (const reason of failures) recordImageFailure(label, reason);
             } else {
               const message = getPendingContentModeMessage(item);
               body = message ? `<p><em>${escapeHtml(formatPendingMark(message))}</em></p>` : '';
@@ -202,7 +194,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       let result;
       try {
         result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
-          assetRoot: snapshot.workspaceDir, copyAssets: true, assets, wholeDocument: true,
+          assetRoot: snapshot.workspaceDir, copyAssets: true, wholeDocument: true,
           ...(business ? { businessTemplate: { input: business.input, chapters: [...businessIds].map(id => templateChapters.get(id)) } } : {}),
         });
       } finally {

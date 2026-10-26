@@ -503,5 +503,6 @@ export interface TechnicalPlanState {
   contentGenerationPlans: ContentGenerationPlans;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   bidTemplateExists?: boolean;
+  bidTemplateChapterIds?: string[];
   outlineData: OutlineData | null;
 }

@@ -644,6 +644,29 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     }
   }
 
+  /** 按块号从商务模版截出单章 Word 供正文页只读预览；走预览进程，不排在整本导出和回填之后。 */
+  async function createTemplateChapterDocx({ input, startBlock, endBlock }) {
+    let result;
+    activeJobCount += 1;
+    try {
+      result = await previewRunner.runJob({
+        action: 'slice-template-chapter',
+        request: { input, start_block: startBlock, end_block: endBlock },
+        timeoutMs: TEMPLATE_PREVIEW_TIMEOUT_MS,
+      });
+      return new Uint8Array(fs.readFileSync(path.join(result.jobDir, 'chapter.docx')));
+    } finally {
+      try {
+        if (result) {
+          const jobDir = path.resolve(result.jobDir);
+          if (path.dirname(jobDir) === path.resolve(getOpenXmlJobsDir(app))) fs.rmSync(jobDir, { recursive: true, force: true });
+        }
+      } finally {
+        activeJobCount -= 1;
+      }
+    }
+  }
+
   /**
    * 暗标合规检查与修复共用的执行方式。助手把进度写在任务目录的 progress.json，这里轮询后回调；
    * 每次结束都结束该进程，避免空闲进程继续占着处理大文档时的内存。
@@ -735,6 +758,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     hasActiveJobs: () => activeJobCount > 0,
     renderRestrictedHtmlDocx,
     createRestrictedHtmlDocx,
+    createTemplateChapterDocx,
     runBlindCheck,
     runBlindCheckFix,
     runBlindCheckDump,

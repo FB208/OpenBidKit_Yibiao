@@ -1726,14 +1726,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     updateMeta({ content_generation_runtime_json: null });
   }
 
-  // 正文任务活动或暂停期间禁止手工保存，避免清空待恢复的图片计划。
-  function assertContentEditingAllowed() {
-    const row = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation' AND status IN ('running', 'pausing', 'paused') LIMIT 1").get();
-    if (row) {
-      throw new Error('当前正文生成任务正在运行或已暂停，请先完成任务再编辑正文');
-    }
-  }
-
   function loadOutlinePersistenceSnapshot() {
     return {
       nodes: db.prepare('SELECT node_id, parent_node_id, content FROM technical_plan_outline_nodes').all().reduce((acc, row) => {
@@ -2010,6 +2002,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       importedAt: meta.original_plan_imported_at || undefined,
       updatedAt: meta.updated_at,
     } : null;
+    const bidTemplateExists = fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath);
 
     return {
       ...initialState,
@@ -2043,7 +2036,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       exportTemplateScope: generationConfig.exportTemplateScope,
       contentGenerationOptions: generationConfig.contentGenerationOptions,
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
-      bidTemplateExists: fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath),
+      bidTemplateExists,
+      // 正文页据此判断非 AI 小节是否有可预览的商务模版章节。
+      bidTemplateChapterIds: bidTemplateExists ? (readBidTemplateFields().chapters || []).map(chapter => chapter.id).filter(Boolean) : [],
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
@@ -2302,25 +2297,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function saveContentGenerationOptions(contentGenerationOptions) {
     const saved = saveGenerationConfig({ contentGenerationOptions });
     return { contentGenerationOptions: saved.contentGenerationOptions };
-  }
-
-  function saveChapterContent({ nodeId, content }) {
-    const transaction = db.transaction(() => {
-      assertContentEditingAllowed();
-      const timestamp = now();
-      const node = db.prepare('SELECT node_id, title FROM technical_plan_outline_nodes WHERE node_id = ?').get(nodeId);
-      if (!node) throw new Error('当前目录中未找到该章节');
-      const nextContent = String(content || '');
-      db.prepare('UPDATE technical_plan_outline_nodes SET content = ?, updated_at = ? WHERE node_id = ?').run(nextContent, timestamp, nodeId);
-      db.prepare(`
-        INSERT INTO technical_plan_content_sections (node_id, status, error, updated_at)
-        VALUES (?, ?, NULL, ?)
-        ON CONFLICT(node_id) DO UPDATE SET status = excluded.status, error = NULL, updated_at = excluded.updated_at
-      `).run(nodeId, nextContent.trim() ? 'success' : 'idle', timestamp);
-    });
-    transaction();
-    cleanupOriginalImageBatches();
-    return {};
   }
 
   async function runBeforeCommit(beforeCommit) {
@@ -2763,7 +2739,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveOutline,
     saveGlobalFacts,
     saveContentGenerationOptions,
-    saveChapterContent,
     clearBidTemplate,
     // 正文 Word 直接保存到技术方案业务目录，独立于 Agent 会话。
     getContentWordOutputDir() {

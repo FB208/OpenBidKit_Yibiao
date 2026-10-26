@@ -12,7 +12,7 @@ function isActiveTaskStatus(status) {
   return status === 'running' || status === 'pausing';
 }
 
-// 技术方案 AI 正文使用生成记录判断；底稿、非 AI 正文和可研仍读取 content。
+// 技术方案 AI 正文使用生成记录判断；底稿和可研仍读取 content。
 function hasGeneratedBody(items, plan = {}) {
   return Boolean(plan.contentGenerationTask?.stats?.content?.generation_completed) || (items || []).some(item => (
     item?.children?.length

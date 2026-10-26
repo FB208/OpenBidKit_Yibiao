@@ -357,9 +357,9 @@ sealed class BusinessTemplateMerger : IDisposable
 
     /// <summary>
     /// 去掉章节开头空段落和首个文字段落中、正文之前的分页；只承载分页的空段落一并删除。
-    /// 段前分页可能来自段落样式，删除直接属性关不掉，因此显式写入不分页。
+    /// 段前分页可能来自段落样式，删除直接属性关不掉，因此显式写入不分页。正文页单章预览同样使用。
     /// </summary>
-    static void StripLeadingPageBreak(Wp.Body container)
+    internal static void StripLeadingPageBreak(Wp.Body container)
     {
         foreach (var block in container.ChildElements.ToList())
         {

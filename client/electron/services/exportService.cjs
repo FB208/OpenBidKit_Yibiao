@@ -2744,45 +2744,6 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-/** 保留图片来源的扩展名，助手在文件头无法识别时按扩展名声明的类型原样嵌入。 */
-function imageExtensionFromSource(source) {
-  const dataUrl = /^data:([^;,]+)/i.exec(source);
-  if (dataUrl) return mime.extension(dataUrl[1]) || '';
-  return path.extname(source.split(/[?#]/)[0]).slice(1).toLowerCase();
-}
-
-/**
- * 非 AI 节点仍读取已有 Markdown；复用现有图片解析。
- * 单张图片读取失败时原位改为文字提示，原因写入 context.imageFailures，其余正文照常导出。
- */
-async function renderMarkdownForRestrictedHtml(content, assets, context) {
-  const $ = cheerio.load(await renderMarkdownHtml(content, { allowRawHtml: true, enableGfm: true }), null, false);
-  for (const img of $('img').toArray()) {
-    const source = $(img).attr('src') || '';
-    const alt = $(img).attr('alt') || '';
-    let loaded;
-    try {
-      loaded = normalizeImageForDocx(await loadImage(source, context));
-      if (!loaded?.buffer?.length) throw new Error('图片文件不存在或为空');
-    } catch (error) {
-      context.imageFailures.push(error.message);
-      const notice = $('<em>').text(formatPendingMark(alt ? `图片“${alt}”（无法导出）` : '图片（无法导出）'));
-      if ($(img).parent().is('p') && $(img).parent().contents().length === 1) $(img).parent().replaceWith($('<p>').append(notice));
-      else $(img).replaceWith(notice);
-      continue;
-    }
-    const ref = `export-images/${assets.size}.${loaded.type || imageExtensionFromSource(source) || 'png'}`;
-    assets.set(ref, loaded.buffer);
-    const figure = $('<figure data-yb-size="wide" data-yb-fit="contain"></figure>');
-    figure.append($('<img>').attr('data-yb-asset-ref', ref));
-    if ($(img).attr('alt')) figure.append($('<figcaption>').text($(img).attr('alt')));
-    // 块级 figure 不能放在 Markdown 图片默认的 p 中。
-    if ($(img).parent().is('p') && $(img).parent().contents().length === 1) $(img).parent().replaceWith(figure);
-    else $(img).replaceWith(figure);
-  }
-  return $.html();
-}
-
 function createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport } = {}) {
   return {
     // 导出前检查技术方案正文，问题交给原正文任务后结束本次导出。
@@ -2892,7 +2853,6 @@ module.exports = {
   collectOutlineExportEntries,
   formatPendingMark,
   getPendingContentModeMessage,
-  renderMarkdownForRestrictedHtml,
 };
 
 // 独立运行本文件可检查原生间距、章节页框和样式范围，不读写用户文件。

@@ -660,6 +660,18 @@ async function loadBusinessFillReview({ workspaceStore, credentialLibraryService
   };
 }
 
+// 正文页预览：按字段清单块号从当前已回填的 bid-template.docx 现截单章，不落盘；没有对应章节时返回 null。
+async function previewBusinessChapter({ workspaceStore, openXmlHelperService, nodeId }) {
+  if (!workspaceStore.hasBidTemplate()) return null;
+  const chapter = (workspaceStore.readBidTemplateFields().chapters || []).find(item => item.id === nodeId);
+  if (!chapter) return null;
+  return openXmlHelperService.createTemplateChapterDocx({
+    input: workspaceStore.getBidTemplateRelativePath(),
+    startBlock: chapter.start_block,
+    endBlock: chapter.end_block,
+  });
+}
+
 // 按阶段续跑：filling 运行副 Agent 并保存字段值，reviewing 等待用户确认，rendering 以底稿重新生成 Word；值已确认时只重试回填。
 async function runBusinessTemplateFill({
   agentService,
@@ -878,6 +890,7 @@ module.exports = {
   buildConfirmedEntries,
   summarizeFillStats,
   loadBusinessFillReview,
+  previewBusinessChapter,
   editBusinessFillValues,
   renderBusinessTemplateForExport,
   countPendingUnits,

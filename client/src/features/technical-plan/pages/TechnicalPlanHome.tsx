@@ -525,6 +525,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : (outlineDataChanged ? {} : prev.contentGenerationPlans),
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : (outlineDataChanged ? undefined : prev.contentGenerationRuntime),
             bidTemplateExists: hasOwnField(technicalPlan, 'bidTemplateExists') ? Boolean(technicalPlan.bidTemplateExists) : prev.bidTemplateExists,
+            bidTemplateChapterIds: hasOwnField(technicalPlan, 'bidTemplateChapterIds') ? technicalPlan.bidTemplateChapterIds : prev.bidTemplateChapterIds,
           };
         }
 
@@ -743,36 +744,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
   const createExportTemplate = () => {
     setExportTemplateEditorOpen(true);
-  };
-
-  const saveChapterContent = async (item: OutlineItem, content: string) => {
-    if (!state.outlineData?.outline?.length) {
-      throw new Error('当前没有可保存的目录');
-    }
-
-    const updatedOutlineData = {
-      ...state.outlineData,
-      outline: updateOutlineItemContent(state.outlineData.outline, item.id, content),
-    };
-    const updatedSections = {
-      ...state.contentGenerationSections,
-      [item.id]: {
-        id: item.id,
-        number: item.number,
-        title: item.title || '未命名章节',
-        status: content.trim() ? 'success' as const : 'idle' as const,
-        content,
-        updated_at: new Date().toISOString(),
-      },
-    };
-
-    setState((prev) => ({
-      ...prev,
-      outlineData: updatedOutlineData,
-      contentGenerationSections: updatedSections,
-    }));
-    const saved = await window.yibiao?.technicalPlan.saveChapterContent({ nodeId: item.id, content });
-    if (saved) setState((prev) => ({ ...prev, ...saved }));
   };
 
   const saveBusinessFillReview = async (values: BusinessFillReviewValue[]) => {
@@ -1211,13 +1182,13 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           exportTemplateId={state.exportTemplateId}
           sections={state.contentGenerationSections}
           bidTemplateExists={Boolean(state.bidTemplateExists)}
+          bidTemplateChapterIds={state.bidTemplateChapterIds}
           onOpenBidTemplate={openBidTemplate}
           onOpenGenerationSettingsAppearance={() => {
             void switchStep('generation-settings', { generationSettingsTab: 'appearance' });
           }}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentGenerationReset={resetContentGeneration}
-          onContentSaved={saveChapterContent}
           onBusinessFillReviewSave={saveBusinessFillReview}
         />
       )}

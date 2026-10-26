@@ -1,5 +1,6 @@
 const { ipcMain, shell } = require('electron');
 const { previewContentSection } = require('../services/contentGenerationOutput.cjs');
+const { previewBusinessChapter } = require('../services/businessTemplateFillTask.cjs');
 
 // 注册技术方案接口，正文预览转换交给输出服务处理。
 function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentService, openXmlHelperService }) {
@@ -15,6 +16,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentServic
   ipcMain.handle('technical-plan:read-tender-markdown', () => technicalPlanStore.readTenderMarkdown());
   ipcMain.handle('technical-plan:read-content-word', (_event, sectionId) => technicalPlanStore.readContentWord(sectionId));
   ipcMain.handle('technical-plan:preview-content-word', (_event, sectionId) => previewContentSection({ sectionId, agentService, openXmlHelperService }));
+  ipcMain.handle('technical-plan:preview-business-chapter-word', (_event, nodeId) => previewBusinessChapter({ workspaceStore: technicalPlanStore, openXmlHelperService, nodeId }));
   ipcMain.handle('technical-plan:read-tender-source-markdown', (_event, sourceId) => technicalPlanStore.readTenderSourceMarkdown(sourceId));
   ipcMain.handle('technical-plan:update-step', (_event, step) => technicalPlanStore.updateStep(step));
   ipcMain.handle('technical-plan:save-bid-analysis-config', (_event, payload) => technicalPlanStore.saveBidAnalysisConfig(payload));
@@ -22,7 +24,6 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentServic
   ipcMain.handle('technical-plan:save-outline', (_event, outlineData) => technicalPlanStore.saveOutline(outlineData));
   ipcMain.handle('technical-plan:save-global-facts', (_event, globalFacts) => technicalPlanStore.saveGlobalFacts(globalFacts));
   ipcMain.handle('technical-plan:save-content-generation-options', (_event, options) => technicalPlanStore.saveContentGenerationOptions(options));
-  ipcMain.handle('technical-plan:save-chapter-content', (_event, payload) => technicalPlanStore.saveChapterContent(payload));
   ipcMain.handle('technical-plan:reset-content-generation', () => taskService.resetContentGeneration());
   ipcMain.handle('technical-plan:clear', () => taskService.resetTechnicalPlan());
   ipcMain.handle('technical-plan:get-business-fill-review', () => taskService.getBusinessFillReview());
