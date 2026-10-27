@@ -2266,6 +2266,39 @@
   color: var(--yb-warning-deep);
 }
 
+.bid-template-mismatch-card {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.bid-template-mismatch-body {
+  display: grid;
+  min-height: 0;
+  max-height: 320px;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.bid-template-mismatch-group {
+  display: grid;
+  gap: 6px;
+}
+
+.bid-template-mismatch-group > strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.bid-template-mismatch-group ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .word-control-result-sections {
   display: grid;
   min-height: 0;

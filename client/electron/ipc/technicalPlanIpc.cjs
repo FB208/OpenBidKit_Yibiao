@@ -1,6 +1,7 @@
 const { ipcMain, shell } = require('electron');
 const { previewContentSection } = require('../services/contentGenerationOutput.cjs');
 const { previewBusinessChapter } = require('../services/businessTemplateFillTask.cjs');
+const { inspectBidTemplate } = require('../services/bidTemplateExtractionTask.cjs');
 
 // 注册技术方案接口，正文预览转换交给输出服务处理。
 function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentService, openXmlHelperService }) {
@@ -28,6 +29,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentServic
   ipcMain.handle('technical-plan:clear', () => taskService.resetTechnicalPlan());
   ipcMain.handle('technical-plan:get-business-fill-review', () => taskService.getBusinessFillReview());
   ipcMain.handle('technical-plan:save-business-fill-review', (_event, payload) => taskService.saveBusinessFillReview(payload));
+  ipcMain.handle('technical-plan:inspect-bid-template', () => inspectBidTemplate(technicalPlanStore));
   ipcMain.handle('technical-plan:open-bid-template', async () => {
     const filePath = technicalPlanStore.getBidTemplatePath?.();
     if (!filePath || !technicalPlanStore.hasBidTemplate?.()) {

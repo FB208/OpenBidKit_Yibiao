@@ -29,6 +29,10 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.suppressBusinessFillReviewAutoConfirmation(payload);
   });
+  ipcMain.handle('tasks:start-bid-template-extraction', (event, payload) => {
+    taskService.subscribe(event.sender);
+    return taskService.startBidTemplateExtraction(payload);
+  });
   ipcMain.handle('tasks:start-global-facts-generation', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startGlobalFactsGeneration(payload);

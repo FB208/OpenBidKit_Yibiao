@@ -6,6 +6,7 @@ const { runContentSectionRegenerationTask } = require('./contentSectionRegenerat
 const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
+const { runBidTemplateExtractionTask } = require('./bidTemplateExtractionTask.cjs');
 const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cjs');
 const {
   OUTLINE_AGENT_TASK_KEY,
@@ -69,6 +70,15 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'outlineAdjustmentTask',
+  },
+  'bid-template-extraction': {
+    label: '投标模版提取',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'bidTemplateExtractionTask',
   },
   'global-facts-generation': {
     label: '全局事实设定',
@@ -1240,6 +1250,31 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-adjustment'), partial, recoveredTask));
   }
 
+  function recoverInterruptedBidTemplateExtractionTask(technicalPlan) {
+    if (activeTasks.has('bid-template-extraction')) {
+      return;
+    }
+
+    const extractionTask = technicalPlan.bidTemplateExtractionTask;
+    if (!isActiveTaskStatus(extractionTask?.status)) {
+      return;
+    }
+
+    const message = '上次投标模版提取未完成，请在目录页点击“下一步”重新提取。';
+    const recoveredTask = {
+      ...extractionTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(extractionTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(extractionTask.logs) ? extractionTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { bidTemplateExtractionTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-template-extraction'), partial, recoveredTask));
+  }
+
   function recoverInterruptedGlobalFactsAdjustmentTask(technicalPlan) {
     if (activeTasks.has('global-facts-adjustment')) {
       return;
@@ -1539,6 +1574,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
+  recoverInterruptedBidTemplateExtractionTask(technicalPlanRecoveryState);
   recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
@@ -1567,6 +1603,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         outlineWordControlSnapshot: undefined,
         outlineGenerationTask: undefined,
         outlineAdjustmentTask: undefined,
+        bidTemplateExtractionTask: undefined,
         referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
         globalFactsAdjustmentTask: undefined,
@@ -1597,6 +1634,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         outlineData: null,
         outlineWordControlSnapshot: undefined,
         outlineAdjustmentTask: undefined,
+        bidTemplateExtractionTask: undefined,
         globalFactsTask: undefined,
         globalFactsAdjustmentTask: undefined,
         globalFacts: [],
@@ -1619,6 +1657,19 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     startOutlineAdjustment(payload) {
       return startManagedTask('outline-adjustment', payload, runOutlineAdjustmentTask, {}, {
         primarySession: agentService.isPrimarySession({ task_key: OUTLINE_AGENT_TASK_KEY }),
+      });
+    },
+    // 目录变更后按当前目录重新提取投标模版；先确认目录会话存在，再清空旧模版，避免旧产物让提取校验误判完成。
+    startBidTemplateExtraction(payload) {
+      if (!agentService.hasPersistentTaskSession(OUTLINE_AGENT_TASK_KEY)) {
+        throw new Error('目录生成的 Agent 工作空间不存在，请重新生成目录');
+      }
+      return startManagedTask('bid-template-extraction', payload, runBidTemplateExtractionTask, {}, {
+        primarySession: true,
+        beforeStart: () => {
+          agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
+          technicalPlanStore.clearBidTemplate();
+        },
       });
     },
     startGlobalFactsGeneration(payload) {

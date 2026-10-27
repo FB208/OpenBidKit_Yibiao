@@ -25,10 +25,13 @@ function formatCredentialImageCategories() {
 }
 
 // 明确分类文件与工具生成产物的职责，以及本阶段完成条件。
-function createTemplateExtractionPrompt(sourcePaths = []) {
+function createTemplateExtractionPrompt(sourcePaths = [], { reextraction = false } = {}) {
   const sourceList = sourcePaths.length
     ? sourcePaths.map((item) => `- ${item}`).join('\n')
     : '- 无';
+  const sessionNote = reextraction
+    ? `当前 Session 从目录生成任务分叉而来，目录确认后又经过子目录生成和调整，工作区中的 outline.json 不代表本次抽取范围；${TEMPLATE_OUTLINE_INPUT_FILE} 的 items 是按当前目录重新确定、需要抽进投标模版的全部目录`
+    : `当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 的 items 是最终确认、需要抽进投标模版的全部目录`;
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。
 
 任务：根据用户已确认的目录，从招标 Word 原件抽取完整的投标模版，识别模版中需要填写的位置，并写入 Word 内容控件和字段清单。本任务只提取和标记，不生成任何字段值，也不填写模版。
@@ -37,7 +40,7 @@ function createTemplateExtractionPrompt(sourcePaths = []) {
 
 必须完成的产物：当前工作目录根目录中的 ${TEMPLATE_CLASSIFICATION_FILE}、bid-template.docx 和 ${TEMPLATE_FIELDS_OUTPUT_FILE}。程序会为尚不存在的分类文件预建空文件；空文件不算完成，首次填充必须使用 write，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。已有内容修正可用 edit 或 write。必须使用上述精确文件名，不得改名、移到子目录或仅在回复中输出。分类文件由你填写，最终 Word 和字段清单必须由 openxml 的 apply-template-fields 生成，不得手工写入。全部产物有效后才允许结束任务。
 
-当前 Session 从一级目录生成任务分叉而来。此前生成的 outline.json 只是待用户选择的候选结果；${TEMPLATE_OUTLINE_INPUT_FILE} 的 items 是最终确认、需要抽进投标模版的全部目录（path 是从一级目录到本目录的标题链，auto_fill 表示字段是否自动填写），本任务必须只以该文件作为抽取范围依据，每个目录都要抽取，不得遗漏或增加。
+${sessionNote}（path 是从一级目录到本目录的标题链，auto_fill 表示字段是否自动填写），本任务必须只以该文件作为抽取范围依据，每个目录都要抽取，不得遗漏或增加。
 
 程序固定绑定的招标 Word 原件：
 ${sourceList}
@@ -99,6 +102,7 @@ async function runTemplateExtractionTask({
   onActivity,
   onCheckpoint,
   onStep,
+  reextraction = false,
 }) {
   const sourcePaths = workspaceStore.listTenderSourceDocxRelativePaths();
   if (!sourcePaths.length) {
@@ -111,7 +115,7 @@ async function runTemplateExtractionTask({
     summary_enabled: false,
     // 模版和字段清单由工具校验并落盘成功后结束，不依赖模型主动标记完成。
     is_final_tool_call: (call) => call.name === 'openxml' && call.arguments?.action === 'apply-template-fields',
-    prompt: createTemplateExtractionPrompt(sourcePaths),
+    prompt: createTemplateExtractionPrompt(sourcePaths, { reextraction }),
     output_file: TEMPLATE_FIELDS_OUTPUT_FILE,
     prepare_output_files: [TEMPLATE_CLASSIFICATION_FILE],
     files: [{

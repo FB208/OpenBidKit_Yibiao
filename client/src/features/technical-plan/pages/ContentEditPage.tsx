@@ -27,7 +27,6 @@ interface ContentEditPageProps {
   sections: ContentGenerationSections;
   bidTemplateExists?: boolean;
   bidTemplateChapterIds?: string[];
-  onOpenBidTemplate?: () => Promise<void>;
   onOpenGenerationSettingsAppearance: () => void;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
   onContentGenerationReset: () => Promise<void>;
@@ -214,7 +213,6 @@ function ContentEditPage({
   sections,
   bidTemplateExists = false,
   bidTemplateChapterIds,
-  onOpenBidTemplate,
   onOpenGenerationSettingsAppearance,
   onContentGenerationOptionsChange,
   onContentGenerationReset,
@@ -957,11 +955,6 @@ function ContentEditPage({
               title={businessReviewEditable ? undefined : '商务模版字段值填写完成或等待确认时可编辑'}
             >
               编辑提取结果
-            </button>
-          )}
-          {bidTemplateExists && (
-            <button type="button" className="secondary-action" onClick={() => void onOpenBidTemplate?.()}>
-              打开商务模版
             </button>
           )}
           {developerMode && (

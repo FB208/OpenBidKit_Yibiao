@@ -6,6 +6,7 @@ const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFil
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
 const { CREDENTIAL_IMAGE_FIELD_LABELS } = require('./credentialLibraryService.cjs');
 const { readTemplateLayout } = require('./pi/piOpenXmlTool.cjs');
+const { collectOutlineLeaves } = require('./technicalPlanOutline.cjs');
 
 const BUSINESS_TEMPLATE_FILL_STAGE = 'business-template-fill';
 const FIELDS_INPUT_FILE = '商务模版待填字段.json';
@@ -609,6 +610,35 @@ function buildConfirmedEntries(fields = [], values = []) {
   return entries;
 }
 
+// 版式块中出现的字段 ID，规则同确认弹窗 BusinessFillDocument.tsx 的 collectFieldIds()。
+function collectLayoutFieldIds(blocks = [], output = new Set()) {
+  for (const block of blocks) {
+    if (block.type === 'field' && block.field_id) output.add(block.field_id);
+    for (const segment of block.segments || []) {
+      if (segment.field_id) output.add(segment.field_id);
+    }
+    for (const row of block.rows || []) {
+      for (const cell of row.cells || []) collectLayoutFieldIds(cell.blocks, output);
+    }
+  }
+  return output;
+}
+
+// 商务部分跟随当前目录：只取仍为非 AI 叶子的模版章节，字段按空白底稿版式的块号归属章节。
+async function loadBusinessFillScope({ workspaceStore, openXmlHelperService, signal }) {
+  const template = workspaceStore.readBidTemplateFields();
+  const leafIds = new Set(collectOutlineLeaves(workspaceStore.loadTechnicalPlan().outlineData?.outline)
+    .filter(({ item }) => item.content_mode !== 'ai-generate')
+    .map(({ item }) => item.id));
+  const layout = await readTemplateLayout({ openXmlHelperService, input: workspaceStore.getBidTemplateBlankRelativePath(), signal });
+  const chapters = (template.chapters || [])
+    .filter(chapter => leafIds.has(chapter.id))
+    .map(chapter => ({ ...chapter, blocks: layout.blocks.filter(block => block.index >= chapter.start_block && block.index < chapter.end_block) }));
+  const fieldIds = new Set();
+  for (const chapter of chapters) collectLayoutFieldIds(chapter.blocks, fieldIds);
+  return { template, layout, chapters, fields: (template.fields || []).filter(field => fieldIds.has(field.id)) };
+}
+
 // 图片所属记录的展示名，供确认弹窗分组。
 function imageOwnerLabels(snapshot = {}) {
   const labels = new Map();
@@ -619,15 +649,13 @@ function imageOwnerLabels(snapshot = {}) {
   return labels;
 }
 
-// 确认弹窗数据：全部填写项及当前值、资信库图片目录，以及按章节分组的模版版式。
+// 确认弹窗数据：当前目录商务章节的填写项及当前值、资信库图片目录，以及按章节分组的模版版式。
 // 版式读取空白底稿（正文填写开始前已创建），其块结构与已填写的模版一致。
 async function loadBusinessFillReview({ workspaceStore, credentialLibraryService, openXmlHelperService }) {
-  const template = workspaceStore.readBidTemplateFields();
-  const fields = template.fields || [];
+  const { layout, chapters, fields } = await loadBusinessFillScope({ workspaceStore, openXmlHelperService });
   const fieldsById = new Map(fields.map(field => [field.id, field]));
   const snapshot = credentialLibraryService.load();
   const owners = imageOwnerLabels(snapshot);
-  const layout = await readTemplateLayout({ openXmlHelperService, input: workspaceStore.getBidTemplateBlankRelativePath() });
   return {
     units: groupFieldUnits(fields).map(unit => ({
       key: unit.key,
@@ -644,11 +672,11 @@ async function loadBusinessFillReview({ workspaceStore, credentialLibraryService
       ...readUnitState(unit, fieldsById),
     })),
     base_size: layout.base_size,
-    chapters: (template.chapters || []).map(chapter => ({
-      ...(chapter.id ? { id: chapter.id } : {}),
+    chapters: chapters.map(chapter => ({
+      id: chapter.id,
       title: chapter.title,
       auto_fill: chapter.auto_fill !== false,
-      blocks: layout.blocks.filter(block => block.index >= chapter.start_block && block.index < chapter.end_block),
+      blocks: chapter.blocks,
     })),
     images: (snapshot.images || []).map(image => ({
       image_id: image.imageId,
@@ -693,10 +721,16 @@ async function runBusinessTemplateFill({
     onState?.(current);
     return current;
   };
-  const fields = workspaceStore.readBidTemplateFields().fields || [];
-  const manualCount = new Set(fields.filter(field => field.fill_by === 'manual').map(field => field.name)).size;
+  // 填写和统计只处理当前目录中的商务章节；回填 Word 仍按全部字段，范围外字段保留占位。
+  let scopeFieldIds = null;
+  const readScopeFields = async () => {
+    scopeFieldIds ||= new Set((await loadBusinessFillScope({ workspaceStore, openXmlHelperService, signal })).fields.map(field => field.id));
+    return (workspaceStore.readBidTemplateFields().fields || []).filter(field => scopeFieldIds.has(field.id));
+  };
 
   if (current.phase === 'filling') {
+    const fields = await readScopeFields();
+    const manualCount = new Set(fields.filter(field => field.fill_by === 'manual').map(field => field.name)).size;
     const units = buildFillUnits(fields);
     if (!units.length) {
       workspaceStore.saveBidTemplateFieldValues({});
@@ -771,7 +805,7 @@ async function runBusinessTemplateFill({
     if (confirmed) {
       workspaceStore.saveBidTemplateFieldValues(buildConfirmedEntries(workspaceStore.readBidTemplateFields().fields || [], confirmed.values));
     }
-    update({ phase: 'rendering', ...summarizeFillStats(workspaceStore.readBidTemplateFields().fields || []), confirmed_by: confirmed ? 'user' : 'auto' });
+    update({ phase: 'rendering', ...summarizeFillStats(await readScopeFields()), confirmed_by: confirmed ? 'user' : 'auto' });
   }
 
   if (current.phase === 'rendering') {
@@ -835,6 +869,7 @@ function excludeMissingImages(stats, missingImages) {
 
 // 填写完成后编辑字段值：先按新值回填 Word，成功后再保存清单，Word 被占用等失败时清单保持原值。
 async function editBusinessFillValues({ workspaceStore, credentialLibraryService, openXmlHelperService, state, values }) {
+  const scopeFieldIds = new Set((await loadBusinessFillScope({ workspaceStore, openXmlHelperService })).fields.map(field => field.id));
   const fields = workspaceStore.readBidTemplateFields().fields || [];
   const entries = buildConfirmedEntries(fields, values);
   const nextFields = fields.map(field => ({
@@ -843,7 +878,7 @@ async function editBusinessFillValues({ workspaceStore, credentialLibraryService
   }));
   const missingImages = await renderBusinessTemplate({ workspaceStore, credentialLibraryService, openXmlHelperService, fields: nextFields });
   workspaceStore.saveBidTemplateFieldValues(entries);
-  const stats = summarizeFillStats(nextFields);
+  const stats = summarizeFillStats(nextFields.filter(field => scopeFieldIds.has(field.id)));
   return { ...state, ...stats, ...excludeMissingImages(stats, missingImages), confirmed_by: 'user', updated_at: new Date().toISOString() };
 }
 

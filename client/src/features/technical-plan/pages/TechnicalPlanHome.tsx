@@ -11,7 +11,7 @@ import { generationSettingsTabs, type GenerationSettingsTab } from '../generatio
 import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, BusinessFillReviewValue, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, BidTemplateInspection, BusinessFillReviewValue, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
@@ -25,6 +25,8 @@ interface OutlineSortGuard {
   saveSort: () => Promise<void>;
   discardSort: () => void;
 }
+
+type BidTemplateMismatchChoice = 'extract' | 'continue' | 'cancel';
 
 interface WordControlWarningMetric {
   label: string;
@@ -181,6 +183,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const [exportTemplateEditorOpen, setExportTemplateEditorOpen] = useState(false);
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [outlineWordControlLeaveDialogOpen, setOutlineWordControlLeaveDialogOpen] = useState(false);
+  const [bidTemplateMismatch, setBidTemplateMismatch] = useState<BidTemplateInspection | null>(null);
   const [wordControlWarningDialog, setWordControlWarningDialog] = useState<WordControlWarningDialogState | null>(null);
   const [pendingWordControlWarningTaskId, setPendingWordControlWarningTaskId] = useState<string | null>(null);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
@@ -193,6 +196,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const bidTemplateMismatchResolverRef = useRef<((choice: BidTemplateMismatchChoice) => void) | null>(null);
   const shownWordControlWarningTaskIdsRef = useRef(new Set<string>());
   const steps = technicalPlanSteps;
   const activeIndex = Math.max(0, steps.indexOf(state.step));
@@ -217,6 +221,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const globalFactsHasPlaceholder = Boolean(firstGlobalFactWithPlaceholder);
   const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
+  const isBidTemplateExtracting = state.bidTemplateExtractionTask?.status === 'running' || state.bidTemplateExtractionTask?.status === 'pausing';
   // AI 正文在会话 HTML 中；已完成记录及生成中保存的进度都需要清空确认。
   const hasGeneratedBody = Boolean(state.contentGenerationTask?.stats?.content?.generation_completed)
     || collectLeafItems(state.outlineData?.outline || []).some(item => item.content_mode === 'ai-generate' && (
@@ -230,6 +235,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     ['招标文件解析', state.bidAnalysisTask],
     ['目录生成', state.outlineGenerationTask],
     ['目录AI调整', state.outlineAdjustmentTask],
+    ['投标模版提取', state.bidTemplateExtractionTask],
     ['全局事实设定', state.globalFactsTask],
     ['全局事实AI调整', state.globalFactsAdjustmentTask],
     ['正文生成', state.contentGenerationTask],
@@ -242,7 +248,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.tenderFile)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
-    || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot))
+    || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot || isBidTemplateExtracting))
     || (state.step === 'global-facts' && (!globalFactsReady || isGlobalFactsAdjusting));
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
@@ -262,6 +268,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
                     ? '目录生成完成后才能进入全局事实设定'
                     : state.step === 'outline-generation' && !state.outlineWordControlSnapshot
                       ? '当前目录缺少字数控制生效配置，请重新生成目录'
+                    : state.step === 'outline-generation' && isBidTemplateExtracting
+                      ? '投标模版正在重新提取，请等待结束后再进入下一步'
                     : state.step === 'global-facts' && isGlobalFactsAdjusting
                       ? '全局事实正在 AI 调整，请等待结束后再进入正文生成'
                     : state.step === 'global-facts' && !globalFactsReady
@@ -289,6 +297,29 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     return new Promise<boolean>((resolve) => {
       outlineWordControlLeaveResolverRef.current = resolve;
     });
+  };
+
+  const resolveBidTemplateMismatch = (choice: BidTemplateMismatchChoice) => {
+    bidTemplateMismatchResolverRef.current?.(choice);
+    bidTemplateMismatchResolverRef.current = null;
+    setBidTemplateMismatch(null);
+  };
+
+  // 目录中的商务节点与投标模版不一致时，由用户决定重新提取、照常继续或留在目录页。
+  const confirmBidTemplateMismatch = (inspection: BidTemplateInspection) => {
+    setBidTemplateMismatch(inspection);
+    return new Promise<BidTemplateMismatchChoice>((resolve) => {
+      bidTemplateMismatchResolverRef.current = resolve;
+    });
+  };
+
+  const startBidTemplateExtraction = async () => {
+    try {
+      await window.yibiao!.tasks.startBidTemplateExtraction();
+      showToast('投标模版提取已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动投标模版提取失败', 'error');
+    }
   };
 
   const confirmSortLeaveOnly = useCallback(async () => {
@@ -396,6 +427,15 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       if (finalOutlineData && snapshot && isOutlineLeafCountOutsideRange(finalOutlineData, snapshot)) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;
+      }
+      const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
+      if (inspection.added.length || inspection.changed.length) {
+        const choice = await confirmBidTemplateMismatch(inspection);
+        if (choice === 'cancel') return;
+        if (choice === 'extract') {
+          await startBidTemplateExtraction();
+          return;
+        }
       }
     }
 
@@ -539,6 +579,15 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
+        if (taskType === 'bid-template-extraction') {
+          return {
+            ...prev,
+            bidTemplateExtractionTask: trimTaskLogs(technicalPlan.bidTemplateExtractionTask) || latestTask,
+            bidTemplateExists: hasOwnField(technicalPlan, 'bidTemplateExists') ? Boolean(technicalPlan.bidTemplateExists) : prev.bidTemplateExists,
+            bidTemplateChapterIds: hasOwnField(technicalPlan, 'bidTemplateChapterIds') ? technicalPlan.bidTemplateChapterIds : prev.bidTemplateChapterIds,
           };
         }
 
@@ -884,7 +933,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
   const aiAdjustDisabled = isFactsAiStep
     ? !state.globalFacts.length || isGlobalFactsGenerating || isGlobalFactsAdjusting
-    : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting;
+    : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting || isBidTemplateExtracting;
   const aiAdjustTooltip = isFactsAiStep
     ? (isGlobalFactsAdjusting
       ? 'AI 正在按要求调整全局事实，请稍候'
@@ -893,6 +942,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         : '通过桌宠 AI 对话调整当前全局事实')
     : (isOutlineAdjusting
       ? 'AI 正在按要求调整目录，请稍候'
+      : isBidTemplateExtracting
+        ? '投标模版正在重新提取，请等待结束后再调整目录'
       : isOutlineGenerating || !state.outlineData
         ? '目录生成结束后才能使用 AI 调整'
         : !state.outlineWordControlSnapshot
@@ -1047,6 +1098,19 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         },
       ],
     }] : []),
+    ...((state.step === 'outline-generation' || state.step === 'content-edit') && state.bidTemplateExists ? [{
+      id: 'technical-plan-template',
+      actions: [
+        {
+          id: 'view-bid-template',
+          label: '查看投标模版',
+          icon: <ToolbarDocumentIcon />,
+          variant: 'secondary' as const,
+          tooltip: '在 Word 中查看投标模版；在 Word 中的手工修改会在回填时被覆盖',
+          onClick: () => { void openBidTemplate(); },
+        },
+      ],
+    }] : []),
     {
       id: 'technical-plan-navigation',
       actions: navigationActions,
@@ -1146,10 +1210,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
           aiAdjustmentRunning={isOutlineAdjusting}
+          templateExtractionTask={state.bidTemplateExtractionTask}
           onOutlineSaved={saveOutline}
           onOutlineSelectionSaved={saveOutlineSelection}
-          bidTemplateExists={Boolean(state.bidTemplateExists)}
-          onOpenBidTemplate={openBidTemplate}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}
@@ -1183,7 +1246,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           sections={state.contentGenerationSections}
           bidTemplateExists={Boolean(state.bidTemplateExists)}
           bidTemplateChapterIds={state.bidTemplateChapterIds}
-          onOpenBidTemplate={openBidTemplate}
           onOpenGenerationSettingsAppearance={() => {
             void switchStep('generation-settings', { generationSettingsTab: 'appearance' });
           }}
@@ -1281,6 +1343,42 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           </>
         )}
       />
+
+      <AppDialog
+        open={Boolean(bidTemplateMismatch)}
+        onOpenChange={(open) => !open && resolveBidTemplateMismatch('cancel')}
+        kicker="投标模版"
+        title="目录与投标模版不一致"
+        description="当前投标模版中没有这些章节或填写方式不符，是否重新提取投标模版？重新提取会替换现有模版，耗时数分钟。"
+        cardClassName="bid-template-mismatch-card"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => resolveBidTemplateMismatch('continue')}>暂不提取，继续</button>
+            <button type="button" className="primary-action" onClick={() => resolveBidTemplateMismatch('extract')}>重新提取</button>
+          </>
+        )}
+      >
+        <div className="bid-template-mismatch-body">
+          {Boolean(bidTemplateMismatch?.added.length) && (
+            <section className="bid-template-mismatch-group">
+              <strong>{`新增 ${bidTemplateMismatch?.added.length} 个商务节点`}</strong>
+              <ul>
+                {bidTemplateMismatch?.added.map((item) => <li key={item.id}>{`${item.number} ${item.title}`}</li>)}
+              </ul>
+            </section>
+          )}
+          {Boolean(bidTemplateMismatch?.changed.length) && (
+            <section className="bid-template-mismatch-group">
+              <strong>{`${bidTemplateMismatch?.changed.length} 个节点的填写方式已变化`}</strong>
+              <ul>
+                {bidTemplateMismatch?.changed.map((item) => (
+                  <li key={item.id}>{`${item.number} ${item.title}（改为${item.auto_fill ? '自动填写' : '人工填写'}）`}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      </AppDialog>
 
 
       <Dialog.Root

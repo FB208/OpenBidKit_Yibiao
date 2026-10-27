@@ -118,6 +118,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     'bid-analysis': '招标文件解析',
     'outline-generation': '目录生成',
     'outline-adjustment': '目录AI调整',
+    'bid-template-extraction': '投标模版提取',
     'global-facts-generation': '全局事实设定',
     'global-facts-adjustment': '全局事实AI调整',
     'content-generation': '正文生成',

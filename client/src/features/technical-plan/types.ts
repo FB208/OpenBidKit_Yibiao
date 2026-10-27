@@ -5,7 +5,7 @@ export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
+export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'business-filling' | 'export-repair' | 'done';
@@ -383,6 +383,20 @@ export interface BusinessFillReview {
   chapters: BusinessFillReviewChapter[];
 }
 
+/** 投标模版与当前目录不一致的非 AI 叶子；auto_fill 为当前处理方式对应的字段是否自动填写。 */
+export interface BidTemplateInspectionItem {
+  id: string;
+  number: string;
+  title: string;
+  auto_fill: boolean;
+}
+
+/** “下一步”前的投标模版核对：added 为模版缺少的章节，changed 为填写方式已变化的章节。 */
+export interface BidTemplateInspection {
+  added: BidTemplateInspectionItem[];
+  changed: BidTemplateInspectionItem[];
+}
+
 /** 用户确认的填写项值，空值不提交。 */
 export interface BusinessFillReviewValue {
   key: string;
@@ -491,6 +505,7 @@ export interface TechnicalPlanState {
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
   outlineAdjustmentTask?: BackgroundTaskState;
+  bidTemplateExtractionTask?: BackgroundTaskState;
   globalFactsMode: GlobalFactsMode;
   globalFactsTask?: BackgroundTaskState;
   globalFactsAdjustmentTask?: BackgroundTaskState;
