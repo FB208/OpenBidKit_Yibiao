@@ -14,6 +14,8 @@ const SELECTION_ONLY_FIELDS = ['source', 'post_award'];
 const TITLE_CHECK_UNIT_COUNT = 3;
 const EXCERPT_CHARS = 60;
 const BUSINESS_DEFAULT_CONTENT_MODES = new Set(['template-fill', 'directory-generate', 'manual-fill']);
+// 投标文件目录的判断口径，生成和调整目录的提示词共用。
+const DIRECTORY_GENERATE_RULE = '“目录”（attr=目录、content_mode=directory-generate）只指投标文件自身的目录页：列出本文件各章节标题和页码，导出时按实际页码自动生成，全目录最多一个。标题带“目录”“检索”“页码”“清单”等字样、但行内容由招标文件规定的表格（如评分因素页码检索表、资料清单）不是目录，按格式填写。';
 
 function normalizeSourcePath(value) {
   return String(value || '').trim().replace(/\\/g, '/');
@@ -133,7 +135,7 @@ ${structureDescriptions.map((item) => `- ${item}`).join('\n')}
 字段要求：
 1. 顶层必须是对象，包含 basis、format_scope 和 outline。所有节点 id 填 null，程序接收后分配唯一 ID；数组顺序表示目录顺序；number 由程序计算，不要用编号充当 ID。
 2. 一级目录必须填写 attr，子目录不填写 attr。attr 从“通用”“商务/资信”“技术”“其他”“目录”“报价”“业绩”中选择。
-3. 叶子节点填写 content_mode，父节点只包含 children，不包含 content_mode 或 content_mode_note。一级目录叶子：attr=商务/资信或业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时必须使用 manual-fill。子目录叶子按内容判断：按格式填写的文件使用 template-fill，投标文件目录使用 directory-generate，报价使用 manual-fill。全目录最多一个 directory-generate 叶子（投标文件目录，导出时按实际页码自动生成）。需要投标人自行编写方案正文的条目使用 ai-generate（一级目录的 attr 选“技术”）。无法归类的使用 other，并在 content_mode_note 说明原因。
+3. 叶子节点填写 content_mode，父节点只包含 children，不包含 content_mode 或 content_mode_note。一级目录叶子：attr=商务/资信或业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时必须使用 manual-fill。子目录叶子按内容判断：按格式填写的文件使用 template-fill，投标文件目录使用 directory-generate，报价使用 manual-fill。${DIRECTORY_GENERATE_RULE}需要投标人自行编写方案正文的条目使用 ai-generate（一级目录的 attr 选“技术”）。无法归类的使用 other，并在 content_mode_note 说明原因。
 4. description 简要说明该文件的用途。
 5. 结构示例（只示意字段，标题、层级和数量以原文为准）：{"basis":"${FORMAT_TEMPLATE_BASIS}","format_scope":[{"start":120,"end":480}],"outline":[{"id":null,"title":"原文条目标题","description":"用途说明","attr":"商务/资信","content_mode":"template-fill","source":{"start":121,"end":160}},{"id":null,"title":"原文条目标题","description":"用途说明","attr":"商务/资信","source":{"start":160,"end":240},"children":[{"id":null,"title":"原文子条目标题","description":"用途说明","content_mode":"template-fill","source":{"start":161,"end":200}},{"id":null,"title":"原文子条目标题","description":"用途说明","content_mode":"template-fill","source":{"start":200,"end":240}}]}]}
 6. ${outputFile} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。程序已预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序会校验结构，并逐项核对 source 位置与原文标题，不通过会退回问题清单继续修复。`;
@@ -301,6 +303,7 @@ function collectTemplateItems(items) {
 }
 
 module.exports = {
+  DIRECTORY_GENERATE_RULE,
   FORMAT_TEMPLATE_BASIS,
   RESPONSE_REQUIREMENTS_BASIS,
   OUTLINE_BASES,
