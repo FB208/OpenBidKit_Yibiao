@@ -1502,9 +1502,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const globalFacts = Array.isArray(storedPlan.globalFacts) ? storedPlan.globalFacts : [];
   const globalFactsText = formatGlobalFactsForPrompt(globalFacts);
   const globalFactsMode = normalizeGlobalFactsMode(storedPlan.globalFactsMode);
-  if (!globalFactsText || storedPlan.globalFactsTask?.status !== 'success') {
-    throw new Error('请先完成全局事实设定，再生成正文');
-  }
   const globalFactTitlesText = formatGlobalFactTitlesForPrompt(globalFacts);
   const bidAnalysisFactsText = formatBidAnalysisFactsForPrompt(storedPlan);
   const hasOriginalPlan = Boolean(storedPlan.originalPlanFile?.markdownPath);
@@ -1554,6 +1551,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
   // 没有 AI 小节时不启动正文主 Agent，只执行商务模版填写。
   const businessOnly = !leaves.length;
+  // 全局事实只服务 AI 正文的统一口径；没有 AI 小节时不检查，商务填写也不使用。
+  if (!businessOnly && (!globalFactsText || storedPlan.globalFactsTask?.status !== 'success')) {
+    throw new Error('请先完成全局事实设定，再生成正文');
+  }
   const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
   const generationOptions = retryFailedSections
     ? storedPlan.contentGenerationOptions || {}
@@ -2132,7 +2133,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     });
     businessFlow = runBusinessTemplateFill({
       agentService, workspaceStore, credentialLibraryService, openXmlHelperService,
-      inputs: { bidKeyInfoText: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText), globalFactsText },
+      inputs: { bidKeyInfoText: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText), globalFactsText: businessOnly ? '' : globalFactsText },
       state,
       primarySession: businessOnly,
       signal: AbortSignal.any([taskControl.signal, controller.signal]),

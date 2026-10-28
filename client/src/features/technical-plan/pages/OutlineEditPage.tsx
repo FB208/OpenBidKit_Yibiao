@@ -380,7 +380,7 @@ function OutlineEditPage({
       showToast('请先完成必填招标文件解析项', 'info');
       return;
     }
-    if (technicalScoreMissing && !noTechnicalScoreMode) {
+    if (technicalScoreMissing && !noTechnicalScoreMode && outlineMode !== 'standalone-business') {
       setNoScoreConfirmationOpen(true);
       return;
     }

@@ -67,6 +67,12 @@ function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
 }
 
+// 全局事实只服务 AI 正文的统一口径；目录已生成但没有 AI 小节时跳过该步骤。
+function shouldSkipGlobalFacts(outlineData: OutlineData | null | undefined) {
+  return Boolean(outlineData?.outline?.length)
+    && !collectLeafItems(outlineData?.outline || []).some((item) => item.content_mode === 'ai-generate');
+}
+
 function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: OutlineWordControlOptions) {
   if (options.minimumWords === 0 && options.maximumWords === 0) return false;
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
@@ -198,7 +204,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const bidTemplateMismatchResolverRef = useRef<((choice: BidTemplateMismatchChoice) => void) | null>(null);
   const shownWordControlWarningTaskIdsRef = useRef(new Set<string>());
-  const steps = technicalPlanSteps;
+  const skipGlobalFacts = shouldSkipGlobalFacts(state.outlineData);
+  const steps = skipGlobalFacts ? technicalPlanSteps.filter((step) => step !== 'global-facts') : technicalPlanSteps;
   const activeIndex = Math.max(0, steps.indexOf(state.step));
   const activeStepNumber = String(activeIndex + 1).padStart(2, '0');
   const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
@@ -371,6 +378,15 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     void window.yibiao?.ui?.setCurrentView({ section: 'technical-plan', step: state.step });
   }, [hydrated, state.originalPlanFile, state.step]);
 
+  // 停在已跳过的全局事实步骤时退回目录生成，避免步骤序号和上一步、下一步错位。
+  useEffect(() => {
+    if (!hydrated || !skipGlobalFacts || state.step !== 'global-facts') return;
+    setState((prev) => ({ ...prev, step: 'outline-generation' }));
+    window.yibiao?.technicalPlan.updateStep('outline-generation').catch((error) => {
+      showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
+    });
+  }, [hydrated, setState, showToast, skipGlobalFacts, state.step]);
+
   useEffect(() => {
     if (!hydrated || wordControlWarningDialog) return;
     const currentStepTask = state.step === 'outline-generation'
@@ -415,7 +431,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       return;
     }
 
-    if (state.step === 'outline-generation' && step === 'global-facts') {
+    let targetStep = step;
+    // 从目录生成进入下一步前核对最新目录，并按其是否有 AI 小节决定进入全局事实还是生成正文。
+    if (state.step === 'outline-generation' && (step === 'global-facts' || step === 'content-edit')) {
       const latestState = await window.yibiao!.technicalPlan.loadState();
       setState((prev) => ({ ...prev, ...latestState }));
       const finalOutlineData = latestState.outlineData;
@@ -443,6 +461,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           return;
         }
       }
+      targetStep = shouldSkipGlobalFacts(finalOutlineData) ? 'content-edit' : 'global-facts';
     }
 
     // 进入生成设置时决定落在哪个页签：默认第一项，从后一步退回时落在最后一项。
@@ -450,8 +469,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       setGenerationSettingsTab(options?.generationSettingsTab ?? 'content');
     }
 
-    setState((prev) => ({ ...prev, step }));
-    window.yibiao?.technicalPlan.updateStep(step).catch((error) => {
+    setState((prev) => ({ ...prev, step: targetStep }));
+    window.yibiao?.technicalPlan.updateStep(targetStep).catch((error) => {
       showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
     });
   };

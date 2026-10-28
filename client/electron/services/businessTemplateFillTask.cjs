@@ -297,11 +297,12 @@ function buildBusinessTemplateFillFiles({ units, credentialLibrary, tenderMarkdo
     { path: CREDENTIAL_INPUT_FILE, content: `${JSON.stringify(buildCredentialLibraryInput(credentialLibrary), null, 2)}\n` },
     { path: TENDER_INPUT_FILE, content: `${textOf(tenderMarkdown) || '未提供'}\n` },
     { path: BID_INFO_INPUT_FILE, content: `${textOf(bidKeyInfoText) || '未提供'}\n` },
-    { path: GLOBAL_FACTS_INPUT_FILE, content: `${textOf(globalFactsText) || '未提供'}\n` },
+    // 目录没有 AI 小节时不设全局事实，只按招标文件和招标关键信息填写。
+    ...(textOf(globalFactsText) ? [{ path: GLOBAL_FACTS_INPUT_FILE, content: `${textOf(globalFactsText)}\n` }] : []),
   ];
 }
 
-function createBusinessTemplateFillPrompt({ resume = false } = {}) {
+function createBusinessTemplateFillPrompt({ resume = false, hasGlobalFacts = false } = {}) {
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。${resume ? '这是之前中断任务的继续：先检查已有的结果文件，保留有效内容，只补齐或修正未完成部分。' : ''}
 
 任务：为投标文件商务模版的待填字段取值，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
@@ -310,14 +311,14 @@ function createBusinessTemplateFillPrompt({ resume = false } = {}) {
 - ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=attachment 为附件图片。subject 是该字段所描述的对象（要填写谁或什么的信息），section 是字段或表格所在的章节和表格标题。
 - ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料；企业图片和各条记录下的“图片”列出可用图片的 id、栏目和名称。
 - ${TENDER_INPUT_FILE}：当前标段的招标文件全文。
-- ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。
-- ${GLOBAL_FACTS_INPUT_FILE}：本次投标已确定的全局事实。
+- ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。${hasGlobalFacts ? `
+- ${GLOBAL_FACTS_INPUT_FILE}：本次投标已确定的全局事实。` : ''}
 
 取值规则（先按 subject 确定应填写哪个对象的信息，名称不足以判断时结合 section 和招标文件中该位置的上下文判断）：
 1. 企业信息（名称、统一社会信用代码、法定代表人、地址、电话、开户行、账号等）只取资信库，原样使用，不改写。
-2. 人员、证书、业绩只能选资信库中的真实记录，按招标文件的资格和评分要求选最匹配的。全局事实已指定的人员在资信库中存在时必须选同一人；不在资信库中时，相关字段列入 unresolved 并说明原因。
+2. 人员、证书、业绩只能选资信库中的真实记录，按招标文件的资格和评分要求选最匹配的。${hasGlobalFacts ? '全局事实已指定的人员在资信库中存在时必须选同一人；不在资信库中时，相关字段列入 unresolved 并说明原因。' : ''}
 3. tables 中同一行各列取自同一条记录，不同行取不同记录。只把有真实记录的行写入 rows，从该表格 rows 列出的第一行起按顺序连续使用；记录用完后剩余的行不要写入 rows 或 unresolved，程序会把它们留空。已使用的行中个别列没有依据时，按单元格列入 unresolved（写 table_id、row、name 和 reason）。一条可用记录都没有时，只把该表格的第一行整行列入 unresolved（只写 table_id、row 和 reason）。序号类列按行顺序填写。
-4. 项目信息（项目名称、项目编号、招标人、工期或服务期、质量标准、投标有效期等）以全局事实为准，全局事实未提及时取招标文件原文。
+4. 项目信息（项目名称、项目编号、招标人、工期或服务期、质量标准、投标有效期等）${hasGlobalFacts ? '以全局事实为准，全局事实未提及时取招标文件原文。' : `取招标文件原文和${BID_INFO_INPUT_FILE}。`}
 5. 勾选项只能从 options 中原样选择，可以多选；没有依据时列入 unresolved。
 6. 附件用 image_id 从资信库图片中选择一张：按栏目和所属记录匹配材料，人员、证书、业绩相关附件必须属于已选用的同一人员、证书或业绩记录；同一张图片可用于多处；没有匹配的图片时列入 unresolved。
 7. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。
@@ -756,7 +757,7 @@ async function runBusinessTemplateFill({
           title: '商务模版填写 Agent',
           primary_session: primarySession,
           summary_enabled: false,
-          prompt: prompted ? CONTINUE_PROMPT : createBusinessTemplateFillPrompt({ resume: resumeSession }),
+          prompt: prompted ? CONTINUE_PROMPT : createBusinessTemplateFillPrompt({ resume: resumeSession, hasGlobalFacts: Boolean(textOf(inputs.globalFactsText)) }),
           output_file: FILL_OUTPUT_FILE,
           prepare_output_files: [FILL_OUTPUT_FILE],
           // 输入只在新会话写入；继续时沿用工作区已有快照。

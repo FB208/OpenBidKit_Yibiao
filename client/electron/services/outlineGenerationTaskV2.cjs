@@ -1003,14 +1003,15 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   if (technicalScoreTask?.status !== 'success' || !technicalScoreContent) {
     throw new Error('请先完成技术评分要求解析，再生成目录');
   }
-  const technicalScoreMissing = isMissingTechnicalScoreItems(technicalScoreContent);
-  if (technicalScoreMissing && payload?.no_technical_score_mode !== true) {
-    throw new Error('请先确认是否以无技术评分项模式生成目录');
-  }
-  const noTechnicalScoreMode = technicalScoreMissing;
   const outlineMode = ['response-file', 'standalone-technical', 'standalone-business'].includes(payload?.outline_mode)
     ? payload.outline_mode
     : storedPlan.outlineMode;
+  const technicalScoreMissing = isMissingTechnicalScoreItems(technicalScoreContent);
+  // 商务标独立成册通常不带技术评分项，不需要用户确认，直接按无技术评分项模式处理。
+  if (technicalScoreMissing && outlineMode !== 'standalone-business' && payload?.no_technical_score_mode !== true) {
+    throw new Error('请先确认是否以无技术评分项模式生成目录');
+  }
+  const noTechnicalScoreMode = technicalScoreMissing;
   const standaloneTechnical = outlineMode === 'standalone-technical';
   // 技术文件独立成册按技术评分项生成一级目录；完整投标文件和商务标独立成册按招标文件格式章节提取。
   const formatExtraction = !standaloneTechnical;

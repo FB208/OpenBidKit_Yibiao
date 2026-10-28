@@ -346,7 +346,7 @@ function ContentEditPage({
     ? `失败原因：${businessFill.error || '未知错误'}`
     : businessFill?.phase === 'completed' && businessFill.unresolved.length
       ? `无法确定的字段：\n${businessFill.unresolved.map((item) => `${item.label}：${item.reason}`).join('\n')}`
-      : '商务模版的 AI 字段和附件由副 Agent 结合资信库、招标文件和全局事实填写，确认后回填 Word；签字和盖章保留人工处理。';
+      : `商务模版的 AI 字段和附件由副 Agent 结合资信库、招标文件${leaves.length ? '和全局事实' : ''}填写，确认后回填 Word；签字和盖章保留人工处理。`;
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   // 单轮审计：先并发核对各小节事实，再由主 Agent 跨节比对并统一修复。
@@ -468,7 +468,7 @@ function ContentEditPage({
             ? '商务模版填写已暂停，可点击继续。'
             : running
               ? latestTaskLog || '商务模版填写中。'
-              : '当前目录没有 AI 生成小节，点击“填写商务模版”后将结合资信库、招标文件和全局事实填写商务模版。',
+              : '当前目录没有 AI 生成小节，点击“填写商务模版”后将结合资信库和招标文件填写商务模版。',
   } : null;
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   useEffect(() => {
