@@ -10,8 +10,10 @@ const {
   normalizeReferenceDocumentIds,
   validateGlobalFactsResponse,
 } = require('./globalFactsTask.cjs');
+const { buildCredentialLibraryInput } = require('./businessTemplateFillTask.cjs');
 
 const GLOBAL_FACTS_OUTPUT_FILE = 'global-facts.json';
+const CREDENTIAL_FACTS_FILE = '资信库.json';
 
 const GLOBAL_FACTS_JSON_SCHEMA = {
   type: 'object',
@@ -165,7 +167,26 @@ function formatKnowledgeItemFile(item) {
   return `# ${title}\n\n简介：${resume}\n\n${content}`.trim();
 }
 
-function buildFileCatalog({ tenderPaths, isWorkingCopy, hasSectionHint, knowledgeCount, hasOriginalPlan }) {
+// 只取正文可能统一引用的资信库事实；证件号、联系方式、财务信息和图片不进入全局事实，也就不会进入正文提示词。
+const CREDENTIAL_FACT_FIELDS = {
+  基本信息: ['公司名称', '法定代表人', '地址', '所在行业', '公司性质', '注册资本', '经营范围', '公司介绍'],
+  资质: ['名称', '编号', '有效期'],
+  员工: ['姓名', '职务', '职称', '学历', '专业', '人员简介'],
+  业绩: ['项目名称', '客户名称', '项目类型', '项目负责人', '合同金额', '开始日期', '结束日期', '项目介绍'],
+};
+
+/** 按类别整理资信库，只保留有内容的类别；全部为空时返回空对象，提示词不提资信库。 */
+function buildCredentialFacts(snapshot) {
+  const input = buildCredentialLibraryInput(snapshot);
+  const pick = (record, fields) => Object.fromEntries(fields.filter(field => record?.[field]).map(field => [field, record[field]]));
+  return Object.fromEntries(Object.entries(CREDENTIAL_FACT_FIELDS)
+    .map(([section, fields]) => [section, Array.isArray(input[section])
+      ? input[section].map(record => pick(record, fields)).filter(record => Object.keys(record).length)
+      : pick(input[section], fields)])
+    .filter(([, value]) => Object.keys(value).length));
+}
+
+function buildFileCatalog({ tenderPaths, isWorkingCopy, hasSectionHint, knowledgeCount, hasOriginalPlan, credentialSections }) {
   const lines = [];
   if (tenderPaths.length) {
     const listed = tenderPaths.join('、');
@@ -188,11 +209,14 @@ function buildFileCatalog({ tenderPaths, isWorkingCopy, hasSectionHint, knowledg
   if (hasOriginalPlan) {
     lines.push('- 原方案.md：用户上传的优化扩写底稿，补充已有大项的具体内容。');
   }
+  if (credentialSections.length) {
+    lines.push(`- ${CREDENTIAL_FACTS_FILE}：投标人资信库中的${credentialSections.join('、')}，用于确定投标人自身的事实。`);
+  }
   lines.push('- 材料说明.md：本次实际提供的文件清单，与上述用途一致。');
   return lines.join('\n');
 }
 
-function buildWorkPrinciples({ hasKnowledge, hasOriginalPlan }) {
+function buildWorkPrinciples({ hasKnowledge, hasOriginalPlan, credentialSections }) {
   const supplementNames = [
     hasKnowledge ? '知识库' : '',
     hasOriginalPlan ? '原方案' : '',
@@ -213,7 +237,7 @@ function buildWorkPrinciples({ hasKnowledge, hasOriginalPlan }) {
   }
   principles.push(`${next}. 全局事实不是招标要求摘录、评分规则或待办清单，而是正文要统一采用的方案事实、响应设定、承诺口径或执行安排。材料给出的是要求或约束时，不要原样摘录要求句，应转写为本方案统一口径。`);
   next += 1;
-  principles.push(`${next}. 每条 content 只写简体中文短 bullet，回答“后续正文遇到这个事项时统一写什么”。不写分析过程、来源说明、风险提示、正文草稿、商务报价或资格材料。`);
+  principles.push(`${next}. 每条 content 只写简体中文短 bullet，回答“后续正文遇到这个事项时统一写什么”。不写分析过程、来源说明、风险提示、正文草稿、商务报价或资格材料。${credentialSections.length ? `按下文规则从 ${CREDENTIAL_FACTS_FILE} 写入的投标人信息和项目人员不属于资格材料。` : ''}`);
   next += 1;
   principles.push(`${next}. 必须包含工期、运维期或交货时间中的至少一个相关变量；缺具体值时按本任务给定的写法填写，不要省略该项。`);
   next += 1;
@@ -226,10 +250,24 @@ function buildWorkPrinciples({ hasKnowledge, hasOriginalPlan }) {
     next += 1;
     principles.push(`${next}. 用原方案补充已有大项的具体内容；原方案与招标明确事实冲突时，原方案已落地的安排优先替换对应 bullet。不要仅因原方案出现新话题就新增大项。`);
   }
+  // 资信库规则只按实际存在的类别给出，不让 Agent 判断有没有、用不用。
+  if (credentialSections.includes('基本信息')) {
+    next += 1;
+    principles.push(`${next}. 投标人名称等企业事实取 ${CREDENTIAL_FACTS_FILE} 基本信息中的原值，不改写。`);
+  }
+  if (credentialSections.includes('员工')) {
+    next += 1;
+    principles.push(`${next}. 项目经理、技术负责人等项目角色，按招标文件对岗位的资格要求从 ${CREDENTIAL_FACTS_FILE} 的员工中选人，写真实姓名和职称；没有符合要求的员工时，按“缺具体值时的写法”处理。`);
+  }
+  const recordSections = ['资质', '业绩'].filter(section => credentialSections.includes(section));
+  if (recordSections.length) {
+    next += 1;
+    principles.push(`${next}. 正文需要统一引用的${recordSections.join('或')}，只用 ${CREDENTIAL_FACTS_FILE} 中的真实记录。`);
+  }
   return principles.join('\n');
 }
 
-function createGlobalFactsPrompt({ fileCatalog, hasKnowledge, hasOriginalPlan, globalFactsMode }) {
+function createGlobalFactsPrompt({ fileCatalog, hasKnowledge, hasOriginalPlan, credentialSections, globalFactsMode }) {
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。
 
 任务：整理后续技术方案正文必须统一采用的全局事实变量，写入 ${GLOBAL_FACTS_OUTPUT_FILE}。
@@ -240,7 +278,7 @@ function createGlobalFactsPrompt({ fileCatalog, hasKnowledge, hasOriginalPlan, g
 ${fileCatalog}
 
 工作原则：
-${buildWorkPrinciples({ hasKnowledge, hasOriginalPlan })}
+${buildWorkPrinciples({ hasKnowledge, hasOriginalPlan, credentialSections })}
 
 缺具体值时的写法：
 ${buildMissingValueRule(globalFactsMode)}
@@ -258,6 +296,7 @@ async function runGlobalFactsTaskV2({
   agentService,
   workspaceStore,
   knowledgeBaseService,
+  credentialLibraryService,
   updateTask,
   checkpointTask,
   taskControl,
@@ -385,6 +424,11 @@ async function runGlobalFactsTaskV2({
   if (originalPlanMarkdown) {
     files.push({ path: '原方案.md', content: originalPlanMarkdown });
   }
+  const credentialFacts = buildCredentialFacts(credentialLibraryService.load());
+  const credentialSections = Object.keys(credentialFacts);
+  if (credentialSections.length) {
+    files.push({ path: CREDENTIAL_FACTS_FILE, content: `${JSON.stringify(credentialFacts, null, 2)}\n` });
+  }
 
   const fileCatalog = buildFileCatalog({
     tenderPaths: tenderFiles.map((file) => file.path),
@@ -392,6 +436,7 @@ async function runGlobalFactsTaskV2({
     hasSectionHint: Boolean(sectionHint),
     knowledgeCount: knowledgeItems.length,
     hasOriginalPlan: Boolean(originalPlanMarkdown),
+    credentialSections,
   });
   files.push({
     path: '材料说明.md',
@@ -402,6 +447,7 @@ async function runGlobalFactsTaskV2({
     fileCatalog,
     hasKnowledge: knowledgeItems.length > 0,
     hasOriginalPlan: Boolean(originalPlanMarkdown),
+    credentialSections,
     globalFactsMode,
   });
 
