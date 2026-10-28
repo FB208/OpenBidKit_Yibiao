@@ -625,10 +625,11 @@ function collectLayoutFieldIds(blocks = [], output = new Set()) {
 }
 
 // 商务部分跟随当前目录：只取仍为非 AI 叶子的模版章节，字段按空白底稿版式的块号归属章节。
+// 目录生成叶子由整本导出生成目录，老项目已抽进模版的目录章节也不填写。
 async function loadBusinessFillScope({ workspaceStore, openXmlHelperService, signal }) {
   const template = workspaceStore.readBidTemplateFields();
   const leafIds = new Set(collectOutlineLeaves(workspaceStore.loadTechnicalPlan().outlineData?.outline)
-    .filter(({ item }) => item.content_mode !== 'ai-generate')
+    .filter(({ item }) => !['ai-generate', 'directory-generate'].includes(item.content_mode))
     .map(({ item }) => item.id));
   const layout = await readTemplateLayout({ openXmlHelperService, input: workspaceStore.getBidTemplateBlankRelativePath(), signal });
   const chapters = (template.chapters || [])
@@ -842,7 +843,8 @@ async function renderBusinessTemplate({
       else missingImages.add(field.name);
     } else if (Object.hasOwn(field, 'selected')) values.push({ id: field.id, selected: field.selected });
     else if (Object.hasOwn(field, 'blank')) values.push({ id: field.id, blank: true });
-    else if (Object.hasOwn(field, 'value')) values.push({ id: field.id, value: field.value });
+    // 纯空白文字值（AI 用空格表示留空）按留空回填，助手不接受空白文字。
+    else if (Object.hasOwn(field, 'value')) values.push(textOf(field.value) ? { id: field.id, value: field.value } : { id: field.id, blank: true });
     else if (blankSignatures && field.signature) values.push({ id: field.id, blank: true });
   }
   await openXmlHelperService.runJob({

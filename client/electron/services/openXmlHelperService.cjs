@@ -614,6 +614,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
           },
           // 整本导出并入的已填商务模版（工作区相对路径）及各章节块号。
           ...(options.businessTemplate ? { business_template: options.businessTemplate } : {}),
+          // 有目录时另存只含目录页的小文档，供复测目录页数。
+          ...(options.tocMeasure ? { toc_measure: true } : {}),
         },
         // 整本转换使用正式任务队列，避免占用样张预览队列及其两分钟时限。
         timeoutMs: options.wholeDocument ? 30 * 60 * 1000 : TEMPLATE_PREVIEW_TIMEOUT_MS,
@@ -626,6 +628,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         businessFieldIds: result.businessFieldIds || [],
         businessWarnings: result.businessWarnings || [],
         pendingMarkCount: result.pendingMarkCount || 0,
+        toc: result.toc || null,
+        tocOnlyBytes: result.toc?.tocOnly ? new Uint8Array(fs.readFileSync(path.join(result.jobDir, result.toc.tocOnly))) : null,
       };
     } finally {
       // 目录被占用时 rmSync 会抛错，计数放在内层 finally，保证任务结束后一定归还。
@@ -637,6 +641,33 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         }
         if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
           fs.rmSync(temporaryAssets, { recursive: true, force: true });
+        }
+      } finally {
+        activeJobCount -= 1;
+      }
+    }
+  }
+
+  /** 把测量得到的页码写入整本导出目录的页码域缓存值；完整文档和只含目录的小文档共用，返回新文档和未写入页码的条数。 */
+  async function fillTocPageNumbers(bytes, pageNumbers) {
+    let result;
+    activeJobCount += 1;
+    try {
+      result = await runner.runJob({
+        action: 'fill-toc-page-numbers',
+        request: { input: 'input.docx', output: 'output.docx', page_numbers: pageNumbers },
+        prepare: (jobDir) => fs.writeFileSync(path.join(jobDir, 'input.docx'), bytes),
+        timeoutMs: 10 * 60 * 1000,
+      });
+      return {
+        bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, 'output.docx'))),
+        missingCount: result.toc?.missingCount || 0,
+      };
+    } finally {
+      try {
+        if (result) {
+          const jobDir = path.resolve(result.jobDir);
+          if (path.dirname(jobDir) === path.resolve(getOpenXmlJobsDir(app))) fs.rmSync(jobDir, { recursive: true, force: true });
         }
       } finally {
         activeJobCount -= 1;
@@ -758,6 +789,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     hasActiveJobs: () => activeJobCount > 0,
     renderRestrictedHtmlDocx,
     createRestrictedHtmlDocx,
+    fillTocPageNumbers,
     createTemplateChapterDocx,
     runBlindCheck,
     runBlindCheckFix,

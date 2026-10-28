@@ -424,6 +424,12 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         showToast('当前目录缺少字数控制生效配置，请重新生成目录后再进入下一步', 'info');
         return;
       }
+      // 整本导出只在一个“目录生成”小节处生成目录。
+      const tocItems = collectLeafItems(finalOutlineData?.outline || []).filter((item) => item.content_mode === 'directory-generate');
+      if (tocItems.length > 1) {
+        showToast(`目录中有 ${tocItems.length} 个“目录生成”小节（${tocItems.map((item) => `${item.number} ${item.title}`).join('、')}），整本导出只能生成一个目录，请删除多余的小节或改为其他处理方式`, 'error');
+        return;
+      }
       if (finalOutlineData && snapshot && isOutlineLeafCountOutsideRange(finalOutlineData, snapshot)) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;

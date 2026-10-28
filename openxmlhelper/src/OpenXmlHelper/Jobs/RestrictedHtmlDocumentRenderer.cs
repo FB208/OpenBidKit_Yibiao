@@ -68,6 +68,18 @@ static class RestrictedHtmlDocumentRenderer
 
         /// <summary>整本导出正文中“【待填写”标记的处数。</summary>
         public int PendingMarkCount { get; init; }
+
+        /// <summary>整本导出生成的目录；目录生成小节不存在时为 null。</summary>
+        public TocResult? Toc { get; init; }
+    }
+
+    /// <summary>整本导出中目录的位置、标题、所在样式范围，以及分页加在哪个块上。</summary>
+    sealed class TocState(Wp.SdtBlock sdt, Wp.Paragraph title, FormatReader rangeFormat)
+    {
+        public Wp.SdtBlock Sdt { get; } = sdt;
+        public Wp.Paragraph Title { get; } = title;
+        public FormatReader RangeFormat { get; } = rangeFormat;
+        public Wp.Paragraph? StartBlock { get; set; }
     }
 
     /// <summary>整本导出中商务模版章节所在页面组的取值；其余为 true / false 表示是否套用模板页面。</summary>
@@ -138,6 +150,7 @@ static class RestrictedHtmlDocumentRenderer
         var result = new List<OpenXmlElement>();
         var blockCount = 0;
         var index = 0;
+        TocState? toc = null;
         while (index < ranges.Count)
         {
             var pageKind = ranges[index].GetAttribute("data-yb-export-page-template") ?? "false";
@@ -184,6 +197,12 @@ static class RestrictedHtmlDocumentRenderer
                 blockCount += RestrictedHtmlWordInserter.InsertIntoContent(assetRoot, mainPart, body,
                     rangeFormat.Number(rangeFormat.Section("image"), "max_width_percent", 90), prepared.Document, assets, cacheAssets: true);
                 ApplyLayoutBookmarks(body, result.Concat(pageElements).SelectMany(item => item.Descendants<Wp.BookmarkStart>()).Count());
+                // 目录先换成内容控件再格式化，页框遇到非段落块会收口，不会把目录卷进正文框表格。
+                if (TableOfContentsBuilder.ReplaceMarker(body) is { } tocSdt)
+                {
+                    if (toc is not null) throw new InvalidOperationException("整本导出只能生成一个目录");
+                    toc = new TocState(tocSdt, tocSdt.PreviousSibling() as Wp.Paragraph ?? throw new InvalidOperationException("目录缺少标题"), rangeFormat);
+                }
                 ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
                 foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
                 {
@@ -198,6 +217,7 @@ static class RestrictedHtmlDocumentRenderer
             body.AppendChild(section);
             if (!businessPage && !ChapterFrameEnabled(pageFormat)) ApplyTwoColumnHeadingSections(mainPart, body, pageFormat);
             RemoveLeadingPageBreak(body);
+            if (toc is { StartBlock: null } && ReferenceEquals(toc.Sdt.Parent, body)) PlaceTableOfContents(toc);
             // 同一页面范围内的父标题和正文连续；仅在模板页面切换时另起一页。
             if (index < ranges.Count)
             {
@@ -212,6 +232,7 @@ static class RestrictedHtmlDocumentRenderer
             }
         }
         body.Append(result);
+        var tocResult = toc is null ? null : BuildTableOfContents(mainPart, body, toc);
         // 分范围转换时图片编号从各范围起算；合成后统一文档及页眉页脚的绘图编号。
         uint drawingId = 1;
         var roots = new OpenXmlElement[] { mainPart.Document }
@@ -229,12 +250,83 @@ static class RestrictedHtmlDocumentRenderer
             BusinessFieldIds = merger?.FieldIds ?? [],
             BusinessWarnings = merger?.Warnings ?? [],
             PendingMarkCount = CountPendingMarks(body),
+            Toc = tocResult,
         };
     }
 
-    /// <summary>按段落拼接文字统计标记，标记跨 run 也能计入；文本框兼容显示与主显示重复，不计入。</summary>
+    /// <summary>
+    /// 目录单独成页：分页加在目录标题前，标题前紧挨着没有正文的父标题时加在这串父标题之前；目录之后的下一块另起一页。
+    /// 已是页面组首块时不再分页。页框模式下目录不进框，给标题补底边封口。
+    /// 目录后紧接硬分页，是 Main 复测目录页数后统一平移后续页码的前提。
+    /// </summary>
+    static void PlaceTableOfContents(TocState toc)
+    {
+        var level = HeadingLevelOf(toc.Title);
+        Wp.Paragraph start = toc.Title;
+        while (start.PreviousSibling() is Wp.Paragraph previous && HeadingLevelOf(previous) is > 0 and var parentLevel && parentLevel < level)
+        {
+            start = previous;
+            level = parentLevel;
+        }
+        if (!ReferenceEquals(start, toc.Title)) toc.Title.ParagraphProperties?.RemoveAllChildren<Wp.PageBreakBefore>();
+        if (start.PreviousSibling() is not null) EnsureParagraphProperties(start).PageBreakBefore = new Wp.PageBreakBefore();
+        toc.StartBlock = start;
+
+        var next = toc.Sdt.NextSibling();
+        // 双栏时一级标题前插入的连续分节空段不承载内容，分页加在其后的标题上。
+        while (next is Wp.Paragraph { ParagraphProperties.SectionProperties: not null } breakParagraph
+            && string.IsNullOrWhiteSpace(breakParagraph.InnerText)
+            && breakParagraph.ParagraphProperties.SectionProperties.GetFirstChild<Wp.SectionType>()?.Val?.Value == Wp.SectionMarkValues.Continuous)
+        {
+            next = next.NextSibling();
+        }
+        if (next is Wp.Paragraph paragraph) EnsureParagraphProperties(paragraph).PageBreakBefore = new Wp.PageBreakBefore();
+        else if (next is Wp.Table table)
+        {
+            table.InsertBeforeSelf(new Wp.Paragraph(new Wp.ParagraphProperties(
+                new Wp.PageBreakBefore(),
+                new Wp.SpacingBetweenLines { Before = "0", After = "0", Line = "20", LineRule = Wp.LineSpacingRuleValues.Exact })));
+        }
+
+        var border = toc.RangeFormat.Section("heading_border");
+        if (ChapterFrameEnabled(toc.RangeFormat)
+            && toc.RangeFormat.Bool(border, "include_headings", true)
+            && !toc.RangeFormat.Bool(border, "heading_bottom_border_enabled", false))
+        {
+            SetSingleChild(EnsureParagraphProperties(toc.Title), CreateChapterFrameBorders(
+                Color(toc.RangeFormat.Text(border, "border_color", "#cfd8ee"), "CFD8EE"),
+                topLine: true,
+                bottomLine: true,
+                topLineSpacePt: (uint)Math.Max(0, Math.Round(toc.RangeFormat.Number(border, "heading_top_border_space_pt", ChapterFrameLineSpacePt))),
+                bottomLineSpacePt: (uint)Math.Max(0, Math.Round(toc.RangeFormat.Number(border, "heading_bottom_border_space_pt", ChapterFrameLineSpacePt)))));
+        }
+    }
+
+    /// <summary>目录条目跟随目录所在样式范围的正文字体、字号和行距，段前段后为 0，每级缩进 2 字符。</summary>
+    static TocResult BuildTableOfContents(MainDocumentPart mainPart, Wp.Body body, TocState toc)
+    {
+        var format = toc.RangeFormat;
+        var text = format.Section("body_text");
+        var halfPoints = FontHalfPoints(format.Text(text, "size", "小四"));
+        var spacing = CreateBodySpacing(format);
+        spacing.BeforeLines = null;
+        spacing.AfterLines = null;
+        spacing.Before = "0";
+        spacing.After = "0";
+        return TableOfContentsBuilder.Build(
+            mainPart,
+            body,
+            toc.Sdt,
+            toc.Title,
+            HeadingLevelOf(toc.Title),
+            toc.StartBlock ?? toc.Title,
+            new TocStyleSpec(format.Text(text, "font", "宋体"), halfPoints, spacing, CharsToTwips(2, halfPoints)));
+    }
+
+    /// <summary>按段落拼接文字统计标记，标记跨 run 也能计入；文本框兼容显示与主显示重复，不计入；目录条目抄录标题，不重复计入。</summary>
     static int CountPendingMarks(Wp.Body body) => body.Descendants<Wp.Text>()
         .Where(text => !text.Ancestors<AlternateContentFallback>().Any())
+        .Where(text => !text.Ancestors<Wp.SdtBlock>().Any(TableOfContentsBuilder.IsToc))
         .GroupBy(text => text.Ancestors<Wp.Paragraph>().FirstOrDefault())
         .Sum(group =>
         {

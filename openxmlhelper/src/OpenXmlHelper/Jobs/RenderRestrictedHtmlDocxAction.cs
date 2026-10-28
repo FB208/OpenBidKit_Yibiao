@@ -32,6 +32,10 @@ sealed class RenderRestrictedHtmlDocxRequest
     /// <summary>整本导出并入的商务模版；仅 whole_document 时使用。</summary>
     [JsonPropertyName("business_template")]
     public BusinessTemplateRequest? BusinessTemplate { get; set; }
+
+    /// <summary>整本导出有目录时另存只含目录页的小文档，供 Main 复测目录页数。</summary>
+    [JsonPropertyName("toc_measure")]
+    public bool TocMeasure { get; set; }
 }
 
 /// <summary>已填写的商务模版副本，以及字段清单中各章节在模版正文中的顶层块范围。</summary>
@@ -45,6 +49,7 @@ sealed class BusinessTemplateRequest
 static class RenderRestrictedHtmlDocxAction
 {
     public const string Name = "render-restricted-html-docx";
+    public const string TocOnlyFileName = "toc-only.docx";
 
     /// <summary>读取任务参数，在当前任务目录中生成 docx。</summary>
     public static JobResult Execute(string workspace, string jobId)
@@ -108,6 +113,15 @@ static class RenderRestrictedHtmlDocxAction
             {
                 result.BusinessFieldIds = rendered.BusinessFieldIds;
                 result.BusinessWarnings = rendered.BusinessWarnings;
+            }
+            if (rendered.Toc is { } toc)
+            {
+                result.Toc = new TocJobResult { Entries = toc.Entries, StartBlock = toc.StartBlock, EndBlock = toc.EndBlock };
+                if (request.TocMeasure)
+                {
+                    TableOfContentsBuilder.WriteTocOnly(outputPath, Path.Combine(jobDirectory, TocOnlyFileName), toc.StartBlock, toc.EndBlock);
+                    result.Toc.TocOnly = TocOnlyFileName;
+                }
             }
             return result;
         }

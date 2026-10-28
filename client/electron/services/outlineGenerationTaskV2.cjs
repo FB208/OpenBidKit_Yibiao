@@ -806,7 +806,7 @@ ${createOutputFileRequirements('children_generation')}
 2. 用户已确认的目录（含子目录）的数量、顺序、层级、id、title、description 和一级目录的 attr 必须保持不变；未扩展的已确认叶子还必须保留原 content_mode。
 3. ${originalOnly ? ORIGINAL_ONLY_DIRECTORY_RULE : '优先采用资料中的明确要求，并根据项目类型、实施内容和专业逻辑组织技术方案目录；资料不足时可以用专业经验补充通用、合理的章节，但不得编造具体项目事实、参数、业绩或承诺。'}
 4. ${leafInstruction}目录质量优先于机械凑数。
-5. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
+5. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate（全目录最多一个，导出时按实际页码自动生成）；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
 6. 目录最多六级，已有节点保留 id，新节点 id 填 null；number 是程序计算的显示编号。AI 扩展的目录尽量避免只有一个子节点的冗余层级。
 7. title 只写正式、专业的纯标题，不包含章节编号或 Markdown 标记；避免重复、近义和空泛目录。
 8. 程序已为 ${OUTLINE_OUTPUT_FILE} 预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序统一校验，不通过会退回问题清单继续修复。`;
@@ -889,7 +889,7 @@ ${createOutputFileRequirements('children_generation')}
 8. 不是挂载节点的已确认目录保持原样，不得增加子目录。
 9. 如果存在参考知识库或原方案，只能用于完善评分项对应节点的下级结构，不得改变评分项映射或引入未经批准的同层级大项。
 10. ${leafInstruction}${LEAF_ALLOCATION_FILE} 中 allocations 使用 node_id 指向技术分支挂载节点的稳定 ID。${standaloneLeafInstruction}评分项完整对应和目录质量优先于数量目标。
-11. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
+11. 每个最终叶子节点必须填写 content_mode：技术方案正文为 ai-generate；商务/资信和业绩材料为 template-fill；投标文件目录为 directory-generate（全目录最多一个，导出时按实际页码自动生成）；报价为 manual-fill；其他特殊内容为 other，并用 content_mode_note 说明。父节点不得包含 content_mode 或 content_mode_note。
 12. AI 扩展的目录尽量避免只有一个子节点的冗余层级。
 13. 目录层级可变，但最多六级；一级目录包含 attr，子目录不包含 attr。已有节点必须原样保留 id，新节点 id 填 null；数组顺序决定排序，number 由程序计算，不得把编号填入 id。
 14. title 只写纯标题，不包含章节编号或 Markdown 标记。

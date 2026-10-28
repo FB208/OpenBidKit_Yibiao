@@ -50,6 +50,7 @@ sealed class JobRunner
             SliceTemplateChapterAction.Name => SliceTemplateChapterAction.Execute(_workspace, jobId),
             InsertBodyHtmlAction.Name => InsertBodyHtmlAction.Execute(_workspace, jobId),
             RenderRestrictedHtmlDocxAction.Name => RenderRestrictedHtmlDocxAction.Execute(_workspace, jobId),
+            FillTocPageNumbersAction.Name => FillTocPageNumbersAction.Execute(_workspace, jobId),
             BlindCheck.BlindCheckInspectAction.Name => BlindCheck.BlindCheckInspectAction.Execute(_workspace, jobId),
             BlindCheck.Fix.BlindCheckFixAction.Name => BlindCheck.Fix.BlindCheckFixAction.Execute(_workspace, jobId),
             BlindCheck.Review.BlindCheckDumpAction.Name => BlindCheck.Review.BlindCheckDumpAction.Execute(_workspace, jobId),

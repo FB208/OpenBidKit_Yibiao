@@ -380,21 +380,29 @@ sealed class BusinessTemplateMerger : IDisposable
         }
     }
 
-    /// <summary>在章节开头几段中找与目录标题最接近的段落写入大纲级别，找不到时用第一个非空段落。</summary>
+    /// <summary>
+    /// 在章节开头几段中找与目录标题最接近的段落写入大纲级别，找不到时用第一个非空段落。
+    /// 其余段落（含表格、文本框内）一律写正文文本级别，模版自带的标题样式不进入导航窗格和整本目录。
+    /// </summary>
     static void MarkOutlineLevel(Wp.Body container, string title, int level)
     {
         var candidates = container.Elements<Wp.Paragraph>()
             .Where(paragraph => WordWorkspace.Normalize(paragraph.InnerText ?? "").Length > 0)
             .Take(TitleCheckParagraphCount)
             .ToList();
-        if (candidates.Count == 0) return;
-        var target = candidates
+        var target = candidates.Count == 0 ? null : candidates
             .Select((paragraph, index) => (Paragraph: paragraph, Index: index, Score: ExtractChaptersAction.ScoreTitle(title, WordWorkspace.CreateBlock(paragraph, "", "", index))))
             .Where(item => item.Score >= TitleMatchScore)
             .OrderByDescending(item => item.Score)
             .ThenBy(item => item.Index)
             .Select(item => item.Paragraph)
             .FirstOrDefault() ?? candidates[0];
-        (target.ParagraphProperties ??= new Wp.ParagraphProperties()).OutlineLevel = new Wp.OutlineLevel { Val = Math.Clamp(level, 1, 9) - 1 };
+        foreach (var paragraph in container.Descendants<Wp.Paragraph>())
+        {
+            (paragraph.ParagraphProperties ??= new Wp.ParagraphProperties()).OutlineLevel = new Wp.OutlineLevel
+            {
+                Val = ReferenceEquals(paragraph, target) ? Math.Clamp(level, 1, 9) - 1 : 9,
+            };
+        }
     }
 }

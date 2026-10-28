@@ -5,6 +5,7 @@ const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.
 const { countPendingUnits, renderBusinessTemplateForExport } = require('./businessTemplateFillTask.cjs');
 const { collectOutlineExportEntries, formatPendingMark, getPendingContentModeMessage } = require('./exportService.cjs');
 const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
+const { fillTableOfContents } = require('./technicalPlanToc.cjs');
 
 /** 转义程序插入的项目名、目录标题和占位提示。 */
 function escapeHtml(text) {
@@ -44,6 +45,7 @@ function aiSectionFile(item) {
 /**
  * 整本导出读取当前产物，检查问题交给现有正文任务修复。
  * 非 AI 叶子按节点 ID 并入商务模版中对应的章节，章节按模版原样导出；没有对应章节时保留占位提示。
+ * 目录生成小节不并入模版，每次导出在该处生成 Word 目录并按测量页码回填。
  */
 function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService, startContentGeneration }) {
   return {
@@ -97,8 +99,11 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         .filter(chapter => chapter.id)
         .map(chapter => [chapter.id, chapter]));
       const businessIds = new Set(entries
-        .filter(({ item }) => !item.children?.length && item.content_mode !== 'ai-generate' && templateChapters.has(item.id))
+        .filter(({ item }) => !item.children?.length && !['ai-generate', 'directory-generate'].includes(item.content_mode) && templateChapters.has(item.id))
         .map(({ item }) => item.id));
+      // 目录在第一个目录生成小节处按实际页码生成；目录页只允许一个，老项目多出的保留待填写提示。
+      const tocItems = entries.filter(({ item }) => !item.children?.length && item.content_mode === 'directory-generate').map(({ item }) => item);
+      const tocId = tocItems[0]?.id;
       // 页面归属：模版章节单独成组并使用模版页面；父目录跟随首个子目录，避免孤立标题页。
       const pageKinds = new Array(entries.length);
       for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -110,6 +115,9 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       const ranges = [];
       const layoutSources = [];
       const warnings = [];
+      const tocNotes = tocItems.length > 1
+        ? [`目录中有 ${tocItems.length} 个“目录生成”小节，只在“${tocItems[0].number} ${tocItems[0].title}”生成目录，其余保留待填写提示，请删除多余小节`]
+        : [];
       let skippedCount = 0;
       // 图片引用所属小节及各小节无法导出的图片原因，转换结束后按小节汇总提示。
       const imageSections = new Map();
@@ -168,6 +176,9 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
                 body = section.body;
                 recordImages(label, section.$('img').map((_i, img) => section.$(img).attr('data-yb-asset-ref')).get());
               }
+            } else if (item.id === tocId) {
+              // 转换器把标记段落换成 Word 目录。
+              body = '<p>YIBIAOTOC</p>';
             } else {
               const message = getPendingContentModeMessage(item);
               body = message ? `<p><em>${escapeHtml(formatPendingMark(message))}</em></p>` : '';
@@ -194,12 +205,23 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       let result;
       try {
         result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
-          assetRoot: snapshot.workspaceDir, copyAssets: true, wholeDocument: true,
+          assetRoot: snapshot.workspaceDir, copyAssets: true, wholeDocument: true, tocMeasure: !layoutCheck,
           ...(business ? { businessTemplate: { input: business.input, chapters: [...businessIds].map(id => templateChapters.get(id)) } } : {}),
         });
       } finally {
         business?.cleanup();
       }
+      // 格式自检只看版面，目录保留等宽占位，不测量页码。
+      let bytes = result.bytes;
+      if (!layoutCheck && result.toc?.entries?.length) {
+        const filled = await fillTableOfContents({
+          bytes, toc: result.toc, tocOnlyBytes: result.tocOnlyBytes, openXmlHelperService, developerLogger,
+          onProgress: (progress, message) => onProgress?.({ phase: 'running', progress, message, warnings: [], ...stats }),
+        });
+        bytes = filled.bytes;
+        tocNotes.push(...filled.notes);
+      }
+      warnings.push(...tocNotes);
       for (const { assetRef, reason } of result.imageWarnings) {
         for (const label of imageSections.get(assetRef)) recordImageFailure(label, reason);
       }
@@ -221,10 +243,11 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       const pendingNote = result.pendingMarkCount ? `文档中共有 ${result.pendingMarkCount} 处“待填写”，可在 Word 中搜索后逐项处理` : '';
       if (pendingNote) warnings.push(pendingNote);
       return {
-        buffer: Buffer.from(result.bytes), warnings, stats,
+        buffer: Buffer.from(bytes), warnings, stats,
         ...(warnings.length ? { message: `Word 已导出，${[
           skippedCount ? `其中 ${skippedCount} 个 AI 小节未完成，仅保留标题，请完成后重新导出` : '',
           failedImageCount ? `${failedImageCount} 张图片无法导出，已在原位置用文字标出，请打开文档核对` : '',
+          ...tocNotes,
           ...businessNotes,
           pendingNote,
         ].filter(Boolean).join('；')}。` } : {}),

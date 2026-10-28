@@ -67,7 +67,7 @@ const statusLabels: Record<TreeStatus, string> = {
 
 const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>, string> = {
   'template-fill': '商务模版中没有该小节的章节（如招标文件为 PDF），导出时保留“待填写”提示，请导出后按招标文件格式补充。',
-  'directory-generate': '该小节已标记为目录生成，不进入 AI 正文生成流程。',
+  'directory-generate': '导出时根据实际页码自动生成目录。',
   'manual-fill': '该小节已标记为人工填写，请在导出后补充内容。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
@@ -100,8 +100,9 @@ function getLeafContent(item: OutlineItem, sections: ContentGenerationSections) 
     : item.content || '';
 }
 
-// 非 AI 小节没有正文，状态由商务模版章节决定（见 buildOutlineMeta）。
+// 非 AI 小节没有正文，状态由商务模版章节决定（见 buildOutlineMeta）；目录在导出时自动生成，不算待处理。
 function getLeafStatus(item: OutlineItem, sections: ContentGenerationSections): TreeStatus {
+  if (item.content_mode === 'directory-generate') return 'success';
   if (item.content_mode !== 'ai-generate') return 'pending';
   const section = sections[item.id];
   if (section?.status) {
@@ -281,7 +282,11 @@ function ContentEditPage({
   // 商务模版填写与正文并行；没有 AI 小节时只填写商务模版。
   const businessFill = contentGenerationRuntime?.business_fill ?? contentStats?.business_fill;
   // 非 AI 小节在商务模版中有对应章节时，从当前结果文档截取该章只读预览，目录树显示商务填写状态。
-  const businessChapterIds = useMemo(() => new Set(bidTemplateChapterIds || []), [bidTemplateChapterIds]);
+  // 目录生成小节在导出时生成目录，老项目模版中残留的目录章节不再预览。
+  const businessChapterIds = useMemo(() => {
+    const tocIds = new Set(allLeaves.filter((item) => item.content_mode === 'directory-generate').map((item) => item.id));
+    return new Set((bidTemplateChapterIds || []).filter((id) => !tocIds.has(id)));
+  }, [allLeaves, bidTemplateChapterIds]);
   const businessTreeStatus = getBusinessTreeStatus(businessFill, taskInFlight);
   const businessPhaseLabel = getBusinessFillPhaseLabel(businessFill, { paused, taskInFlight });
   const outlineMeta = useMemo(() => outlineData?.outline
@@ -296,12 +301,12 @@ function ContentEditPage({
     };
   }, { completedCount: 0, failedCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
   const { completedCount, failedCount, totalWords } = contentSummary;
-  // 待处理只统计没有商务模版章节的非 AI 小节，有章节的按商务填写状态显示。
+  // 待处理只统计没有商务模版章节的非 AI 小节，有章节的按商务填写状态显示；目录在导出时自动生成，不计入。
   const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
     if (item.content_mode && !(item.content_mode !== 'ai-generate' && businessChapterIds.has(item.id))) counts[item.content_mode] += 1;
     return counts;
   }, { 'ai-generate': 0, 'template-fill': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
-  const pendingCount = modeCounts['template-fill'] + modeCounts['directory-generate'] + modeCounts['manual-fill'] + modeCounts.other;
+  const pendingCount = modeCounts['template-fill'] + modeCounts['manual-fill'] + modeCounts.other;
   const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
@@ -854,7 +859,8 @@ function ContentEditPage({
           <span className="content-outline-text">
             <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
             <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}`
-              : businessChapterIds.has(item.id) ? `${modeLabel} · ${businessPhaseLabel} · Word 预览` : `${modeLabel || '未标记'} · ${statusLabels[status]}` : `${leafCount} 个小节`}</small>
+              : businessChapterIds.has(item.id) ? `${modeLabel} · ${businessPhaseLabel} · Word 预览`
+                : item.content_mode === 'directory-generate' ? `${modeLabel} · 导出时生成` : `${modeLabel || '未标记'} · ${statusLabels[status]}` : `${leafCount} 个小节`}</small>
           </span>
           {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
             <Popover.Root
@@ -923,7 +929,7 @@ function ContentEditPage({
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
-          <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          <span title={`模板填写 ${modeCounts['template-fill']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           {bidTemplateExists && (
             <span className={`content-business-fill-status${businessFill?.status === 'error' ? ' is-error' : ''}`} title={businessFillTitle}>
               商务模版 <strong>{businessFillLabel}</strong>
@@ -1044,7 +1050,8 @@ function ContentEditPage({
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error'
                 ? sections[selectedItem.id]?.error || '正文生成失败'
-                : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
+                : selectedItem.content_mode === 'ai-generate' ? '正文待生成'
+                  : selectedItem.content_mode === 'directory-generate' ? '导出时生成目录' : '该小节等待后续处理'}</strong>
               <p>{selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
                 : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>

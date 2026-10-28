@@ -45,6 +45,10 @@ sealed class JobResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PendingMarkCount { get; set; }
 
+    /// <summary>整本导出生成的目录，或目录页码回填结果。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TocJobResult? Toc { get; set; }
+
     public static JobResult Success(string action, string? output = null, int? blockCount = null) => new()
     {
         Ok = true,
@@ -54,6 +58,25 @@ sealed class JobResult
     };
 
     public static JobResult Fail(string error, string? errorKind = null) => new() { Ok = false, Error = error, ErrorKind = errorKind };
+}
+
+/// <summary>目录结果：渲染时返回条目、目录页块号和只含目录的小文档；回填页码时返回未能写入页码的条数。</summary>
+sealed class TocJobResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<TocEntry>? Entries { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StartBlock { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EndBlock { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TocOnly { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MissingCount { get; set; }
 }
 
 /// <summary>解析任务目录并读写 request / result。</summary>

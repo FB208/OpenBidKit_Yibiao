@@ -4,7 +4,7 @@ const path = require('node:path');
 const { countReadableWords } = require('../utils/wordCount.cjs');
 
 // 独立隐藏窗口完成布局，不依赖用户打开正文页面，也不加载外部网页。
-async function readWordLayout(file, signal) {
+async function runLayoutWindow(expression, signal) {
   const { BrowserWindow } = require('electron');
   signal.throwIfAborted();
   const window = new BrowserWindow({ show: false, webPreferences: {
@@ -15,7 +15,7 @@ async function readWordLayout(file, signal) {
   signal.addEventListener('abort', close, { once: true });
   try {
     await window.loadURL('data:text/html;charset=utf-8,<html><body></body></html>');
-    const layout = await window.webContents.executeJavaScript(`window.wordLayout.read(${JSON.stringify(file)})`);
+    const layout = await window.webContents.executeJavaScript(expression);
     signal.throwIfAborted();
     return layout;
   } catch (error) {
@@ -25,6 +25,15 @@ async function readWordLayout(file, signal) {
     signal.removeEventListener('abort', close);
     close();
   }
+}
+
+function readWordLayout(file, signal) {
+  return runLayoutWindow(`window.wordLayout.read(${JSON.stringify(file)})`, signal);
+}
+
+/** 整本导出目录测量：页数、各页显示页码，以及目录书签所在的物理页序号。 */
+function readWordPageAnchors(file, prefix, signal) {
+  return runLayoutWindow(`window.wordLayout.readAnchors(${JSON.stringify(file)}, ${JSON.stringify(prefix)})`, signal);
 }
 
 // 布局中的单元格段落坐标已相对于页面正文区，递归只取内容，不把单元格空白当页尾。
@@ -155,4 +164,4 @@ async function runContentLayoutCheck({ exporter, snapshot, result, signal, layou
   }
 }
 
-module.exports = { readWordLayout, analyzeLayout, runContentLayoutCheck };
+module.exports = { readWordLayout, readWordPageAnchors, analyzeLayout, runContentLayoutCheck };
