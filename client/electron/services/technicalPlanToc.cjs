@@ -6,13 +6,14 @@ const { readWordPageAnchors } = require('./contentGenerationLayout.cjs');
 const TOC_BOOKMARK_PREFIX = '_Toc';
 const MAX_ROUNDS = 3;
 const MEASURE_TIMEOUT_MS = 10 * 60 * 1000;
-const UPDATE_HINT = '请在 Word 中右键目录选择“更新域”';
+const UPDATE_HINT = '请在 Word 中右键目录 →“更新域”';
 
 /**
  * 整本导出目录页码。助手已写满全部条目、页码为等宽占位，因此先测整本即可得到各标题的最终页；
  * 回填后条目只会变窄，个别长标题少折一行可能让目录少一页：用只含目录的小文档复测，
  * 少了 Δ 页就把目录之后的条目统一减 Δ（目录前后都是硬分页，后续内容整体平移），最多 3 轮。
  * 测量失败不阻断导出，页码留空；清空页码也失败时抛错，不把占位交给用户。
+ * 测量页码与 Word 分页有出入，文档也不写打开时更新域（Word 打开时的更新在排版完成前执行会算成 1），测量成功时也提示手动更新。
  */
 async function fillTableOfContents({ bytes, toc, tocOnlyBytes, openXmlHelperService, onProgress, developerLogger, measure = readWordPageAnchors }) {
   const started = Date.now();
@@ -55,12 +56,13 @@ async function fillTableOfContents({ bytes, toc, tocOnlyBytes, openXmlHelperServ
     } catch (error) {
       pageNumbers = {};
       log.measure_error = error?.message || String(error);
-      notes.push(`目录页码未能自动计算，已留空，${UPDATE_HINT}`);
+      notes.push(`目录页码未能计算，已留空：${UPDATE_HINT}`);
     }
     onProgress?.(95, '正在回填目录页码');
     const filled = await openXmlHelperService.fillTocPageNumbers(bytes, pageNumbers);
     log.missing_count = filled.missingCount;
-    if (filled.missingCount && !log.measure_error) notes.push(`有 ${filled.missingCount} 条目录页码未能计算，已留空，${UPDATE_HINT}`);
+    if (!log.measure_error && Object.keys(pageNumbers).length) notes.push(`目录页码可能不准：${UPDATE_HINT} →“只更新页码”`);
+    if (filled.missingCount && !log.measure_error) notes.push(`${filled.missingCount} 条目录页码未能计算，已留空：${UPDATE_HINT}`);
     return { bytes: filled.bytes, notes };
   } finally {
     developerLogger?.write('export.technical_plan.toc', { ...log, elapsed_ms: Date.now() - started });

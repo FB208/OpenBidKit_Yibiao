@@ -573,16 +573,15 @@ static class RestrictedHtmlDocumentRenderer
     }
 
     /// <summary>
-    /// 要求 Word 或编辑器打开文档时刷新页码域，并声明 Word 2013 及以上的兼容模式 15。
+    /// 声明 Word 2013 及以上的兼容模式 15。
     /// 不写兼容模式时 Word 按 2007 规则排版：百分比宽度的表格会把单元格左右边距加在栏宽之外，
     /// 满宽表格和章节页框只能写死绝对宽度，用户在 Word 里改页边距后就与标题段落边框错开。
-    /// 子元素顺序按 OOXML schema：updateFields 在 compat 之前。
+    /// 不写打开时更新域：Word 打开时的更新在排版完成前执行，目录页码会被算成 1，导出提示用户打开后手动更新。
     /// </summary>
     static void AddDocumentSettings(MainDocumentPart mainPart)
     {
         var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
         settingsPart.Settings = new Wp.Settings(
-            new Wp.UpdateFieldsOnOpen { Val = true },
             new Wp.Compatibility(new Wp.CompatibilitySetting
             {
                 Name = Wp.CompatSettingNameValues.CompatibilityMode,

@@ -234,13 +234,13 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       // 商务模版未填写项与已删除的资信库图片都在原位置保留占位，签章位置已留白，不计入未填写。
       const businessNotes = business ? [
         ...[countPendingUnits(business.fields, result.businessFieldIds)].filter(Boolean)
-          .map(count => `商务模版有 ${count} 项未填写，已在原位置保留占位，请打开文档补充`),
-        ...(business.missingImages.size ? [`商务模版有 ${business.missingImages.size} 项所选资信库图片已删除，已在原位置保留占位`] : []),
+          .map(count => `商务模版 ${count} 项未填写，已保留占位`),
+        ...(business.missingImages.size ? [`商务模版 ${business.missingImages.size} 项所选图片已从资信库删除，已保留占位`] : []),
         ...result.businessWarnings,
       ] : [];
       warnings.push(...businessNotes);
       // 正文、商务占位和程序提示中需要用户补充的位置统一为“【待填写】”，提示总数和搜索关键词。
-      const pendingNote = result.pendingMarkCount ? `文档中共有 ${result.pendingMarkCount} 处“待填写”，可在 Word 中搜索后逐项处理` : '';
+      const pendingNote = result.pendingMarkCount ? `共 ${result.pendingMarkCount} 处“待填写”：在 Word 中搜索“待填写”逐项补充` : '';
       if (pendingNote) warnings.push(pendingNote);
       return {
         buffer: Buffer.from(bytes), warnings, stats,

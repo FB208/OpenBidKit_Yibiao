@@ -1397,17 +1397,15 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       >
         <Dialog.Portal>
           <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="export-progress-card">
+          <Dialog.Content className="export-progress-card" aria-describedby={undefined}>
             <div className="content-regenerate-card-head">
               <span className="section-kicker">Word 导出</span>
               <Dialog.Title>{exportProgress.running ? '正在导出 Word' : exportProgress.error ? '导出失败' : exportProgress.filePath ? '导出完成' : '本次未导出'}</Dialog.Title>
-              <Dialog.Description>
-                正在按当前模板将正文、表格和图片写入整本 Word 文档。
-              </Dialog.Description>
             </div>
             <div className="export-progress-body">
               <ProgressBar value={exportProgress.progress} label={`Word 导出进度 ${exportProgress.progress}%`} />
-              <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
+              {/* 导出完成且有提示时，汇总消息与“需要核对”重复，只保留后者。 */}
+              {(exportProgress.running || exportProgress.error || !exportProgress.warnings.length) && <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>}
               {exportProgress.warnings.length > 0 && (
                 <div className="export-warning-list">
                   <strong>需要核对</strong>
