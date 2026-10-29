@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const mime = require('mime-types');
 const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
+const { removeTemporaryDir } = require('../utils/forceRemove.cjs');
 const {
   getOpenXmlHelperDebugExecutablePath,
   getOpenXmlHelperProjectPath,
@@ -371,6 +372,15 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     logger.write(event, payload);
   }
 
+  /** 删除 root 下的任务目录或中转目录；结果已读入内存，删不掉只记日志，残留交给存储空间清理。 */
+  function removeHelperDir(target, root) {
+    const resolved = path.resolve(target);
+    if (path.dirname(resolved) !== path.resolve(root)) return Promise.resolve();
+    return removeTemporaryDir(resolved, (error) => {
+      writeLog('openxml.job.cleanup_failed', { target: path.basename(resolved), error: compactLogError(error) });
+    });
+  }
+
   /** 开发态异步编译助手，避免首次预览同步阻塞 Main 进程。 */
   function buildDebugHelper() {
     if (debugBuildPromise) return debugBuildPromise;
@@ -632,19 +642,10 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         tocOnlyBytes: result.toc?.tocOnly ? new Uint8Array(fs.readFileSync(path.join(result.jobDir, result.toc.tocOnly))) : null,
       };
     } finally {
-      // 目录被占用时 rmSync 会抛错，计数放在内层 finally，保证任务结束后一定归还。
-      try {
-        const jobsRoot = path.resolve(getOpenXmlJobsDir(app));
-        if (result) {
-          const jobDir = path.resolve(result.jobDir);
-          if (path.dirname(jobDir) === jobsRoot) fs.rmSync(jobDir, { recursive: true, force: true });
-        }
-        if (temporaryAssets && path.dirname(temporaryAssets) === path.resolve(getWorkspaceDir(app))) {
-          fs.rmSync(temporaryAssets, { recursive: true, force: true });
-        }
-      } finally {
-        activeJobCount -= 1;
-      }
+      // 清理不抛错；计数在清理后归还，存储清理不会与之并发。
+      if (result) await removeHelperDir(result.jobDir, getOpenXmlJobsDir(app));
+      if (temporaryAssets) await removeHelperDir(temporaryAssets, getWorkspaceDir(app));
+      activeJobCount -= 1;
     }
   }
 
@@ -664,14 +665,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         missingCount: result.toc?.missingCount || 0,
       };
     } finally {
-      try {
-        if (result) {
-          const jobDir = path.resolve(result.jobDir);
-          if (path.dirname(jobDir) === path.resolve(getOpenXmlJobsDir(app))) fs.rmSync(jobDir, { recursive: true, force: true });
-        }
-      } finally {
-        activeJobCount -= 1;
-      }
+      if (result) await removeHelperDir(result.jobDir, getOpenXmlJobsDir(app));
+      activeJobCount -= 1;
     }
   }
 
@@ -687,14 +682,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       });
       return new Uint8Array(fs.readFileSync(path.join(result.jobDir, 'chapter.docx')));
     } finally {
-      try {
-        if (result) {
-          const jobDir = path.resolve(result.jobDir);
-          if (path.dirname(jobDir) === path.resolve(getOpenXmlJobsDir(app))) fs.rmSync(jobDir, { recursive: true, force: true });
-        }
-      } finally {
-        activeJobCount -= 1;
-      }
+      if (result) await removeHelperDir(result.jobDir, getOpenXmlJobsDir(app));
+      activeJobCount -= 1;
     }
   }
 
@@ -731,15 +720,10 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
       });
       return JSON.parse(fs.readFileSync(path.join(result.jobDir, String(result.output || outputName)), 'utf8'));
     } finally {
-      try {
-        if (timer) clearInterval(timer);
-        await blindCheckRunner.close().catch(() => undefined);
-        if (jobDir && path.dirname(path.resolve(jobDir)) === path.resolve(getOpenXmlJobsDir(app))) {
-          fs.rmSync(jobDir, { recursive: true, force: true });
-        }
-      } finally {
-        activeJobCount -= 1;
-      }
+      if (timer) clearInterval(timer);
+      await blindCheckRunner.close().catch(() => undefined);
+      if (jobDir) await removeHelperDir(jobDir, getOpenXmlJobsDir(app));
+      activeJobCount -= 1;
     }
   }
 

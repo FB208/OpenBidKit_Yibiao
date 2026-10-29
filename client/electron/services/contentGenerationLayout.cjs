@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { countReadableWords } = require('../utils/wordCount.cjs');
+const { removeTemporaryDir } = require('../utils/forceRemove.cjs');
 
 // 独立隐藏窗口完成布局，不依赖用户打开正文页面，也不加载外部网页。
 async function runLayoutWindow(expression, signal) {
@@ -159,8 +160,8 @@ async function runContentLayoutCheck({ exporter, snapshot, result, signal, layou
     if (state.status === 'rechecking') layout.save({ ...state, status: 'completed', remaining_gaps: await inspect() });
     return layout.get();
   } finally {
-    // directory 由本函数在系统临时目录创建，包含的只有本轮自检 Word。
-    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    // directory 由本函数在系统临时目录创建，包含的只有本轮自检 Word；删不掉不影响自检结果。
+    await removeTemporaryDir(directory);
   }
 }
 

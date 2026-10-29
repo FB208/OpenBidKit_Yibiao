@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { readWordPageAnchors } = require('./contentGenerationLayout.cjs');
+const { removeTemporaryDir } = require('../utils/forceRemove.cjs');
 
 const TOC_BOOKMARK_PREFIX = '_Toc';
 const MAX_ROUNDS = 3;
@@ -65,9 +66,9 @@ async function fillTableOfContents({ bytes, toc, tocOnlyBytes, openXmlHelperServ
     if (filled.missingCount && !log.measure_error) notes.push(`${filled.missingCount} 条目录页码未能计算，已留空：${UPDATE_HINT}`);
     return { bytes: filled.bytes, notes };
   } finally {
+    // directory 由本函数在系统临时目录创建，只含本次测量用的 Word；删不掉只记日志，不影响导出。
+    await removeTemporaryDir(directory, (error) => { log.cleanup_error = error?.message || String(error); });
     developerLogger?.write('export.technical_plan.toc', { ...log, elapsed_ms: Date.now() - started });
-    // directory 由本函数在系统临时目录创建，只含本次测量用的 Word。
-    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
 
