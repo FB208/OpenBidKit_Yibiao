@@ -3,7 +3,7 @@ import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, MarkdownEditor, ProgressBar, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
-import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
+import { OUTLINE_CONTENT_MODE_LABELS, OUTLINE_RULE_BASIS_LABELS } from '../../../shared/types';
 import type { TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
@@ -26,6 +26,8 @@ interface OutlineEditPageProps {
   contentTaskStatus?: BackgroundTaskState['status'];
   aiAdjustmentRunning?: boolean;
   templateExtractionTask?: BackgroundTaskState;
+  /** 正文页单独“重新编制”规则和页码的任务；运行时锁定目录，避免清掉正在编制的结果。 */
+  rulePageCompileTask?: BackgroundTaskState;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
@@ -80,6 +82,12 @@ function formatDuration(milliseconds: number) {
   return `${minutes}:${seconds}`;
 }
 
+// 叶子的处理模式标签；规则和页码另标应答依据。
+function contentModeLabel(item: OutlineItem) {
+  const label = item.content_mode ? OUTLINE_CONTENT_MODE_LABELS[item.content_mode] : '';
+  return item.content_mode === 'rule-page' && item.rule_basis ? `${label}·${OUTLINE_RULE_BASIS_LABELS[item.rule_basis]}` : label;
+}
+
 // 父节点不保存处理模式，叶子保留已经明确选择的处理模式。
 function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
   return items.map((item) => {
@@ -87,6 +95,7 @@ function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
       const branch = { ...item };
       delete branch.content_mode;
       delete branch.content_mode_note;
+      delete branch.rule_basis;
       return { ...branch, children: normalizeOutlineContentModes(item.children) };
     }
     const leaf = { ...item };
@@ -98,6 +107,7 @@ function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
       ...(contentMode === 'other' && item.content_mode_note?.trim()
         ? { content_mode_note: item.content_mode_note.trim() }
         : { content_mode_note: undefined }),
+      ...(contentMode === 'rule-page' ? {} : { rule_basis: undefined }),
     };
   });
 }
@@ -216,6 +226,7 @@ function OutlineEditPage({
   contentTaskStatus,
   aiAdjustmentRunning = false,
   templateExtractionTask,
+  rulePageCompileTask,
   onOutlineSaved,
   onOutlineSelectionSaved,
   onSortGuardChange,
@@ -256,7 +267,8 @@ function OutlineEditPage({
   const progressTask = templateExtracting ? templateExtractionTask : task;
   const panelBusy = generating || templateExtracting;
   const contentMutationLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
-  const outlineMutationLocked = generating || templateExtracting || contentMutationLocked || savingSort || aiAdjustmentRunning;
+  const rulePageCompiling = ['running', 'pausing', 'paused'].includes(rulePageCompileTask?.status || '');
+  const outlineMutationLocked = generating || templateExtracting || contentMutationLocked || rulePageCompiling || savingSort || aiAdjustmentRunning;
   const progressLogs = progressTask?.logs || [];
   const latestLog = progressLogs[progressLogs.length - 1];
   const progress = panelBusy
@@ -438,6 +450,7 @@ function OutlineEditPage({
     if (generating) return '目录生成任务正在运行，当前目录暂不可编辑';
     if (templateExtracting) return '投标模版正在重新提取，当前目录暂不可编辑';
     if (contentMutationLocked) return '正文生成任务正在运行或暂停中，请结束后再调整目录';
+    if (rulePageCompiling) return '规则和页码正在编制，请结束后再调整目录';
     return '';
   };
 
@@ -759,7 +772,7 @@ function OutlineEditPage({
           >
             <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
             {!hasChildren && item.content_mode && (
-              <span className={`outline-content-mode-badge is-${item.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[item.content_mode]}</span>
+              <span className={`outline-content-mode-badge is-${item.content_mode}`}>{contentModeLabel(item)}</span>
             )}
           </button>
         </div>
@@ -783,7 +796,7 @@ function OutlineEditPage({
               确认一级目录
             </button>
           )}
-          <button type="button" className="primary-action" onClick={() => void generateOutline()} disabled={generating || templateExtracting || sorting || contentMutationLocked || !projectOverview || !bidAnalysisReady}>
+          <button type="button" className="primary-action" onClick={() => void generateOutline()} disabled={generating || templateExtracting || sorting || contentMutationLocked || rulePageCompiling || !projectOverview || !bidAnalysisReady}>
             {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
           </button>
         </div>
@@ -875,7 +888,7 @@ function OutlineEditPage({
           </div>
           {selectedItem ? (
             <div className="outline-detail-body">
-              {(generating || templateExtracting || contentMutationLocked || sorting) && (
+              {(generating || templateExtracting || contentMutationLocked || rulePageCompiling || sorting) && (
                 <div className="outline-detail-lock">
                   {sorting
                     ? '目录排序中，当前目录暂不可编辑。'
@@ -883,6 +896,8 @@ function OutlineEditPage({
                       ? '投标模版正在重新提取，当前目录暂不可编辑。'
                     : contentMutationLocked
                       ? '正文生成任务正在运行或暂停中，当前目录暂不可编辑。'
+                    : rulePageCompiling
+                      ? '规则和页码正在编制，当前目录暂不可编辑。'
                       : '目录生成任务正在运行，当前目录暂不可编辑，避免覆盖后台生成结果。'}
                 </div>
               )}
@@ -913,7 +928,7 @@ function OutlineEditPage({
                   <h3>{selectedItem.title}</h3>
                   <p>{selectedItem.description || '无描述'}</p>
                   {!selectedItem.children?.length && selectedItem.content_mode && (
-                    <span className={`outline-content-mode-badge is-${selectedItem.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[selectedItem.content_mode]}</span>
+                    <span className={`outline-content-mode-badge is-${selectedItem.content_mode}`}>{contentModeLabel(selectedItem)}</span>
                   )}
                   {!selectedItem.children?.length && selectedItem.content_mode === 'other' && selectedItem.content_mode_note && (
                     <small>{selectedItem.content_mode_note}</small>

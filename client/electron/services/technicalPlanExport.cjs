@@ -3,6 +3,7 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { countPendingUnits, renderBusinessTemplateForExport } = require('./businessTemplateFillTask.cjs');
+const { collectReferencedNodeIds } = require('./rulePageTables.cjs');
 const { collectOutlineExportEntries, formatPendingMark, getPendingContentModeMessage } = require('./exportService.cjs');
 const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 const { fillTableOfContents } = require('./technicalPlanToc.cjs');
@@ -104,6 +105,16 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       // 目录在第一个目录生成小节处按实际页码生成；目录页只允许一个，老项目多出的保留待填写提示。
       const tocItems = entries.filter(({ item }) => !item.children?.length && item.content_mode === 'directory-generate').map(({ item }) => item);
       const tocId = tocItems[0]?.id;
+      // 前置页：目录生成小节是一级节点时，它之前的一级节点（含子树）和它自己是封面等前置页，不编号；
+      // 其余节点的导出编号首段减去前置页个数，商务章节和 AI 标题统一使用，软件内目录编号不变。目录标题始终不编号。
+      const tocTopIndex = entries.findIndex(({ item, level }) => level === 1 && item.id === tocId);
+      const frontCount = entries.slice(0, tocTopIndex + 1).filter(({ level }) => level === 1).length;
+      const exportNumbers = entries.map(({ item }, index) => {
+        if (index <= tocTopIndex || item.id === tocId) return '';
+        const [first, ...rest] = item.number.split('.');
+        return [Number(first) - frontCount, ...rest].join('.');
+      });
+      const numberAttribute = number => (number ? ` data-yb-outline-number="${number}"` : '');
       // 页面归属：模版章节单独成组并使用模版页面；父目录跟随首个子目录，避免孤立标题页。
       const pageKinds = new Array(entries.length);
       for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -112,6 +123,21 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
           ? pageKinds[index + 1]
           : businessIds.has(item.id) ? 'business' : String(sectionTemplate);
       }
+      // 页码引用：被引用小节的起点为自身条目，终点为子树最后一个条目；HTML 范围写锚点标记，商务章节带锚点属性，由转换器换成书签。
+      const rulePageTables = technicalPlanStore.hasBidTemplate() ? technicalPlanStore.readRulePageTables() : null;
+      const referencedIds = collectReferencedNodeIds(rulePageTables);
+      const anchorStarts = new Map();
+      const anchorEnds = new Map();
+      const addAnchor = (map, index, id) => map.set(index, [...(map.get(index) || []), id]);
+      for (const [index, { item, level }] of entries.entries()) {
+        if (!referencedIds.has(item.id)) continue;
+        let end = index;
+        while (end + 1 < entries.length && entries[end + 1].level > level) end += 1;
+        addAnchor(anchorStarts, index, item.id);
+        addAnchor(anchorEnds, end, item.id);
+      }
+      const anchorMarkers = (ids = [], kind) => ids.map(id => `<p>YIBIAOANCHOR:${kind}:${id}</p>\n`).join('');
+      const unRuledChapters = !rulePageTables && entries.some(({ item }) => businessIds.has(item.id) && templateChapters.get(item.id)?.rule_page);
       const ranges = [];
       const layoutSources = [];
       const warnings = [];
@@ -145,7 +171,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         const label = `${item.number} ${item.title}`;
         if (businessIds.has(item.id)) {
           // 模版章节使用自带的标题段，不另写程序标题。
-          ranges.push({ business: { id: item.id, title: item.title, level }, useTemplate, pageKind: 'business' });
+          ranges.push({ business: { id: item.id, title: item.title, level, number: exportNumbers[index], anchorStart: anchorStarts.get(index) || [], anchorEnd: anchorEnds.get(index) || [] }, useTemplate, pageKind: 'business' });
           reportEntry(index, label);
           continue;
         }
@@ -187,13 +213,13 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         } catch (error) {
           throw new Error(`小节 ${label} 导出失败：${error.message}`, { cause: error });
         }
-        // 显式记录目录编号，正文内部标题不能改变后续目录编号。
-        const heading = `<h${level} data-yb-outline-number="${item.number}">${escapeHtml(item.title)}</h${level}>`;
-        append(`${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}`, useTemplate, pageKinds[index]);
+        // 显式记录导出编号，正文内部标题不能改变后续目录编号；前置页不写编号。
+        const heading = `<h${level}${numberAttribute(exportNumbers[index])}>${escapeHtml(item.title)}</h${level}>`;
+        append(`${anchorMarkers(anchorStarts.get(index), 'S')}${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}${anchorEnds.has(index) ? `\n${anchorMarkers(anchorEnds.get(index), 'E')}` : ''}`, useTemplate, pageKinds[index]);
         reportEntry(index, label);
       }
       const html = ranges.map(range => (range.business
-        ? `<section data-yb-business-chapter="${escapeHtml(range.business.id)}" data-yb-business-level="${range.business.level}" data-yb-business-title="${escapeHtml(range.business.title)}" data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="business"></section>`
+        ? `<section data-yb-business-chapter="${escapeHtml(range.business.id)}" data-yb-business-level="${range.business.level}" data-yb-business-title="${escapeHtml(range.business.title)}"${numberAttribute(range.business.number)} data-yb-anchor-start="${range.business.anchorStart.join(' ')}" data-yb-anchor-end="${range.business.anchorEnd.join(' ')}" data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="business"></section>`
         : `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.pageKind}">${range.html}</section>`)).join('\n');
       developerLogger?.write('export.technical_plan.html.assembled', { section_count: entries.length, skipped_section_count: warnings.length, business_chapter_count: businessIds.size, html_chars: html.length, image_count: cheerio.load(html)('img').length });
       let business = null;
@@ -211,11 +237,13 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       } finally {
         business?.cleanup();
       }
-      // 格式自检只看版面，目录保留等宽占位，不测量页码。
+      // 格式自检只看版面，目录和页码引用保留等宽占位，不测量页码。
       let bytes = result.bytes;
-      if (!layoutCheck && result.toc?.entries?.length) {
+      if (result.pageRefs?.missingCount) tocNotes.push(`${result.pageRefs.missingCount} 处页码引用的小节未导出，已标为待填写`);
+      if (unRuledChapters) tocNotes.push('规则和页码小节尚未编制：请在生成正文页重新编制后再导出');
+      if (!layoutCheck && (result.toc?.entries?.length || result.pageRefs?.count)) {
         const filled = await fillTableOfContents({
-          bytes, toc: result.toc, tocOnlyBytes: result.tocOnlyBytes, openXmlHelperService, developerLogger,
+          bytes, toc: result.toc, tocOnlyBytes: result.tocOnlyBytes, pageRefs: result.pageRefs, openXmlHelperService, developerLogger,
           onProgress: (progress, message) => onProgress?.({ phase: 'running', progress, message, warnings: [], ...stats }),
         });
         bytes = filled.bytes;

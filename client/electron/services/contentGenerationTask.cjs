@@ -16,7 +16,8 @@ const { CONTENT_GENERATION_AGENT_TASK_KEY, CONTINUE_PROMPT, wasStagePrompted, bu
 const { scanGeneratedSections, convertContentSections } = require('./contentGenerationOutput.cjs');
 const { createTechnicalPlanExport } = require('./technicalPlanExport.cjs');
 const { runContentLayoutCheck, readWordLayout } = require('./contentGenerationLayout.cjs');
-const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+const { hasRulePageChapters, initialRulePageState, runRulePageCompile } = require('./rulePageCompileTask.cjs');
 const { runBusinessTemplateFill } = require('./businessTemplateFillTask.cjs');
 
 const DEFAULT_TEXT_CONCURRENCY_LIMIT = 10;
@@ -1083,6 +1084,7 @@ function normalizeContentGenerationRuntime(value) {
     regenerate_requirement: String(source.regenerate_requirement || '').trim(),
     html_output: source.html_output,
     business_fill: source.business_fill && typeof source.business_fill === 'object' ? { ...source.business_fill } : undefined,
+    rule_page: source.rule_page && typeof source.rule_page === 'object' ? { ...source.rule_page } : undefined,
     updated_at: source.updated_at || now(),
   };
 }
@@ -1127,6 +1129,7 @@ function prepareContentGenerationStart(state, payload = {}) {
       section_words: previous.section_words,
       html_output: previous.html_output,
       business_fill: previous.business_fill,
+      rule_page: previous.rule_page,
       regenerate_requirement: String(payload.requirement || '').trim(),
     }),
   };
@@ -2158,6 +2161,107 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     }).finally(() => clearInterval(watcher));
   }
 
+  // 规则和页码编制副流程：与商务模版填写一样并行，正文到达终点后等待它完成；没有规则和页码章节时不运行。
+  const RULE_PAGE_PAUSED_MESSAGE = '规则和页码编制已暂停，继续后从原会话接着处理。';
+  let rulePageFlow = null;
+  let rulePageController = null;
+  let rulePageSettled = false;
+  let rulePageInterrupted = false;
+
+  function setRulePage(next) {
+    contentStats.rule_page = next ? { ...next } : undefined;
+    contentRuntime = normalizeContentGenerationRuntime({ ...contentRuntime, rule_page: next });
+  }
+
+  // 已完成且结果仍在的保留；继续时沿用阶段和会话；其余重新编制。须在商务填写准备之后调用（商务模版重置会清除编制结果）。
+  function prepareRulePage() {
+    if (!hasBidTemplate || targetItemId || retryContentCorrection) return;
+    if (!hasRulePageChapters(workspaceStore, outlineData.outline)) {
+      setRulePage(undefined);
+      return;
+    }
+    const previous = contentRuntime.rule_page;
+    if (previous?.phase === 'completed' && workspaceStore.readRulePageTables()) {
+      setRulePage(previous);
+      return;
+    }
+    if (continuing && previous && previous.phase !== 'completed') {
+      setRulePage({ ...previous, status: 'running', error: null });
+      return;
+    }
+    workspaceStore.resetRulePageTables();
+    agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
+    workspaceStore.ensureBidTemplateBlank();
+    setRulePage(initialRulePageState());
+    logs = [...logs, '规则和页码编制与正文生成并行启动。'];
+  }
+
+  function startRulePage() {
+    const state = contentRuntime.rule_page;
+    if (!state || state.phase === 'completed') return;
+    const controller = new AbortController();
+    rulePageController = controller;
+    const abortOnPause = () => {
+      if (isPauseRequested() && !controller.signal.aborted) controller.abort(createContentGenerationPausedError());
+    };
+    const watcher = setInterval(abortOnPause, 500);
+    const isPaused = error => isPauseRequested() || isPauseLikeError(error) || isPauseLikeError(controller.signal.reason);
+    rulePageFlow = runRulePageCompile({
+      agentService, workspaceStore, credentialLibraryService, openXmlHelperService,
+      inputs: { bidKeyInfoText: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText), globalFactsText: businessOnly ? '' : globalFactsText },
+      state,
+      signal: AbortSignal.any([taskControl.signal, controller.signal]),
+      isPauseError: isPaused,
+      onState(next) {
+        setRulePage({ ...next, status: next.phase === 'completed' ? 'success' : 'running' });
+        if (next.phase === 'rendering') {
+          logs = [...logs, `规则和页码已编制（${next.table_count} 张表，${next.row_count} 行，无法确定 ${next.unresolved.length} 处），正在回填商务模版 Word。`];
+        }
+        if (rulePageSettled || isPauseRequested()) return;
+        try {
+          checkpointTask({ logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
+        } catch {
+          // 任务已取消时不再写入。
+        }
+      },
+    }).then(() => ({ ok: true }), (error) => {
+      const status = rulePageInterrupted ? 'interrupted' : isPaused(error) ? 'paused' : 'error';
+      writeDeveloperLog('rule_page.error', { status, ...agentErrorDiagnostics(error) });
+      setRulePage({ ...contentRuntime.rule_page, status, error: status === 'error' ? error?.message || String(error) : null });
+      return status === 'error' ? { error } : { paused: status === 'paused' };
+    }).finally(() => clearInterval(watcher));
+  }
+
+  async function finishRulePage() {
+    if (!rulePageFlow) return;
+    const result = await rulePageFlow;
+    rulePageSettled = true;
+    if (result.ok) {
+      const rulePage = contentRuntime.rule_page;
+      logs = [...logs, `规则和页码编制完成：${rulePage.table_count} 张表，${rulePage.row_count} 行。`];
+      return;
+    }
+    // 编制失败不阻断正文：该章标为编制失败，导出提示重新编制，用户可在正文页单独重新编制。暂停仍按副流程暂停处理。
+    if (!result.paused) {
+      logs = [...logs, `规则和页码编制失败：${result.error?.message || result.error}。正文照常完成，请在正文页重新编制。`];
+      return;
+    }
+    const error = createContentGenerationPausedError();
+    error.businessFill = true;
+    error.pausedMessage = RULE_PAGE_PAUSED_MESSAGE;
+    throw error;
+  }
+
+  async function stopRulePage() {
+    if (!rulePageFlow || rulePageSettled) return;
+    rulePageSettled = true;
+    if (!isPauseRequested() && !rulePageController.signal.aborted) {
+      rulePageInterrupted = true;
+      rulePageController.abort(new Error('正文任务已结束，规则和页码编制已中断'));
+    }
+    await rulePageFlow;
+  }
+
   // 正文到达终点后等待副流程；暂停和失败抛出带 businessFill 标记的错误，由调用方提交最终状态。
   async function finishBusinessFill() {
     if (!businessFlow) return;
@@ -2185,6 +2289,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   prepareBusinessFill();
+  prepareRulePage();
   const initialRuntime = syncRuntime();
   checkpointTask({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() }, {
     outlineData,
@@ -2822,6 +2927,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       contentStats.phase = 'word-completed';
       logs = [...logs, `转换完成，共 ${result.sections.length} 个 Word 文件。`, `输出目录：${contentRuntime.html_output.word_output_dir}`];
       await finishBusinessFill();
+      await finishRulePage();
       const runtime = syncRuntime();
       checkpointTask({ status: 'success', logs, stats: statsSnapshot(), pause_requested: false }, {
         contentGenerationSections: sections,
@@ -2834,6 +2940,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         error = scanError || (controller.signal.aborted && (isPauseLikeError(abortReason) || abortReason?.code === AI_UPSTREAM_UNAVAILABLE) ? abortReason : error);
         await stopBusinessFill();
       }
+      await stopRulePage();
       const paused = isPauseRequested() || isPauseLikeError(error);
       if (!['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase)) {
         updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: paused ? 'paused' : 'error', agent_connection: 'idle', ...(paused ? {} : { error: error.message }) }, false);
@@ -2843,7 +2950,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
           agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'paused', agent_connection: 'idle' });
         }
         persistPausedContentGeneration(businessFailure
-          ? BUSINESS_FILL_PAUSED_MESSAGE
+          ? error.pausedMessage || BUSINESS_FILL_PAUSED_MESSAGE
           : ['sections-completed', 'word-converting', 'word-completed'].includes(contentStats.phase)
           ? 'Word 转换已暂停，已完成文件保留，继续时只转换剩余小节。'
           : contentStats.phase === 'layout-checking'
@@ -2870,6 +2977,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   try {
     startBusinessFill();
+    startRulePage();
     if (continuingConsistency || continuingTableCleanup || continuingLayout) {
       await runContentGeneration([]);
       return;
@@ -2887,14 +2995,16 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
     // HTML 文件产出阶段没有目标时也直接结束，只有显式后处理入口继续走原流程。
     if (!retryContentCorrection && !tasksToRun.length) {
-      if (!businessFlow) {
+      if (!businessFlow && !rulePageFlow) {
         checkpointTask({ status: 'success', progress: 100, logs, stats: statsSnapshot() });
         return;
       }
       try {
         await finishBusinessFill();
+        await finishRulePage();
       } catch (error) {
-        if (isContentGenerationPausedError(error)) persistPausedContentGeneration(BUSINESS_FILL_PAUSED_MESSAGE);
+        await stopRulePage();
+        if (isContentGenerationPausedError(error)) persistPausedContentGeneration(error.pausedMessage || BUSINESS_FILL_PAUSED_MESSAGE);
         else checkpointTask({ status: 'error', error: error.message, logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
         throw error;
       }
@@ -2943,10 +3053,12 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         direct_generation_item_ids: contentRuntime.direct_generation_item_ids,
         pending_item_ids: contentRuntime.pending_item_ids.filter(id => sections[id]?.status !== 'success'),
         business_fill: contentRuntime.business_fill,
+        rule_page: contentRuntime.rule_page,
       },
     });
   } catch (error) {
     await stopBusinessFill();
+    await stopRulePage();
     if (isAiQueueScopePausedError(error)) {
       persistPausedContentGeneration('正文生成已暂停，未发起的 AI 请求已从队列丢弃，可点击继续。');
       writeDeveloperLog('content.task.paused', {
@@ -2985,4 +3097,13 @@ const __developerContentExpansionPatchRuntime = {
   applyContentExpansionPatch,
 };
 
-module.exports = { runContentGenerationTask, prepareContentGenerationStart, stripRepeatedChapterTitle, __developerContentExpansionPatchRuntime };
+module.exports = {
+  runContentGenerationTask,
+  prepareContentGenerationStart,
+  stripRepeatedChapterTitle,
+  // 规则和页码“重新编制”沿用正文任务的输入格式。
+  formatBidKeyInfoForPrompt,
+  formatBidAnalysisFactsForPrompt,
+  formatGlobalFactsForPrompt,
+  __developerContentExpansionPatchRuntime,
+};

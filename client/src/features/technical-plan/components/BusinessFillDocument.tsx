@@ -22,7 +22,7 @@ export function createDraft(unit: BusinessFillReviewUnit): UnitDraft {
 
 export function isFilled(unit: BusinessFillReviewUnit, draft: UnitDraft) {
   if (unit.kind === 'attachment') return Boolean(draft.imageId);
-  if (unit.kind === 'choice') return draft.selected.length > 0;
+  if (unit.kind === 'choice' || unit.kind === 'select') return draft.selected.length > 0;
   return Boolean(draft.value.trim());
 }
 
@@ -87,6 +87,8 @@ interface BusinessFillDocumentProps {
   idleKeys: Set<string>;
   imageGroups: Array<[string, BusinessFillReviewImage[]]>;
   imagesById: Map<string, BusinessFillReviewImage>;
+  /** 规则和页码编制的字段，只读显示。 */
+  ruleFieldIds?: Set<string>;
   saving?: boolean;
   onDraftChange: (key: string, patch: Partial<UnitDraft>) => void;
 }
@@ -114,6 +116,7 @@ function BusinessFillDocument({
   idleKeys,
   imageGroups,
   imagesById,
+  ruleFieldIds,
   saving,
   onDraftChange,
 }: BusinessFillDocumentProps) {
@@ -126,20 +129,31 @@ function BusinessFillDocument({
     return Object.keys(style).length ? style : undefined;
   };
 
+  // 择一只保留一项，再点已选项取消选择。
   const toggleOption = (unit: BusinessFillReviewUnit, draft: UnitDraft, option: string) => {
+    const checked = draft.selected.includes(option);
     onDraftChange(unit.key, {
-      selected: draft.selected.includes(option) ? draft.selected.filter((item) => item !== option) : [...draft.selected, option],
+      selected: unit.kind === 'select'
+        ? (checked ? [] : [option])
+        : (checked ? draft.selected.filter((item) => item !== option) : [...draft.selected, option]),
     });
   };
 
   const renderEditor = (unit: BusinessFillReviewUnit, draft: UnitDraft) => {
     if (unit.signature) return <span className="business-fill-signature">线下签章</span>;
-    if (unit.kind === 'choice') {
+    if (unit.kind === 'choice' || unit.kind === 'select') {
       return (
         <span className="business-fill-options">
           {(unit.options || []).map((option) => (
             <label key={option}>
-              <input type="checkbox" checked={draft.selected.includes(option)} onChange={() => toggleOption(unit, draft, option)} disabled={saving} />
+              <input
+                type={unit.kind === 'select' ? 'radio' : 'checkbox'}
+                name={unit.kind === 'select' ? unit.key : undefined}
+                checked={draft.selected.includes(option)}
+                onClick={unit.kind === 'select' ? () => toggleOption(unit, draft, option) : undefined}
+                onChange={unit.kind === 'select' ? () => undefined : () => toggleOption(unit, draft, option)}
+                disabled={saving}
+              />
               <span>{option}</span>
             </label>
           ))}
@@ -199,7 +213,7 @@ function BusinessFillDocument({
 
   const renderField = (fieldId: string, variant: FieldVariant, key?: number) => {
     const unit = unitsByFieldId.get(fieldId);
-    if (!unit) return null;
+    if (!unit) return ruleFieldIds?.has(fieldId) ? <span key={key} className="business-fill-signature">规则和页码编制</span> : null;
     const draft = drafts[unit.key] || createDraft(unit);
     const filled = isFilled(unit, draft);
     const idle = idleKeys.has(unit.key);

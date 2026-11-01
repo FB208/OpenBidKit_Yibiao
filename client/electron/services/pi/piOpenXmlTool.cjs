@@ -7,16 +7,21 @@ const LIST_BLOCKS_ACTION = 'list-blocks';
 const EXTRACT_CHAPTERS_ACTION = 'extract-chapters';
 const SCAN_TEMPLATE_FIELDS_ACTION = 'scan-template-fields';
 const APPLY_TEMPLATE_FIELDS_ACTION = 'apply-template-fields';
+const CONFIRM_TEMPLATE_FIELDS_ACTION = 'confirm-template-fields';
 const READ_TEMPLATE_LAYOUT_ACTION = 'read-template-layout';
 const AGENT_BLOCKS_FILE = '招标原文结构.txt';
 const AGENT_TEMPLATE_SOURCE_FILE = '投标模版源文件.docx';
 const AGENT_FIELD_CANDIDATES_FILE = '投标模版字段候选.json';
+const AGENT_TEMPLATE_TEXT_FILE = '投标模版正文.txt';
+const AGENT_TEMPLATE_PREVIEW_FILE = '投标模版效果.txt';
 const AGENT_TEMPLATE_FILE = 'bid-template.docx';
 const AGENT_TEMPLATE_FIELDS_FILE = 'bid-template-fields.json';
 const DEFAULT_TIMEOUT_MS = 300000;
 // 与 openXmlHelperService 的 OPENXML_ENVIRONMENT_ERROR_CODE 一致；此处不引用服务模块，避免 Pi 层加载 Electron 依赖。
 const OPENXML_ENVIRONMENT_ERROR_CODE = 'OPENXML_ENVIRONMENT';
 const REPEATED_FAILURE_LIMIT = 3;
+// 审阅效果正文后修改并重新应用的建议上限，达到后提示直接确认，不强制。
+const REVIEW_APPLY_LIMIT = 3;
 // 原文结构由目录任务在一级目录阶段之前准备，模版提取只推进抽章、扫描和写入字段三步。
 const TEMPLATE_STEP_COUNT = 3;
 const ACTION_LABELS = {
@@ -24,12 +29,31 @@ const ACTION_LABELS = {
   [EXTRACT_CHAPTERS_ACTION]: '抽取投标模版章节',
   [SCAN_TEMPLATE_FIELDS_ACTION]: '识别待填位置',
   [APPLY_TEMPLATE_FIELDS_ACTION]: '写入字段',
+  [CONFIRM_TEMPLATE_FIELDS_ACTION]: '确认模版',
 };
 const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
   type: 'object',
   required: ['fields', 'ignored_candidate_ids'],
   additionalProperties: false,
   properties: {
+    // Agent 通读投标模版正文后补充的位置；id 与候选 id 一样用于 fields，定位由助手校验。
+    positions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'at', 'op'],
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          at: { type: 'string', minLength: 1 },
+          op: { type: 'string', enum: ['insert', 'span', 'choose', 'attachment', 'table'] },
+          before: { type: 'string' },
+          after: { type: 'string' },
+          text: { type: 'string', minLength: 1 },
+          options: { type: 'array', minItems: 2, items: { type: 'string', minLength: 1 } },
+        },
+      },
+    },
     fields: {
       type: 'array',
       items: {
@@ -37,10 +61,11 @@ const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
         required: ['candidate_id', 'name', 'subject', 'fill_by'],
         additionalProperties: false,
         properties: {
+          // 规则候选的 id，或 positions 中补充位置的 id。
           candidate_id: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
           subject: { type: 'string', minLength: 1 },
-          fill_by: { type: 'string', enum: ['ai', 'manual'] },
+          fill_by: { type: 'string', enum: ['ai', 'manual', 'rule'] },
           instruction: { type: 'string' },
           // 附件拆分为多个连续位置，每部分一张图片、生成一个字段。
           parts: {
@@ -60,6 +85,34 @@ const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
       },
     },
     ignored_candidate_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
+    // 导出时去掉的原文：at 为段落定位号，text 为段内原文，before/after 在段内不唯一时区分；未列入的保留。
+    removals: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['at', 'text'],
+        additionalProperties: false,
+        properties: {
+          at: { type: 'string', minLength: 1 },
+          text: { type: 'string', minLength: 1 },
+          before: { type: 'string' },
+          after: { type: 'string' },
+        },
+      },
+    },
+    // 章节标题段：at 为该章顶层段落的定位号，null 表示没有标题段；未列出的章节由程序按目录标题认定。
+    headings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['chapter_id', 'at'],
+        additionalProperties: false,
+        properties: {
+          chapter_id: { type: 'string', minLength: 1 },
+          at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        },
+      },
+    },
   },
 };
 
@@ -167,6 +220,9 @@ function createPiOpenXmlTool({
   // 分类从模型生成的文件读取，保留原工具参数的结构校验。
   const validateFieldSelections = new Ajv({ allErrors: true, strict: true }).compile(TEMPLATE_FIELD_CLASSIFICATION_SCHEMA);
   let repeatedFailure = { key: '', count: 0 };
+  // 最近一次成功应用时分类文件的内容和累计成功次数；确认时要求分类文件此后没有修改。
+  let lastApplied = null;
+  let appliedCount = 0;
   // 抽章、扫描和开始写入字段各推进一步；进度回调失败不影响工具执行。
   const emitStep = (step, message) => {
     try { onStep?.({ step, total: TEMPLATE_STEP_COUNT, message }); } catch {}
@@ -187,12 +243,12 @@ function createPiOpenXmlTool({
   const tool = {
     name: OPENXML_TOOL_NAME,
     label: 'Open XML 助手',
-    description: '抽取投标模版章节、扫描待填候选，并把确认后的候选写成 Word 内容控件。按 extract-chapters、scan-template-fields、apply-template-fields 顺序调用；招标原文结构.txt 已由程序准备，缺失时才用 list-blocks 重新生成。apply-template-fields 只传 fields_file，工具读取文件内全部候选的完整分类；失败时编辑该文件后重新提交路径，不要在工具参数里重复输出字段清单。',
+    description: '抽取投标模版章节、扫描待填候选，并按分类文件写入 Word 内容控件。按 extract-chapters、scan-template-fields、apply-template-fields、confirm-template-fields 顺序调用；招标原文结构.txt 已由程序准备，缺失时才用 list-blocks 重新生成。scan-template-fields 写出带定位号的投标模版正文.txt。apply-template-fields 只传 fields_file，成功后写出投标模版效果.txt，审阅无误后调用 confirm-template-fields 结束；失败时编辑分类文件后重新提交路径，不要在工具参数里重复输出字段清单。',
     promptSnippet: '用 openxml 抽取投标模版、扫描待填候选并写入内容控件。',
     parameters: Type.Object({
       action: Type.String({
-        enum: [LIST_BLOCKS_ACTION, EXTRACT_CHAPTERS_ACTION, SCAN_TEMPLATE_FIELDS_ACTION, APPLY_TEMPLATE_FIELDS_ACTION],
-        description: '依次列块、抽章、扫描待填候选、应用字段标记。',
+        enum: [LIST_BLOCKS_ACTION, EXTRACT_CHAPTERS_ACTION, SCAN_TEMPLATE_FIELDS_ACTION, APPLY_TEMPLATE_FIELDS_ACTION, CONFIRM_TEMPLATE_FIELDS_ACTION],
+        description: '依次列块、抽章、扫描待填候选、应用分类、审阅后确认。',
       }),
       chapters: Type.Optional(Type.Array(Type.Object({
         id: Type.Optional(Type.String({ description: '已确认模板目录中该目录的 id。' })),
@@ -206,7 +262,7 @@ function createPiOpenXmlTool({
       })),
       fields_file: Type.Optional(Type.String({
         minLength: 1,
-        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组；fields 每项包含 candidate_id、name、subject、fill_by（ai 或 manual），可选 instruction；附件需要多张图片时用 parts 拆分。',
+        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组，可选 positions、removals 和 headings 数组；positions 每项包含 id、at（投标模版正文中的定位号）、op（insert、span、choose、attachment 或 table），按 op 填写 before、after、text、options；removals 每项包含 at、text，可选 before、after；headings 每项包含 chapter_id 和 at（定位号或 null）；fields 每项包含 candidate_id（规则候选或补充位置的 id）、name、subject、fill_by（ai、manual 或 rule），可选 instruction；附件需要多张图片时用 parts 拆分。',
       })),
     }, { additionalProperties: false }),
     execute: async (_toolCallId, params, signal) => {
@@ -288,12 +344,15 @@ function createPiOpenXmlTool({
             signal,
           });
           let candidateData;
+          let templateText;
           try {
             const candidatesPath = path.join(result.jobDir, 'template-field-candidates.json');
-            if (!fs.existsSync(candidatesPath)) {
-              throw new Error('助手没有写出投标模版字段候选');
+            const templateTextPath = path.join(result.jobDir, 'template-text.txt');
+            if (!fs.existsSync(candidatesPath) || !fs.existsSync(templateTextPath)) {
+              throw new Error('助手没有写出投标模版字段候选和模版正文');
             }
             candidateData = JSON.parse(fs.readFileSync(candidatesPath, 'utf8'));
+            templateText = fs.readFileSync(templateTextPath, 'utf8');
           } finally {
             removeJobDir(result);
           }
@@ -302,16 +361,18 @@ function createPiOpenXmlTool({
             `${JSON.stringify(candidateData, null, 2)}\n`,
             'utf8',
           );
+          fs.writeFileSync(path.join(workspaceDir, AGENT_TEMPLATE_TEXT_FILE), templateText, 'utf8');
           const toolPayload = {
             ok: true,
             action,
             file_path: AGENT_FIELD_CANDIDATES_FILE,
+            template_text_path: AGENT_TEMPLATE_TEXT_FILE,
             version: candidateData.version,
             default_suggested_fill_by: candidateData.default_suggested_fill_by,
             contexts: candidateData.contexts,
             candidates: candidateData.candidates,
             candidate_count: candidateData.candidates.length,
-            message: `已写入 ${AGENT_FIELD_CANDIDATES_FILE}，当前结果已包含紧凑候选，请逐项分类后调用 apply-template-fields。`,
+            message: `已写入 ${AGENT_FIELD_CANDIDATES_FILE} 和 ${AGENT_TEMPLATE_TEXT_FILE}，当前结果已包含紧凑候选。请通读 ${AGENT_TEMPLATE_TEXT_FILE}，写好分类文件后调用 apply-template-fields。`,
           };
           emitStep(2, `识别到 ${candidateData.candidates.length} 个待填位置，正在分类`);
           return createToolResult(toolPayload, true, {
@@ -330,13 +391,17 @@ function createPiOpenXmlTool({
           if (classificationPath === '..' || classificationPath.startsWith('../')) {
             throw new Error('fields_file 必须位于当前工作区内');
           }
-          const selections = JSON.parse(fs.readFileSync(path.join(workspaceDir, classificationPath), 'utf8'));
+          const classificationContent = fs.readFileSync(path.join(workspaceDir, classificationPath), 'utf8');
+          const selections = JSON.parse(classificationContent);
           if (!validateFieldSelections(selections)) {
             const errors = validateFieldSelections.errors.map((error) => `${error.instancePath || '/'} ${error.message}`).join('；');
             throw new Error(`分类文件结构无效，请修改 ${classificationPath} 后重新提交路径：${errors}`);
           }
           const fields = normalizeTemplateFields(selections.fields);
-          const ignoredCandidateIds = normalizeIgnoredCandidateIds(selections.ignored_candidate_ids);
+          const ignoredCandidateIds = normalizeCandidateIds(selections.ignored_candidate_ids);
+          const positions = normalizePositions(selections.positions);
+          const removals = normalizeRemovals(selections.removals);
+          const headings = normalizeHeadings(selections.headings);
           emitStep(3, `正在写入 ${fields.length} 个字段`);
           const result = await openXmlHelperService.runJob({
             action: APPLY_TEMPLATE_FIELDS_ACTION,
@@ -347,25 +412,52 @@ function createPiOpenXmlTool({
               fields_output: bidTemplateFieldsRelativePath,
               fields,
               ignored_candidate_ids: ignoredCandidateIds,
+              positions,
+              removals,
+              headings,
             },
             signal,
           });
-          removeJobDir(result);
+          try {
+            const previewPath = path.join(result.jobDir, 'template-preview.txt');
+            if (!fs.existsSync(previewPath)) throw new Error('助手没有写出投标模版效果正文');
+            fs.writeFileSync(path.join(workspaceDir, AGENT_TEMPLATE_PREVIEW_FILE), fs.readFileSync(previewPath, 'utf8'), 'utf8');
+          } finally {
+            removeJobDir(result);
+          }
           if (!bidTemplatePath || !bidTemplateFieldsPath
             || !fs.existsSync(bidTemplatePath) || !fs.existsSync(bidTemplateFieldsPath)) {
             throw new Error('助手没有同时写出投标模版和字段清单');
           }
           fs.copyFileSync(bidTemplatePath, path.join(workspaceDir, AGENT_TEMPLATE_FILE));
           fs.copyFileSync(bidTemplateFieldsPath, path.join(workspaceDir, AGENT_TEMPLATE_FIELDS_FILE));
+          lastApplied = { path: classificationPath, content: classificationContent };
+          appliedCount += 1;
           return createToolResult({
             ok: true,
             action,
             file_path: AGENT_TEMPLATE_FIELDS_FILE,
+            preview_path: AGENT_TEMPLATE_PREVIEW_FILE,
             template_file_path: AGENT_TEMPLATE_FILE,
             output: result.output || bidTemplateRelativePath,
             field_count: result.blockCount || result.block_count || fields.length,
-            message: '投标模版字段标记和字段清单已生成。',
+            message: appliedCount >= REVIEW_APPLY_LIMIT
+              ? `已按分类生成投标模版和 ${AGENT_TEMPLATE_PREVIEW_FILE}，已修改应用 ${appliedCount} 次：只剩明显错误时再修改，否则直接调用 confirm-template-fields 确认。`
+              : `已按分类生成投标模版。请通读 ${AGENT_TEMPLATE_PREVIEW_FILE} 审阅导出效果，有问题修改分类文件后重新应用，确认无误后调用 confirm-template-fields。`,
           });
+        }
+
+        if (action === CONFIRM_TEMPLATE_FIELDS_ACTION) {
+          if (!lastApplied) {
+            throw new Error('请先调用 apply-template-fields 应用分类文件，并审阅投标模版效果.txt');
+          }
+          const current = fs.existsSync(path.join(workspaceDir, lastApplied.path))
+            ? fs.readFileSync(path.join(workspaceDir, lastApplied.path), 'utf8')
+            : '';
+          if (current !== lastApplied.content) {
+            throw new Error(`${lastApplied.path} 在上次应用后有修改，请先重新调用 apply-template-fields，审阅新的投标模版效果.txt 后再确认`);
+          }
+          return createToolResult({ ok: true, action, file_path: AGENT_TEMPLATE_FIELDS_FILE, message: '投标模版已确认。' });
         }
 
         throw new Error(`未知动作：${action}`);
@@ -407,7 +499,7 @@ function normalizeChapters(chapters) {
 }
 
 /**
- * 按已确认目录核对抽章：每个目录恰好抽一章，按目录顺序排列，并注入是否自动填写。
+ * 按已确认目录核对抽章：每个目录恰好抽一章，按目录顺序排列，并注入是否自动填写和是否为规则和页码章节。
  * 未提供已确认目录时（如其他调用方）保持原样。
  */
 function bindTemplateChapters(chapters, templateChapters) {
@@ -427,7 +519,11 @@ function bindTemplateChapters(chapters, templateChapters) {
   }
   return [...chapters]
     .sort((left, right) => order.get(left.id) - order.get(right.id))
-    .map((chapter) => ({ ...chapter, auto_fill: templateChapters[order.get(chapter.id)].auto_fill !== false }));
+    .map((chapter) => ({
+      ...chapter,
+      auto_fill: templateChapters[order.get(chapter.id)].auto_fill !== false,
+      ...(templateChapters[order.get(chapter.id)].rule_page ? { rule_page: true } : {}),
+    }));
 }
 
 function normalizeTemplateFields(fields) {
@@ -446,7 +542,37 @@ function normalizeTemplateFields(fields) {
   }));
 }
 
-function normalizeIgnoredCandidateIds(candidateIds) {
+// 锚点文字保留原样（空白也参与定位），只去掉 id、at、op 两端的空白；未提供的键不传，便于助手区分“没写”和“写了空串”。
+function normalizePositions(positions) {
+  return (Array.isArray(positions) ? positions : []).map((item) => ({
+    id: String(item?.id || '').trim(),
+    at: String(item?.at || '').trim(),
+    op: String(item?.op || '').trim(),
+    ...(typeof item?.before === 'string' ? { before: item.before } : {}),
+    ...(typeof item?.after === 'string' ? { after: item.after } : {}),
+    ...(typeof item?.text === 'string' ? { text: item.text } : {}),
+    ...(Array.isArray(item?.options) ? { options: item.options.map((option) => String(option ?? '')) } : {}),
+  }));
+}
+
+// 去掉的原文同样保留锚点原样，只去掉 at 两端的空白。
+function normalizeRemovals(removals) {
+  return (Array.isArray(removals) ? removals : []).map((item) => ({
+    at: String(item?.at || '').trim(),
+    text: String(item?.text ?? ''),
+    ...(typeof item?.before === 'string' ? { before: item.before } : {}),
+    ...(typeof item?.after === 'string' ? { after: item.after } : {}),
+  }));
+}
+
+function normalizeHeadings(headings) {
+  return (Array.isArray(headings) ? headings : []).map((item) => ({
+    chapter_id: String(item?.chapter_id || '').trim(),
+    at: typeof item?.at === 'string' && item.at.trim() ? item.at.trim() : null,
+  }));
+}
+
+function normalizeCandidateIds(candidateIds) {
   return (Array.isArray(candidateIds) ? candidateIds : [])
     .map((item) => String(item || '').trim())
     .filter(Boolean);
@@ -473,6 +599,8 @@ function resolveChapterSources(chapters, businessSources, resolveAgentSources) {
 
 module.exports = {
   AGENT_BLOCKS_FILE,
+  AGENT_TEMPLATE_PREVIEW_FILE,
+  CONFIRM_TEMPLATE_FIELDS_ACTION,
   OPENXML_TOOL_NAME,
   TEMPLATE_FIELD_CLASSIFICATION_SCHEMA,
   createPiOpenXmlTool,

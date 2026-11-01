@@ -14,12 +14,19 @@ sealed class FillTocPageNumbersRequest
     public string Input { get; set; } = "";
     public string Output { get; set; } = "";
 
-    /// <summary>目录书签到显示页码；没有或为空的条目页码留空。</summary>
+    /// <summary>目录书签到显示页码；没有或为空的条目页码留空。不传时不回填目录，文档也可以没有目录。</summary>
     [JsonPropertyName("page_numbers")]
     public Dictionary<string, string>? PageNumbers { get; set; }
+
+    /// <summary>页码引用锚点书签到显示页码；不传时不回填页码引用。</summary>
+    [JsonPropertyName("page_refs")]
+    public Dictionary<string, string>? PageRefs { get; set; }
 }
 
-/// <summary>把 Main 测量得到的页码写入整本导出目录的 PAGEREF 缓存值；完整文档和只含目录的小文档都用此动作。</summary>
+/// <summary>
+/// 把 Main 测量得到的页码写入整本导出目录和页码引用的域缓存值；完整文档和只含目录的小文档都用此动作。
+/// 只校验改动的目录内容控件和页码引用段落。
+/// </summary>
 static class FillTocPageNumbersAction
 {
     public const string Name = "fill-toc-page-numbers";
@@ -41,20 +48,32 @@ static class FillTocPageNumbersAction
 
             using var stream = new MemoryStream();
             using (var source = File.OpenRead(inputPath)) source.CopyTo(stream);
-            int missing;
+            int? tocMissing = null;
+            int? refMissing = null;
             using (var document = WordprocessingDocument.Open(stream, true))
             {
                 var body = document.MainDocumentPart?.Document?.Body ?? throw new InvalidOperationException("Word 缺少正文");
-                var tocs = body.Descendants<Wp.SdtBlock>().Where(TableOfContentsBuilder.IsToc).ToList();
-                if (tocs.Count != 1) throw new InvalidOperationException("文档中没有程序生成的目录");
-                missing = TableOfContentsBuilder.FillPageNumbers(tocs[0], request.PageNumbers ?? []);
-                var errors = new OpenXmlValidator(FileFormatVersions.Microsoft365).Validate(tocs[0]).Take(10).ToList();
-                if (errors.Count > 0) throw new InvalidOperationException($"目录 Open XML 校验失败：{string.Join("；", errors.Select(item => item.Description))}");
+                var touched = new List<OpenXmlElement>();
+                if (request.PageNumbers is { } pageNumbers)
+                {
+                    var tocs = body.Descendants<Wp.SdtBlock>().Where(TableOfContentsBuilder.IsToc).ToList();
+                    if (tocs.Count != 1) throw new InvalidOperationException("文档中没有程序生成的目录");
+                    tocMissing = TableOfContentsBuilder.FillPageNumbers(tocs[0], pageNumbers);
+                    touched.Add(tocs[0]);
+                }
+                if (request.PageRefs is { } pageRefs)
+                {
+                    refMissing = PageReferenceBuilder.FillPageNumbers(body, pageRefs, touched);
+                }
+                var validator = new OpenXmlValidator(FileFormatVersions.Microsoft365);
+                var errors = touched.SelectMany(item => validator.Validate(item)).Take(10).ToList();
+                if (errors.Count > 0) throw new InvalidOperationException($"页码 Open XML 校验失败：{string.Join("；", errors.Select(item => item.Description))}");
                 document.MainDocumentPart!.Document.Save();
             }
             File.WriteAllBytes(Path.Combine(jobDirectory, request.Output.Trim()), stream.ToArray());
             var result = JobResult.Success(Name, request.Output.Trim());
-            result.Toc = new TocJobResult { MissingCount = missing };
+            if (tocMissing is not null) result.Toc = new TocJobResult { MissingCount = tocMissing };
+            if (refMissing is not null) result.PageRefs = new PageRefJobResult { MissingCount = refMissing };
             return result;
         }
         catch (Exception exception)

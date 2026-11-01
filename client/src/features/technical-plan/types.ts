@@ -1,11 +1,11 @@
-import type { ExportTemplateScope, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
+import type { ExportTemplateScope, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, OutlineMode, OutlineRuleBasis, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'generation-settings' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
+export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'rule-page-compile' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
 export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'business-filling' | 'export-repair' | 'done';
@@ -36,6 +36,7 @@ export interface OutlineSelectionItem {
   attr?: OutlineAttribute;
   content_mode?: OutlineContentMode;
   content_mode_note?: string;
+  rule_basis?: OutlineRuleBasis;
   post_award?: boolean;
   source?: OutlineSourceRange;
   children?: OutlineSelectionItem[];
@@ -210,6 +211,7 @@ export interface BackgroundTaskState {
       layout_completed?: number;
       developer_stage_gate?: ContentGenerationPhase;
       business_fill?: BusinessTemplateFillState;
+      rule_page?: RulePageState;
     };
   };
 }
@@ -278,6 +280,17 @@ export interface ContentGenerationPlanState {
 
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
+/** 规则和页码编制状态：正文生成时与商务模版填写并行，或在正文页“重新编制”时单独运行。 */
+export interface RulePageState {
+  phase: 'compiling' | 'rendering' | 'completed';
+  status: 'running' | 'paused' | 'interrupted' | 'error' | 'success';
+  table_count: number;
+  row_count: number;
+  unresolved: Array<{ label: string; reason: string }>;
+  error?: string | null;
+  updated_at?: string;
+}
+
 /** 商务模版填写副流程状态，统计以填写项为单位（同名字段或表格单元格）。 */
 export interface BusinessTemplateFillState {
   phase: 'filling' | 'reviewing' | 'rendering' | 'completed';
@@ -302,7 +315,8 @@ export interface BusinessTemplateFillState {
 export interface BusinessFillReviewUnit {
   key: string;
   name: string;
-  kind: 'text' | 'choice' | 'attachment';
+  /** choice 为勾选项（可多选），select 为择一（只选一项，填写后原文换成选中项）。 */
+  kind: 'text' | 'choice' | 'select' | 'attachment';
   fill_by: 'ai' | 'manual';
   /** 该填写项展开到的模版字段，同名字段在版式中的多处位置共用一个值。 */
   field_ids: string[];
@@ -377,18 +391,21 @@ export interface BusinessFillReviewChapter {
 
 export interface BusinessFillReview {
   units: BusinessFillReviewUnit[];
+  /** 规则和页码编制的字段，只读显示。 */
+  rule_field_ids?: string[];
   images: BusinessFillReviewImage[];
   /** 正文默认字号（磅）。 */
   base_size: number;
   chapters: BusinessFillReviewChapter[];
 }
 
-/** 投标模版与当前目录不一致的非 AI 叶子；auto_fill 为当前处理方式对应的字段是否自动填写。 */
+/** 投标模版与当前目录不一致的非 AI 叶子；auto_fill 为当前处理方式对应的字段是否自动填写，rule_page 为是否规则和页码。 */
 export interface BidTemplateInspectionItem {
   id: string;
   number: string;
   title: string;
   auto_fill: boolean;
+  rule_page: boolean;
 }
 
 /** “下一步”前的投标模版核对：added 为模版缺少的章节，changed 为填写方式已变化的章节。 */
@@ -424,6 +441,7 @@ export interface ContentGenerationRuntimeState {
   target_item_id?: string;
   regenerate_requirement?: string;
   business_fill?: BusinessTemplateFillState;
+  rule_page?: RulePageState;
   updated_at?: string;
 }
 
@@ -506,6 +524,7 @@ export interface TechnicalPlanState {
   outlineGenerationTask?: BackgroundTaskState;
   outlineAdjustmentTask?: BackgroundTaskState;
   bidTemplateExtractionTask?: BackgroundTaskState;
+  rulePageCompileTask?: BackgroundTaskState;
   globalFactsMode: GlobalFactsMode;
   globalFactsTask?: BackgroundTaskState;
   globalFactsAdjustmentTask?: BackgroundTaskState;

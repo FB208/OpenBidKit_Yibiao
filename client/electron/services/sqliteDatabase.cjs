@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 42;
+const schemaVersion = 43;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -93,6 +93,7 @@ function createInitialSchema(db) {
       description TEXT NOT NULL DEFAULT '',
       content_mode TEXT,
       content_mode_note TEXT,
+      rule_basis TEXT,
       source_requirement_id TEXT,
       source_requirement_title TEXT,
       knowledge_item_ids_json TEXT,
@@ -320,6 +321,11 @@ function unifyTechnicalPlanGenerationConfig(db) {
 function addTechnicalPlanOutlineContentMode(db) {
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'content_mode_note', 'TEXT');
+}
+
+// 规则和页码叶子的应答依据（技术、商务、技术和商务），其他节点为空。
+function addTechnicalPlanOutlineRuleBasis(db) {
+  addColumnIfMissing(db, 'technical_plan_outline_nodes', 'rule_basis', 'TEXT');
 }
 
 function createTaskLogsSchema(db) {
@@ -1771,6 +1777,13 @@ const schemaHealthColumnGroups = [
       fix_ai_enabled: 'INTEGER NOT NULL DEFAULT 1',
     },
   },
+  {
+    version: 43,
+    table: 'technical_plan_outline_nodes',
+    columns: {
+      rule_basis: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -2040,6 +2053,11 @@ const migrations = [
     version: 42,
     description: '暗标自动修复记住是否带 AI 修复',
     up: addBlindCheckFixMode,
+  },
+  {
+    version: 43,
+    description: '技术方案规则和页码目录新增应答依据',
+    up: addTechnicalPlanOutlineRuleBasis,
   },
 ];
 

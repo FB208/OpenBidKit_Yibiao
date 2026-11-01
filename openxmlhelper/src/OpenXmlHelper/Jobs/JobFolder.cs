@@ -49,6 +49,10 @@ sealed class JobResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TocJobResult? Toc { get; set; }
 
+    /// <summary>整本导出的页码引用与锚点，或页码引用回填结果。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PageRefJobResult? PageRefs { get; set; }
+
     public static JobResult Success(string action, string? output = null, int? blockCount = null) => new()
     {
         Ok = true,
@@ -58,6 +62,19 @@ sealed class JobResult
     };
 
     public static JobResult Fail(string error, string? errorKind = null) => new() { Ok = false, Error = error, ErrorKind = errorKind };
+}
+
+/// <summary>页码引用：渲染时返回引用数、未导出小节的引用数和全部锚点；回填时返回缺页码的引用数。</summary>
+sealed class PageRefJobResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Count { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MissingCount { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<PageAnchor>? Anchors { get; set; }
 }
 
 /// <summary>目录结果：渲染时返回条目、目录页块号和只含目录的小文档；回填页码时返回未能写入页码的条数。</summary>

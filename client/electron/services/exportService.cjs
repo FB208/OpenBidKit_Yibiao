@@ -214,6 +214,8 @@ function getPendingContentModeMessage(item) {
   let message = '';
   if (item?.content_mode === 'template-fill') {
     message = '按招标文件格式补充本节内容';
+  } else if (item?.content_mode === 'rule-page') {
+    message = '按招标文件要求逐项编制本节并填写页码';
   } else if (item?.content_mode === 'directory-generate') {
     message = '生成或更新目录';
   } else if (item?.content_mode === 'manual-fill') {

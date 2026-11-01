@@ -71,6 +71,9 @@ static class RestrictedHtmlDocumentRenderer
 
         /// <summary>整本导出生成的目录；目录生成小节不存在时为 null。</summary>
         public TocResult? Toc { get; init; }
+
+        /// <summary>整本导出的页码引用与锚点；两者都没有时为 null。</summary>
+        public PageRefResult? PageRefs { get; init; }
     }
 
     /// <summary>整本导出中目录的位置、标题、所在样式范围，以及分页加在哪个块上。</summary>
@@ -151,6 +154,8 @@ static class RestrictedHtmlDocumentRenderer
         var blockCount = 0;
         var index = 0;
         TocState? toc = null;
+        var anchorId = PageReferenceBuilder.FirstBookmarkId;
+        string NextAnchorId() => (anchorId++).ToString(CultureInfo.InvariantCulture);
         while (index < ranges.Count)
         {
             var pageKind = ranges[index].GetAttribute("data-yb-export-page-template") ?? "false";
@@ -181,11 +186,17 @@ static class RestrictedHtmlDocumentRenderer
                 {
                     if (!businessPage) throw new InvalidOperationException("商务模版章节必须位于 business 页面范围");
                     // 组首或父目录标题之后的章节去掉开头分页；相邻章节之间保留模版自带的分页。
+                    var level = int.TryParse(range.GetAttribute("data-yb-business-level"), out var parsedLevel) ? parsedLevel : 1;
                     pageElements.AddRange(merger!.ImportChapter(
                         chapterId,
                         range.GetAttribute("data-yb-business-title") ?? "",
-                        int.TryParse(range.GetAttribute("data-yb-business-level"), out var level) ? level : 1,
-                        stripLeadingPageBreak: !afterChapter));
+                        level,
+                        stripLeadingPageBreak: !afterChapter,
+                        new PageAnchorRequest(
+                            SplitAnchorIds(range.GetAttribute("data-yb-anchor-start")),
+                            SplitAnchorIds(range.GetAttribute("data-yb-anchor-end")),
+                            NextAnchorId),
+                        OutlineNumberText(range.GetAttribute("data-yb-outline-number"), format, level)));
                     afterChapter = true;
                     continue;
                 }
@@ -197,6 +208,7 @@ static class RestrictedHtmlDocumentRenderer
                 blockCount += RestrictedHtmlWordInserter.InsertIntoContent(assetRoot, mainPart, body,
                     rangeFormat.Number(rangeFormat.Section("image"), "max_width_percent", 90), prepared.Document, assets, cacheAssets: true);
                 ApplyLayoutBookmarks(body, result.Concat(pageElements).SelectMany(item => item.Descendants<Wp.BookmarkStart>()).Count());
+                PageReferenceBuilder.ApplyAnchors(body, NextAnchorId);
                 // 目录先换成内容控件再格式化，页框遇到非段落块会收口，不会把目录卷进正文框表格。
                 if (TableOfContentsBuilder.ReplaceMarker(body) is { } tocSdt)
                 {
@@ -232,6 +244,7 @@ static class RestrictedHtmlDocumentRenderer
             }
         }
         body.Append(result);
+        var pageRefs = PageReferenceBuilder.ReplaceReferences(body, toc?.Sdt);
         var tocResult = toc is null ? null : BuildTableOfContents(mainPart, body, toc);
         // 分范围转换时图片编号从各范围起算；合成后统一文档及页眉页脚的绘图编号。
         uint drawingId = 1;
@@ -251,6 +264,7 @@ static class RestrictedHtmlDocumentRenderer
             BusinessWarnings = merger?.Warnings ?? [],
             PendingMarkCount = CountPendingMarks(body),
             Toc = tocResult,
+            PageRefs = pageRefs.Count > 0 || pageRefs.Anchors.Count > 0 ? pageRefs : null,
         };
     }
 
@@ -337,6 +351,10 @@ static class RestrictedHtmlDocumentRenderer
         });
 
     /// <summary>自检副本的定位段落转为零宽书签，不进入可见正文或改变分页。</summary>
+    /// <summary>商务章节上的锚点属性：空格分隔的目录节点 ID。</summary>
+    static IReadOnlyList<string> SplitAnchorIds(string? value) =>
+        (value ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     static void ApplyLayoutBookmarks(Wp.Body body, int bookmarkId)
     {
         const string prefix = "YIBIAOLAYOUT:yb_layout_";
@@ -2171,6 +2189,20 @@ static class RestrictedHtmlDocumentRenderer
             : (paper.Width / 10.0, paper.Height / 10.0);
     }
     static int MmToTwips(double value) => Math.Max(1, (int)Math.Round(value * 56.7));
+
+    /// <summary>
+    /// 商务章节标题的整本编号文字（含与标题之间的空格），口径同 PrepareHtml 的 outlineOnly：按导出模板的标题编号格式，模板未设置该级标题时用原编号。
+    /// 统一用导出模板的格式，与 AI 章节标题一致；没有编号（前置页）时为空。
+    /// </summary>
+    static string OutlineNumberText(string? outlineNumber, FormatReader format, int level)
+    {
+        if (string.IsNullOrWhiteSpace(outlineNumber)) return "";
+        var heading = format.Heading(Math.Clamp(level, 1, 6));
+        var number = heading.ValueKind == JsonValueKind.Undefined
+            ? outlineNumber
+            : FormatHeadingNumber(outlineNumber.Split('.').Select(int.Parse).ToArray(), heading);
+        return number.Length > 0 && NeedsSpace(number) ? $"{number} " : number;
+    }
 
     /// <summary>按模板占位符将标题层级计数格式化为显示编号。</summary>
     static string FormatHeadingNumber(IReadOnlyList<int> rawParts, JsonElement heading)

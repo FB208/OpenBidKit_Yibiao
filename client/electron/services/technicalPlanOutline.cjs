@@ -19,6 +19,14 @@ function collectOutlineIds(items, ids = new Set()) {
   return ids;
 }
 
+// 规则和页码叶子的应答依据：技术、商务、技术和商务。程序据此给规则和页码 Agent 对应的评分要求。
+const RULE_BASES = ['technical', 'business', 'both'];
+
+// 只有规则和页码叶子保留合法的应答依据。
+function ruleBasisFields(item) {
+  return item?.content_mode === 'rule-page' && RULE_BASES.includes(item?.rule_basis) ? { rule_basis: item.rule_basis } : {};
+}
+
 // Agent 只能沿用已提供的 ID；新节点必须填 null，由程序一次性分配身份。keepFields 只用于一级目录阶段保留原文位置等候选信息。
 function acceptAgentOutline(items, knownIds = new Set(), { keepFields = [] } = {}) {
   const seen = new Set();
@@ -36,6 +44,7 @@ function acceptAgentOutline(items, knownIds = new Set(), { keepFields = [] } = {
         ...(branch ? { children: visit(item.children, false) } : {
           content_mode: item.content_mode,
           ...(item.content_mode === 'other' && item.content_mode_note?.trim() ? { content_mode_note: item.content_mode_note.trim() } : {}),
+          ...ruleBasisFields(item),
         }),
       };
     });
@@ -83,6 +92,8 @@ function stripOutlineFields(items, fields) {
 
 module.exports = {
   NODE_ID_PATTERN,
+  RULE_BASES,
+  ruleBasisFields,
   numberOutline,
   collectOutlineIds,
   acceptAgentOutline,

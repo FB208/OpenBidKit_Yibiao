@@ -1,4 +1,4 @@
-const { numberOutline } = require('./technicalPlanOutline.cjs');
+const { numberOutline, ruleBasisFields } = require('./technicalPlanOutline.cjs');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,7 +26,9 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
-const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+// 与 rulePageCompileTask.cjs 的 RULE_PAGE_TABLES_VERSION 一致；此处不引用任务模块，避免 Store 加载 Agent 依赖。
+const RULE_PAGE_TABLES_VERSION = 3;
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 
@@ -109,6 +111,7 @@ const taskFieldTypes = {
   outlineGenerationTask: 'outline-generation',
   outlineAdjustmentTask: 'outline-adjustment',
   bidTemplateExtractionTask: 'bid-template-extraction',
+  rulePageCompileTask: 'rule-page-compile',
   globalFactsTask: 'global-facts-generation',
   globalFactsAdjustmentTask: 'global-facts-adjustment',
   contentGenerationTask: 'content-generation',
@@ -301,8 +304,9 @@ function getAllBidAnalysisTasks() {
   return getBidAnalysisTasks('full');
 }
 
-function getRequiredBidAnalysisTaskIds() {
-  return getBidAnalysisTasks('key').map((task) => task.id);
+// 必选项随生成类型变化：完整投标文件两种评分要求都必选，独立成册只必选对应的一种。
+function getRequiredBidAnalysisTaskIds(outlineMode) {
+  return getBidAnalysisTasks('key', outlineMode).map((task) => task.id);
 }
 
 function normalizeBidAnalysisTaskIds(taskIds) {
@@ -314,9 +318,9 @@ function normalizeBidAnalysisTaskIds(taskIds) {
     .map((task) => task.id);
 }
 
-function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
+function normalizeBidAnalysisConfig(mode, selectedTaskIds, outlineMode) {
   const allTaskIds = getAllBidAnalysisTasks().map((task) => task.id);
-  const requiredTaskIds = getRequiredBidAnalysisTaskIds();
+  const requiredTaskIds = getRequiredBidAnalysisTaskIds(outlineMode);
   const requiredSet = new Set(requiredTaskIds);
   const selectedSet = new Set([...requiredTaskIds, ...normalizeBidAnalysisTaskIds(selectedTaskIds)]);
   const selectedIds = allTaskIds.filter((taskId) => selectedSet.has(taskId));
@@ -332,8 +336,8 @@ function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
   return { mode: 'key', selectedTaskIds: requiredTaskIds };
 }
 
-function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
-  return normalizeBidAnalysisConfig(mode, selectedTaskIds).selectedTaskIds;
+function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds, outlineMode) {
+  return normalizeBidAnalysisConfig(mode, selectedTaskIds, outlineMode).selectedTaskIds;
 }
 
 function isValidOutlineExpansionMode(value) {
@@ -372,12 +376,13 @@ function normalizeContentGenerationOptions(options) {
 }
 
 function createDefaultGenerationConfig() {
-  const bidAnalysis = normalizeBidAnalysisConfig('key', []);
+  const outlineMode = 'standalone-technical';
+  const bidAnalysis = normalizeBidAnalysisConfig('key', [], outlineMode);
   return {
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: 'single',
-    outlineMode: 'standalone-technical',
+    outlineMode,
     outlineExpansionMode: 'ai-complement',
     outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
     referenceKnowledgeDocumentIds: [],
@@ -391,14 +396,15 @@ function createDefaultGenerationConfig() {
 function normalizeGenerationConfig(config) {
   const source = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
   const defaults = createDefaultGenerationConfig();
-  const bidAnalysis = normalizeBidAnalysisConfig(source.bidAnalysisMode, source.bidAnalysisSelectedTaskIds);
+  const outlineMode = ['response-file', 'standalone-technical', 'standalone-business'].includes(source.outlineMode)
+    ? source.outlineMode
+    : defaults.outlineMode;
+  const bidAnalysis = normalizeBidAnalysisConfig(source.bidAnalysisMode, source.bidAnalysisSelectedTaskIds, outlineMode);
   return {
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: normalizeBidSectionMode(source.bidSectionMode),
-    outlineMode: ['response-file', 'standalone-technical', 'standalone-business'].includes(source.outlineMode)
-      ? source.outlineMode
-      : defaults.outlineMode,
+    outlineMode,
     outlineExpansionMode: isValidOutlineExpansionMode(source.outlineExpansionMode) ? source.outlineExpansionMode : defaults.outlineExpansionMode,
     outlineWordControlOptions: normalizeOutlineWordControlOptions(source.outlineWordControlOptions),
     referenceKnowledgeDocumentIds: normalizeGenerationDocumentIds(source.referenceKnowledgeDocumentIds),
@@ -426,6 +432,7 @@ function flattenOutlineItems(items, parentNodeId = null, level = 1, rows = []) {
       description: String(item?.description || '').trim(),
       content_mode: item?.children?.length ? null : String(item?.content_mode || '').trim() || null,
       content_mode_note: item?.children?.length || item?.content_mode !== 'other' ? null : String(item?.content_mode_note || '').trim() || null,
+      rule_basis: item?.children?.length ? null : ruleBasisFields(item).rule_basis || null,
       source_requirement_id: item?.source_requirement_id ? String(item.source_requirement_id) : null,
       source_requirement_title: item?.source_requirement_title ? String(item.source_requirement_title) : null,
       knowledge_item_ids_json: Array.isArray(item?.knowledge_item_ids) && item.knowledge_item_ids.length ? JSON.stringify(item.knowledge_item_ids) : null,
@@ -480,6 +487,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
   }
   function deleteGlobalFactsAgentTask() {
     agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY);
@@ -515,6 +523,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const bidTemplateSourcePath = getTechnicalPlanBidTemplateSourcePath(app);
   const bidTemplateFieldsPath = getTechnicalPlanBidTemplateFieldsPath(app);
   const bidTemplateBlankPath = getTechnicalPlanBidTemplateBlankPath(app);
+  // 规则和页码的编制结果，回填商务模版时与字段值一起写入；随模版和正文失效。
+  const rulePageTablesPath = path.join(path.dirname(bidTemplatePath), 'rule-page-tables.json');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const workspaceDir = path.dirname(path.dirname(tenderMarkdownPath));
@@ -1026,6 +1036,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       path.join(sourcePathParts.dir, `${sourcePathParts.name}.chapters.json`),
       bidTemplateFieldsPath,
       bidTemplateBlankPath,
+      rulePageTablesPath,
     ];
     const templateDir = path.dirname(bidTemplatePath);
     if (fs.existsSync(templateDir)) {
@@ -1033,6 +1044,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         `${path.basename(bidTemplatePath)}.`,
         `${path.basename(bidTemplateFieldsPath)}.`,
         `${path.basename(bidTemplateBlankPath)}.`,
+        `${path.basename(rulePageTablesPath)}.`,
       ];
       for (const name of fs.readdirSync(templateDir)) {
         // 整本导出临时生成的商务模版正常会在导出后删除，这里清理异常退出留下的文件。
@@ -1104,15 +1116,33 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return payload;
   }
 
-  // 已填值随正文一起失效：暂存当前模版与清单，再从底稿恢复占位；事务失败时先删新建文件再恢复暂存文件。
+  // 规则和页码编制结果：没有时为 null。
+  // 旧版本的编制结果（按预印表、空白表记录行）不再兼容，视为尚未编制，需要重新编制。
+  function readRulePageTables() {
+    if (!fs.existsSync(rulePageTablesPath)) return null;
+    const payload = JSON.parse(fs.readFileSync(rulePageTablesPath, 'utf-8'));
+    return payload?.version === RULE_PAGE_TABLES_VERSION ? payload : null;
+  }
+
+  function saveRulePageTables(payload) {
+    writeBidTemplateFile(rulePageTablesPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8'));
+  }
+
+  // 编制结果失效（目录变更、重新编制）时暂存删除；商务模版 Word 不重写，预览和导出按结果缺失处理。
+  function stageRulePageReset(changes) {
+    if (fs.existsSync(rulePageTablesPath)) stageContentFileRemoval(changes, rulePageTablesPath);
+  }
+
+  // 已填值和规则和页码编制结果随正文一起失效：暂存当前模版与清单，再从底稿恢复占位；事务失败时先删新建文件再恢复暂存文件。
   function stageBusinessTemplateReset(changes) {
     if (!fs.existsSync(bidTemplateFieldsPath)) return;
     const payload = readBidTemplateFields();
-    if (!hasBidTemplateFillValues(payload)) return;
+    if (!hasBidTemplateFillValues(payload) && !fs.existsSync(rulePageTablesPath)) return;
     if (!fs.existsSync(bidTemplateBlankPath)) throw new Error('商务模版缺少空白底稿，请重新生成目录');
     try {
       stageContentFileRemoval(changes, bidTemplatePath);
       stageContentFileRemoval(changes, bidTemplateFieldsPath);
+      stageRulePageReset(changes);
     } catch (error) {
       throw toBidTemplateLockError(error);
     }
@@ -1279,7 +1309,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function getBidItemLabel(itemId, fallbackLabel) {
-    const task = getBidAnalysisTasks('full').find((item) => item.id === itemId) || getBidAnalysisTasks('key').find((item) => item.id === itemId);
+    const task = getAllBidAnalysisTasks().find((item) => item.id === itemId);
     return fallbackLabel || task?.label || itemId;
   }
 
@@ -1344,8 +1374,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  function calculateBidProgress(mode, bidTasks, selectedTaskIds) {
-    const selectedIds = getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds);
+  function calculateBidProgress(mode, bidTasks, selectedTaskIds, outlineMode) {
+    const selectedIds = getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds, outlineMode);
     if (!selectedIds.length) return 0;
     const done = selectedIds.filter((taskId) => ['success', 'error'].includes(bidTasks[taskId]?.status)).length;
     return Math.round((done / selectedIds.length) * 100);
@@ -1363,6 +1393,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         description: row.description || '',
         content_mode: row.content_mode || undefined,
         content_mode_note: row.content_mode_note || undefined,
+        rule_basis: row.rule_basis || undefined,
         source_requirement_id: row.source_requirement_id || undefined,
         source_requirement_title: row.source_requirement_title || undefined,
         knowledge_item_ids: safeJsonParse(row.knowledge_item_ids_json, undefined),
@@ -1411,10 +1442,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const nextIds = new Set(rows.map((row) => row.node_id));
     const upsert = db.prepare(`
       INSERT INTO technical_plan_outline_nodes (
-        node_id, parent_node_id, sort_order, level, title, description, content_mode, content_mode_note, source_requirement_id,
+        node_id, parent_node_id, sort_order, level, title, description, content_mode, content_mode_note, rule_basis, source_requirement_id,
         source_requirement_title, knowledge_item_ids_json, content, created_at, updated_at
       ) VALUES (
-        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @content_mode, @content_mode_note, @source_requirement_id,
+        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @content_mode, @content_mode_note, @rule_basis, @source_requirement_id,
         @source_requirement_title, @knowledge_item_ids_json, @content, @created_at, @updated_at
       ) ON CONFLICT(node_id) DO UPDATE SET
         parent_node_id = excluded.parent_node_id,
@@ -1424,6 +1455,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         description = excluded.description,
         content_mode = excluded.content_mode,
         content_mode_note = excluded.content_mode_note,
+        rule_basis = excluded.rule_basis,
         source_requirement_id = excluded.source_requirement_id,
         source_requirement_title = excluded.source_requirement_title,
         knowledge_item_ids_json = excluded.knowledge_item_ids_json,
@@ -1720,6 +1752,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
     db.prepare("UPDATE technical_plan_outline_nodes SET content = '', updated_at = ?").run(now());
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
@@ -1742,6 +1775,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const task = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation'").get();
     if (['running', 'pausing', 'paused'].includes(task?.status)) {
       throw new Error('正文生成任务正在运行或暂停中，请结束后再调整目录');
+    }
+    assertRulePageCompileIdle('调整目录');
+  }
+
+  // 正文页“重新编制”单独运行时，目录变更和全局事实保存会清掉它正在写的结果与会话，须等编制结束；应用重启后中断的编制已转为 error。
+  function assertRulePageCompileIdle(action) {
+    const task = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'rule-page-compile'").get();
+    if (['running', 'pausing', 'paused'].includes(task?.status)) {
+      throw new Error(`规则和页码正在编制，请结束后再${action}`);
     }
   }
 
@@ -2016,7 +2058,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidAnalysisMode,
       bidAnalysisSelectedTaskIds,
       bidAnalysisTasks,
-      bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds),
+      bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds, generationConfig.outlineMode),
       bidSectionMode: generationConfig.bidSectionMode,
       bidSections,
       bidSectionExtractionStatus: bidSectionExtractionTask?.status
@@ -2146,7 +2188,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function saveBidAnalysisConfig({ mode, selectedTaskIds, bidSectionMode } = {}) {
-    const config = normalizeBidAnalysisConfig(mode, selectedTaskIds);
+    const config = normalizeBidAnalysisConfig(mode, selectedTaskIds, loadGenerationConfig().outlineMode);
     saveGenerationConfig({
       bidAnalysisMode: config.mode,
       bidAnalysisSelectedTaskIds: config.selectedTaskIds,
@@ -2179,6 +2221,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const clearAll = reason === 'replace';
     const preservesContentTask = reason === 'sort' || reason === 'edit';
     const invalidatesContentTask = !preservesContentTask;
+    // 规则和页码按目录编制：除排序外的目录变更都需重新编制，引用按节点 ID 记录，排序后导出时重新计算页码。
+    const invalidatesRulePage = reason !== 'sort';
 
     let savedOutlineData = outlineData;
     const transaction = createContentWordTransaction((wordChanges) => {
@@ -2189,6 +2233,18 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           const updateDetails = db.prepare('UPDATE technical_plan_outline_nodes SET title = ?, description = ?, updated_at = ? WHERE node_id = ? AND (title <> ? OR description <> ?)');
           const timestamp = now();
           for (const row of flattenOutlineItems(outlineData?.outline || [])) updateDetails.run(row.title, row.description, timestamp, row.node_id, row.title, row.description);
+          stageRulePageReset(wordChanges);
+          const runtime = safeJsonParse(readMetaRow().content_generation_runtime_json, null);
+          if (runtime?.rule_page) {
+            const { rule_page: _rulePage, ...rest } = runtime;
+            updateMeta({ content_generation_runtime_json: JSON.stringify(rest) });
+          }
+          // 保留的正文任务统计里也有编制状态，一并清除，避免页面回退到旧的已编制状态。
+          const taskStats = safeJsonParse(db.prepare("SELECT stats_json FROM technical_plan_tasks WHERE type = 'content-generation'").get()?.stats_json, null);
+          if (taskStats?.content?.rule_page) {
+            const { rule_page: _taskRulePage, ...content } = taskStats.content;
+            db.prepare("UPDATE technical_plan_tasks SET stats_json = ? WHERE type = 'content-generation'").run(JSON.stringify({ ...taskStats, content }));
+          }
         } else {
           saveSortedOutline(outlineData);
         }
@@ -2213,6 +2269,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const nextIds = new Set(flattenOutlineItems(outlineToSave?.outline || []).map(row => row.node_id));
       reconcileContentWords(wordChanges, { snapshot, affectedIds, nextIds, clearAll });
       if (clearAll) stageBusinessTemplateReset(wordChanges);
+      else stageRulePageReset(wordChanges);
       savedOutlineData = outlineToSave ? { ...outlineToSave, outline: numberOutline(outlineToSave.outline) } : outlineToSave;
       saveOutlineData(outlineToSave);
       if (!outlineToSave?.outline?.length) {
@@ -2240,12 +2297,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           phase: 'planning',
           direct_generation_item_ids: keepLeafIds([...(retainedRuntime.direct_generation_item_ids || []), ...newLeafIds]),
           pending_item_ids: keepLeafIds([...(retainedRuntime.pending_item_ids || []), ...(generationStarted ? newLeafIds : [])]),
-          // 商务模版填写与 AI 小节无关，局部目录变更保留其状态。
+          // 商务模版填写与 AI 小节无关，局部目录变更保留其状态；规则和页码不保留，变为待编制。
           ...(previousRuntime.business_fill ? { business_fill: previousRuntime.business_fill } : {}),
         }) });
       }
     });
     transaction();
+    if (invalidatesRulePage) agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
     if (invalidatesContentTask) {
       agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
       if (clearAll) {
@@ -2269,6 +2327,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const normalizedGlobalFacts = normalizeGlobalFactGroups(globalFacts);
     let savedTask;
     const transaction = createContentWordTransaction((wordChanges) => {
+      assertRulePageCompileIdle('保存全局事实');
       replaceGlobalFacts(normalizedGlobalFacts);
       clearContentGenerationState(wordChanges);
       const timestamp = now();
@@ -2775,6 +2834,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     readBidTemplateFields,
     ensureBidTemplateBlank,
     saveBidTemplateFieldValues,
+    readRulePageTables,
+    saveRulePageTables,
+    resetRulePageTables: createContentWordTransaction(changes => stageRulePageReset(changes)),
     readContentGenerationRuntime() {
       return safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);
     },

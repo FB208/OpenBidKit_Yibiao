@@ -42,6 +42,10 @@ static class TemplateFieldScanner
     static readonly Regex AttachmentNotePattern = new(
         @"(?:后附|附后|另附|附[：:])(?<material>[^。；;]{0,60}(?:复印件|扫描件|证书|执照|证明|证件|资料))",
         PatternOptions);
+    // 材料名在前的写法，如“（身份证复印件附后）”；材料名不跨冒号和括号，避免把前面的“身份证号码：…”带进来。
+    static readonly Regex AttachmentNoteAfterMaterialPattern = new(
+        @"(?<material>[^。；;：:（()）]{0,30}?(?:复印件|扫描件|证书|执照|证明|证件|资料))[^。；;：:（()）]{0,4}?(?:附后|后附)",
+        PatternOptions);
     static readonly Regex AttachmentSlotPattern = new(
         @"^[（(]?(?:此处)?(?:粘贴|附)?(?<name>[^：:。，,；;]{2,30}?)(?:扫描或复印件?|扫描件|复印件|影印件|照片|粘贴处)[）)]?$",
         PatternOptions);
@@ -63,7 +67,7 @@ static class TemplateFieldScanner
         var part = document.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
         var body = part.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
         var result = new TemplateFieldCandidateFile();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var state = new ScanState();
         var order = 0;
         var blocks = body.ChildElements.ToList();
         var chapters = NormalizeChapterRanges(chapterRanges, blocks.Count);
@@ -73,10 +77,15 @@ static class TemplateFieldScanner
             var block = blocks[blockIndex];
             var blockPath = $"body/{blockIndex}:{block.LocalName}";
             var firstCandidate = result.Candidates.Count;
+            var firstParagraph = state.Paragraphs.Count;
             var checkboxGroup = CollectCheckboxParagraphs(blocks, blockIndex);
             if (checkboxGroup.Count >= 2)
             {
-                AddCheckboxGroup(checkboxGroup, blockPath, SuggestGroupName(blocks, blockIndex), result.Candidates, seen, ref order);
+                for (var offset = 0; offset < checkboxGroup.Count; offset += 1)
+                {
+                    RegisterParagraph(state, checkboxGroup[offset], $"body/{blockIndex + offset}:{checkboxGroup[offset].LocalName}", writable: false, order);
+                }
+                AddCheckboxGroup(checkboxGroup, blockPath, SuggestGroupName(blocks, blockIndex), result.Candidates, state, ref order);
             }
             else if (block is Wp.Table table)
             {
@@ -87,12 +96,12 @@ static class TemplateFieldScanner
                     $"t{blockIndex}",
                     FindTableTitle(body, blockIndex, chapter),
                     result.Candidates,
-                    seen,
+                    state,
                     ref order);
             }
             else
             {
-                ScanElement(block, blockPath, result.Candidates, seen, ref order);
+                ScanElement(block, blockPath, result.Candidates, state, ref order);
             }
 
             var blockChapter = FindChapter(chapters, blockIndex);
@@ -101,32 +110,85 @@ static class TemplateFieldScanner
                 result.Candidates[index].ChapterName = Optional(Limit(blockChapter?.Title ?? "", 120));
                 result.Candidates[index].Chapter = blockChapter;
             }
+            for (var index = firstParagraph; index < state.Paragraphs.Count; index += 1)
+            {
+                state.Paragraphs[index].ChapterName = Optional(Limit(blockChapter?.Title ?? "", 120));
+                state.Paragraphs[index].Chapter = blockChapter;
+            }
             blockIndex += Math.Max(0, checkboxGroup.Count - 1);
         }
 
         BuildStructureContexts(result);
+        result.Paragraphs = state.Paragraphs;
+        result.Chapters = chapters;
         return result;
+    }
+
+    /// <summary>一次扫描的累积状态：已用的候选 id 和遍历到的段落。</summary>
+    sealed class ScanState
+    {
+        public HashSet<string> Seen { get; } = new(StringComparer.Ordinal);
+        public List<TemplateParagraphEntry> Paragraphs { get; } = [];
+    }
+
+    /// <summary>登记遍历到的段落；可写段落记纯文字（与候选偏移同一口径），其余记显示文字。</summary>
+    static void RegisterParagraph(ScanState state, Wp.Paragraph paragraph, string path, bool writable, int order, Wp.Paragraph? fallback = null)
+    {
+        state.Paragraphs.Add(new TemplateParagraphEntry
+        {
+            Locator = ToLocator(path),
+            Location = path,
+            Paragraph = paragraph,
+            Text = writable ? ReadParagraphText(paragraph) : WordWorkspace.Normalize(paragraph.InnerText ?? ""),
+            BreakOffsets = writable ? ReadBreakOffsets(paragraph) : [],
+            Writable = writable,
+            Fallback = fallback,
+            InTextBox = path.Contains("/txbx/", StringComparison.Ordinal),
+            OrderKey = order,
+        });
+    }
+
+    static readonly Regex LocatorPartPattern = new(
+        @"^body/(?<body>\d+):\w+|/row/(?<row>\d+)/cell/(?<cell>\d+)|/p/(?<para>\d+):\w+|/content/(?<content>\d+):\w+|/txbx/(?<box>\d+)|/(?<child>\d+):\w+",
+        PatternOptions);
+
+    /// <summary>
+    /// 把内部位置路径压缩成模版正文中的定位号：b 正文块号，.r/.c 表格行号和第几个单元格，.p 单元格内第几段，
+    /// .s 内容控件内第几块，.x 文本框，.n 其他容器内第几个子元素；除块号外均从 1 起。
+    /// </summary>
+    internal static string ToLocator(string path)
+    {
+        return LocatorPartPattern.Replace(path, match =>
+        {
+            static int Next(Group group) => int.Parse(group.Value, System.Globalization.CultureInfo.InvariantCulture) + 1;
+            if (match.Groups["body"].Success) return $"b{match.Groups["body"].Value}";
+            if (match.Groups["row"].Success) return $".r{Next(match.Groups["row"])}.c{Next(match.Groups["cell"])}";
+            if (match.Groups["para"].Success) return $".p{Next(match.Groups["para"])}";
+            if (match.Groups["content"].Success) return $".s{Next(match.Groups["content"])}";
+            if (match.Groups["box"].Success) return $".x{Next(match.Groups["box"])}";
+            return $".n{Next(match.Groups["child"])}";
+        });
     }
 
     static void ScanElement(
         OpenXmlElement element,
         string path,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order)
     {
         if (element is Wp.SdtRun runControl)
         {
-            ScanExistingControl(runControl, path, candidates, seen, ref order);
+            ScanExistingControl(runControl, path, candidates, state, ref order);
             return;
         }
 
         if (element is Wp.SdtBlock blockControl)
         {
             // 已填写固定内容的块级控件不作为候选，继续扫描其中的正文。
-            if (!ScanExistingControl(blockControl, path, candidates, seen, ref order) && blockControl.SdtContentBlock is { } content)
+            if (!ScanExistingControl(blockControl, path, candidates, state, ref order) && blockControl.SdtContentBlock is { } content)
             {
-                ScanChildren(content.ChildElements.ToList(), $"{path}/content", candidates, seen, ref order);
+                ScanChildren(content.ChildElements.ToList(), $"{path}/content", candidates, state, ref order);
             }
             return;
         }
@@ -138,24 +200,24 @@ static class TemplateFieldScanner
 
         if (element is Wp.Paragraph paragraph)
         {
-            ScanParagraph(paragraph, path, candidates, seen, ref order);
+            ScanParagraph(paragraph, path, candidates, state, ref order);
             return;
         }
 
         if (element is Wp.Table table)
         {
-            ScanTable(table, path, TableIdFromPath(path), null, candidates, seen, ref order);
+            ScanTable(table, path, TableIdFromPath(path), null, candidates, state, ref order);
             return;
         }
 
-        ScanChildren(element.ChildElements.ToList(), path, candidates, seen, ref order);
+        ScanChildren(element.ChildElements.ToList(), path, candidates, state, ref order);
     }
 
     static void ScanChildren(
         IReadOnlyList<OpenXmlElement> children,
         string path,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order)
     {
         for (var index = 0; index < children.Count; index += 1)
@@ -165,11 +227,15 @@ static class TemplateFieldScanner
             var checkboxGroup = CollectCheckboxParagraphs(children, index);
             if (checkboxGroup.Count >= 2)
             {
-                AddCheckboxGroup(checkboxGroup, childPath, SuggestGroupName(children, index), candidates, seen, ref order);
+                for (var offset = 0; offset < checkboxGroup.Count; offset += 1)
+                {
+                    RegisterParagraph(state, checkboxGroup[offset], $"{path}/{index + offset}:{checkboxGroup[offset].LocalName}", writable: false, order);
+                }
+                AddCheckboxGroup(checkboxGroup, childPath, SuggestGroupName(children, index), candidates, state, ref order);
                 index += checkboxGroup.Count - 1;
                 continue;
             }
-            ScanElement(child, childPath, candidates, seen, ref order);
+            ScanElement(child, childPath, candidates, state, ref order);
         }
     }
 
@@ -179,7 +245,7 @@ static class TemplateFieldScanner
         string tableId,
         string? tableTitle,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order)
     {
         var rows = BuildTableRows(table);
@@ -236,12 +302,13 @@ static class TemplateFieldScanner
                 var cell = cellInfo.Cell;
                 var cellPath = $"{path}/row/{row.RowIndex}/cell/{cellInfo.CellIndex}";
                 var firstCandidate = candidates.Count;
+                var firstParagraph = state.Paragraphs.Count;
                 var rowContext = BuildCellContext(row, cellInfo);
                 var columnHeader = ReadColumnHeader(activeHeaders, cellInfo.ColumnStart, cellInfo.ColumnSpan);
                 var cellLabel = FindCellLabel(row, cellInfo, columnHeader);
                 var cellName = CleanName(SplitLabelHint(cellLabel).Core);
                 var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
-                ScanChildren(paragraphs, $"{cellPath}/p", candidates, seen, ref order);
+                ScanChildren(paragraphs, $"{cellPath}/p", candidates, state, ref order);
 
                 if (IsSimpleEmptyCell(cell, rowTexts[cellInfo.CellIndex]))
                 {
@@ -250,7 +317,7 @@ static class TemplateFieldScanner
                     {
                         AddCandidate(
                             candidates,
-                            seen,
+                            state,
                             ref order,
                             kind: TemplateFieldKinds.EmptyTableCell,
                             location: $"{cellPath}/p/0",
@@ -277,6 +344,18 @@ static class TemplateFieldScanner
                     candidate.RowNumber = row.RowIndex + 1;
                     candidate.ColumnNumber = cellInfo.ColumnStart + 1;
                     candidate.OutputLocation = null;
+                }
+                // 单元格段落的表格信息与该格候选一致，补充位置据此继承。
+                for (var index = firstParagraph; index < state.Paragraphs.Count; index += 1)
+                {
+                    var entry = state.Paragraphs[index];
+                    entry.CellContext = Optional(rowContext);
+                    entry.TableTitle = Optional(Limit(effectiveTableTitle ?? "", 120));
+                    entry.ColumnHeader = Optional(Limit(columnHeader, 120));
+                    entry.GroupTitle = groupTitle;
+                    entry.TableId = tableId;
+                    entry.RowNumber = row.RowIndex + 1;
+                    entry.ColumnNumber = cellInfo.ColumnStart + 1;
                 }
             }
         }
@@ -331,6 +410,7 @@ static class TemplateFieldScanner
                 Id = Optional(item.Id),
                 Title = title,
                 AutoFill = item.AutoFill,
+                RulePage = item.RulePage,
                 StartBlock = item.StartBlock,
                 EndBlock = item.EndBlock,
             });
@@ -533,7 +613,7 @@ static class TemplateFieldScanner
         OpenXmlElement control,
         string path,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order)
     {
         var properties = control switch
@@ -555,7 +635,7 @@ static class TemplateFieldScanner
 
         AddCandidate(
             candidates,
-            seen,
+            state,
             ref order,
             kind: TemplateFieldKinds.ExistingControl,
             location: path,
@@ -573,19 +653,21 @@ static class TemplateFieldScanner
         Wp.Paragraph paragraph,
         string path,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order,
         Wp.Paragraph? fallback = null)
     {
-        ScanTextBoxes(paragraph, path, candidates, seen, ref order);
         var existingControls = paragraph.Descendants<Wp.SdtRun>()
             .Where(item => ReferenceEquals(item.Ancestors<Wp.Paragraph>().FirstOrDefault(), paragraph))
             .ToList();
+        // 宿主段落先登记，文本框段落随后，模版正文按版式顺序列出。
+        RegisterParagraph(state, paragraph, path, writable: existingControls.Count == 0 && IsSimpleParagraph(paragraph), order, fallback);
+        ScanTextBoxes(paragraph, path, candidates, state, ref order);
         if (existingControls.Count > 0)
         {
             for (var index = 0; index < existingControls.Count; index += 1)
             {
-                ScanExistingControl(existingControls[index], $"{path}/sdt/{index}", candidates, seen, ref order);
+                ScanExistingControl(existingControls[index], $"{path}/sdt/{index}", candidates, state, ref order);
             }
             return;
         }
@@ -601,7 +683,7 @@ static class TemplateFieldScanner
         {
             AddCandidate(
                 candidates,
-                seen,
+                state,
                 ref order,
                 kind: hit.Kind,
                 location: path,
@@ -622,7 +704,7 @@ static class TemplateFieldScanner
         Wp.Paragraph paragraph,
         string path,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order)
     {
         var boxes = new List<(Wp.Paragraph Paragraph, Wp.Paragraph? Fallback)>();
@@ -652,7 +734,7 @@ static class TemplateFieldScanner
 
         for (var index = 0; index < boxes.Count; index += 1)
         {
-            ScanParagraph(boxes[index].Paragraph, $"{path}/txbx/{index}", candidates, seen, ref order, boxes[index].Fallback);
+            ScanParagraph(boxes[index].Paragraph, $"{path}/txbx/{index}", candidates, state, ref order, boxes[index].Fallback);
         }
     }
 
@@ -746,6 +828,7 @@ static class TemplateFieldScanner
         }
 
         var note = AttachmentNotePattern.Match(text);
+        if (!note.Success) note = AttachmentNoteAfterMaterialPattern.Match(text);
         if (note.Success && !Overlaps(text.Length, 0))
         {
             // 附件由 Agent 按材料是否来自资信库判断填写方式，扫描不给 manual 建议。
@@ -774,7 +857,7 @@ static class TemplateFieldScanner
         return hits.OrderBy(hit => hit.Start).ThenBy(hit => hit.Length).ToList();
     }
 
-    static bool RangesOverlap(int firstStart, int firstLength, int secondStart, int secondLength)
+    internal static bool RangesOverlap(int firstStart, int firstLength, int secondStart, int secondLength)
     {
         if (firstLength == 0 && secondLength == 0) return firstStart == secondStart;
         if (firstLength == 0) return firstStart > secondStart && firstStart < secondStart + secondLength;
@@ -812,7 +895,7 @@ static class TemplateFieldScanner
         var offset = 0;
         foreach (var run in paragraph.Elements<Wp.Run>())
         {
-            var runLength = run.Elements<Wp.Text>().Sum(item => item.Text.Length);
+            var runLength = RunText(run).Length;
             var underline = run.RunProperties?.Underline;
             if (underline is not null && underline.Val?.Value != Wp.UnderlineValues.None)
             {
@@ -840,7 +923,7 @@ static class TemplateFieldScanner
         return value == '　' || char.IsWhiteSpace(value);
     }
 
-    static bool IsSimpleParagraph(Wp.Paragraph paragraph)
+    internal static bool IsSimpleParagraph(Wp.Paragraph paragraph)
     {
         if (paragraph.Descendants<Wp.FieldChar>().Any()
             || paragraph.Descendants<Wp.FieldCode>().Any()
@@ -852,26 +935,55 @@ static class TemplateFieldScanner
             return false;
         }
 
-        if (!paragraph.ChildElements.All(item => item is Wp.ParagraphProperties or Wp.Run))
+        // 书签、校对和权限标记不占文字，写入只按 run 定位，标记留在原处；
+        // run 内的制表符按一个字符、换行和分页按零宽参与文字偏移，写入切分 run 时保留（TemplateFieldSdtWriter.SliceRun）。
+        if (!paragraph.ChildElements.All(item => item is Wp.ParagraphProperties or Wp.Run
+            or Wp.BookmarkStart or Wp.BookmarkEnd or Wp.ProofError or Wp.PermStart or Wp.PermEnd))
         {
             return false;
         }
 
         return paragraph.Elements<Wp.Run>()
-            .All(run => run.ChildElements.All(item => item is Wp.RunProperties or Wp.Text));
+            .All(run => run.ChildElements.All(item => item is Wp.RunProperties or Wp.Text or Wp.LastRenderedPageBreak
+                or Wp.TabChar or Wp.Break or Wp.CarriageReturn));
     }
 
-    static string ReadParagraphText(Wp.Paragraph paragraph)
+    internal static string ReadParagraphText(Wp.Paragraph paragraph)
+    {
+        return string.Concat(paragraph.Elements<Wp.Run>().Select(RunText));
+    }
+
+    /// <summary>run 的文字：文字原样，制表符记为一个制表符，换行和分页不占字符。候选偏移、写入切分和补充位置都按这一口径。</summary>
+    internal static string RunText(Wp.Run run)
     {
         var builder = new StringBuilder();
-        foreach (var run in paragraph.Elements<Wp.Run>())
+        foreach (var child in run.ChildElements)
         {
-            foreach (var text in run.Elements<Wp.Text>())
-            {
-                builder.Append(text.Text);
-            }
+            if (child is Wp.Text text) builder.Append(text.Text);
+            else if (child is Wp.TabChar) builder.Append('\t');
         }
         return builder.ToString();
+    }
+
+    /// <summary>段内换行和分页所在的文字偏移，供模版正文显示“⏎”。</summary>
+    static List<int> ReadBreakOffsets(Wp.Paragraph paragraph) => ReadBreaks(paragraph).Select(item => item.Offset).ToList();
+
+    /// <summary>段内换行和分页按文档顺序的文字偏移，Page 标出硬分页。</summary>
+    static List<(int Offset, bool Page)> ReadBreaks(Wp.Paragraph paragraph)
+    {
+        var result = new List<(int Offset, bool Page)>();
+        var offset = 0;
+        foreach (var run in paragraph.Elements<Wp.Run>())
+        {
+            foreach (var child in run.ChildElements)
+            {
+                if (child is Wp.Text text) offset += text.Text.Length;
+                else if (child is Wp.TabChar) offset += 1;
+                else if (child is Wp.Break item) result.Add((offset, item.Type?.Value == Wp.BreakValues.Page));
+                else if (child is Wp.CarriageReturn) result.Add((offset, false));
+            }
+        }
+        return result;
     }
 
     /// <summary>相邻带下划线的空白合并为一个空位，跨 run 也按一个计算。</summary>
@@ -926,13 +1038,13 @@ static class TemplateFieldScanner
         string path,
         string name,
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order)
     {
         var texts = group.Select(item => ReadParagraphText(item).Trim()).ToList();
         AddCandidate(
             candidates,
-            seen,
+            state,
             ref order,
             kind: TemplateFieldKinds.CheckboxGroup,
             location: path,
@@ -1002,7 +1114,7 @@ static class TemplateFieldScanner
     }
 
     /// <summary>把同行标签放在候选自身内容前，截断时优先保留字段语义。</summary>
-    static string MergeCellContext(string rowContext, string? candidateContext)
+    internal static string MergeCellContext(string rowContext, string? candidateContext)
     {
         var ownContext = candidateContext ?? "";
         if (rowContext.Length == 0 || string.Equals(rowContext, ownContext, StringComparison.Ordinal)) return ownContext;
@@ -1011,7 +1123,7 @@ static class TemplateFieldScanner
     }
 
     /// <summary>在候选位置插入【▢原文】标记，同段多个空位据此区分。</summary>
-    static string BuildMarkedContext(string text, int start, int length)
+    internal static string BuildMarkedContext(string text, int start, int length)
     {
         var from = Math.Max(0, start - ContextRadius);
         var to = Math.Min(text.Length, start + length + ContextRadius);
@@ -1117,7 +1229,7 @@ static class TemplateFieldScanner
 
     static void AddCandidate(
         List<TemplateFieldCandidate> candidates,
-        HashSet<string> seen,
+        ScanState state,
         ref int order,
         string kind,
         string location,
@@ -1134,7 +1246,7 @@ static class TemplateFieldScanner
     {
         var identity = $"v2\u0000{location}\u0000{kind}\u0000{start}\u0000{length}\u0000{text}\u0000{context}";
         var candidateId = $"c_{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..16].ToLowerInvariant()}";
-        if (!seen.Add(candidateId)) return;
+        if (!state.Seen.Add(candidateId)) return;
         candidates.Add(new TemplateFieldCandidate
         {
             CandidateId = candidateId,

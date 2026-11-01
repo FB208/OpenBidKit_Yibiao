@@ -880,6 +880,7 @@ export interface YibiaoBridge {
     confirmBusinessFillReview: (payload: { taskId: string; values: BusinessFillReviewValue[] }) => Promise<{ success: boolean }>;
     suppressBusinessFillReviewAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
     startBidTemplateExtraction: () => Promise<unknown>;
+    startRulePageCompile: () => Promise<unknown>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;

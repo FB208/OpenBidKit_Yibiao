@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using A = DocumentFormat.OpenXml.Drawing;
@@ -92,8 +93,16 @@ sealed class BusinessTemplateMerger : IDisposable
     /// <summary>
     /// 复制一章的正文块。章节紧跟分节符或父目录标题时去掉开头的分页，避免空白页和孤立标题页；
     /// 与目录标题匹配的段落写入大纲级别，供导航窗格和 Word 自动目录使用。
+    /// 被页码引用的小节在标题段加起点锚点、在本章末段加终点锚点（anchors 为空时不加）。
+    /// 先去掉 Agent 选定的格式文字，标题段和锚点都按去掉后的内容确定；numberText 为整本统一的章节编号，空时不加。
     /// </summary>
-    public IReadOnlyList<OpenXmlElement> ImportChapter(string chapterId, string title, int level, bool stripLeadingPageBreak)
+    public IReadOnlyList<OpenXmlElement> ImportChapter(
+        string chapterId,
+        string title,
+        int level,
+        bool stripLeadingPageBreak,
+        PageAnchorRequest? anchors = null,
+        string numberText = "")
     {
         if (!_chapters.TryGetValue(chapterId, out var chapter))
         {
@@ -108,6 +117,8 @@ sealed class BusinessTemplateMerger : IDisposable
             .Skip(chapter.StartBlock)
             .Take(chapter.EndBlock - chapter.StartBlock)
             .Select(block => block.CloneNode(true)));
+        RemoveFormatText(container);
+        var heading = TakeHeading(container, chapter.Heading, title);
         UnwrapFieldControls(container);
         RemoveUnsupported(container, title);
         ResolveThemeFonts(container);
@@ -117,9 +128,19 @@ sealed class BusinessTemplateMerger : IDisposable
         CrossDocumentImport.RemapRelationships(container, _sourcePart, _destPart, _context.RelationshipIds);
         OffsetBookmarks(container);
         if (stripLeadingPageBreak) StripLeadingPageBreak(container);
-        MarkOutlineLevel(container, title, level);
+        var titleParagraph = MarkOutlineLevel(container, title, level, heading);
+        PrependNumber(titleParagraph, numberText);
 
         var blocks = container.ChildElements.ToList();
+        if (anchors is not null)
+        {
+            PageReferenceBuilder.ApplyChapterAnchors(
+                blocks,
+                titleParagraph,
+                anchors.StartNodeIds,
+                anchors.EndNodeIds,
+                anchors.NextId);
+        }
         foreach (var block in blocks) block.Remove();
         return blocks;
     }
@@ -380,29 +401,127 @@ sealed class BusinessTemplateMerger : IDisposable
         }
     }
 
-    /// <summary>
-    /// 在章节开头几段中找与目录标题最接近的段落写入大纲级别，找不到时用第一个非空段落。
-    /// 其余段落（含表格、文本框内）一律写正文文本级别，模版自带的标题样式不进入导航窗格和整本目录。
-    /// </summary>
-    static void MarkOutlineLevel(Wp.Body container, string title, int level)
+    /// <summary>章节开头几个非空顶层段落中与目录标题最接近的一段，找不到时取第一个非空段落；抽取表格位置时同样按此确定标题段。</summary>
+    internal static Wp.Paragraph? FindTitleParagraph(IEnumerable<Wp.Paragraph> paragraphs, string title)
     {
-        var candidates = container.Elements<Wp.Paragraph>()
+        var candidates = paragraphs
             .Where(paragraph => WordWorkspace.Normalize(paragraph.InnerText ?? "").Length > 0)
             .Take(TitleCheckParagraphCount)
             .ToList();
-        var target = candidates.Count == 0 ? null : candidates
+        return candidates.Count == 0 ? null : candidates
             .Select((paragraph, index) => (Paragraph: paragraph, Index: index, Score: ExtractChaptersAction.ScoreTitle(title, WordWorkspace.CreateBlock(paragraph, "", "", index))))
             .Where(item => item.Score >= TitleMatchScore)
             .OrderByDescending(item => item.Score)
             .ThenBy(item => item.Index)
             .Select(item => item.Paragraph)
             .FirstOrDefault() ?? candidates[0];
+    }
+
+    /// <summary>
+    /// 在章节开头几段中找与目录标题最接近的段落写入大纲级别，找不到时用第一个非空段落。
+    /// 其余段落（含表格、文本框内）一律写正文文本级别，模版自带的标题样式不进入导航窗格和整本目录。返回标题段。
+    /// </summary>
+    static Wp.Paragraph? MarkOutlineLevel(Wp.Body container, string title, int level, Wp.Paragraph? heading)
+    {
+        var target = heading ?? FindTitleParagraph(container.Elements<Wp.Paragraph>(), title);
         foreach (var paragraph in container.Descendants<Wp.Paragraph>())
         {
             (paragraph.ParagraphProperties ??= new Wp.ParagraphProperties()).OutlineLevel = new Wp.OutlineLevel
             {
                 Val = ReferenceEquals(paragraph, target) ? Math.Clamp(level, 1, 9) - 1 : 9,
             };
+        }
+        return target;
+    }
+
+    /// <summary>
+    /// 模版提取时确定的标题段（见 TemplateHeadings）：有标题书签时取书签所在段并删去书签；记为没有标题段时在章首插入一段目录标题
+    /// （居中加粗，段落样式随后按模版默认样式补齐；章首只承载分页的空段之后插入，段前分页移到新标题段）。老模版返回 null，按目录标题查找。
+    /// </summary>
+    static Wp.Paragraph? TakeHeading(Wp.Body container, bool? heading, string title)
+    {
+        Wp.Paragraph? found = null;
+        foreach (var start in container.Descendants<Wp.BookmarkStart>()
+            .Where(item => item.Name?.Value?.StartsWith(TemplateHeadings.BookmarkPrefix, StringComparison.Ordinal) == true)
+            .ToList())
+        {
+            found ??= start.Ancestors<Wp.Paragraph>().FirstOrDefault();
+            foreach (var end in container.Descendants<Wp.BookmarkEnd>().Where(item => item.Id?.Value == start.Id?.Value).ToList()) end.Remove();
+            start.Remove();
+        }
+        if (heading != false) return found is not null && ReferenceEquals(found.Parent, container) ? found : null;
+
+        var paragraph = new Wp.Paragraph(
+            new Wp.ParagraphProperties(new Wp.Justification { Val = Wp.JustificationValues.Center }),
+            new Wp.Run(new Wp.RunProperties(new Wp.Bold()), new Wp.Text(title) { Space = SpaceProcessingModeValues.Preserve }));
+        var anchor = container.ChildElements.FirstOrDefault(item => item is not Wp.Paragraph leading
+            || leading.Descendants<Wp.Text>().Any(text => text.Text.Trim().Length > 0)
+            || !leading.Descendants<Wp.Break>().Any(item => item.Type?.Value == Wp.BreakValues.Page));
+        if (anchor is null) container.AppendChild(paragraph);
+        else anchor.InsertBeforeSelf(paragraph);
+        if (anchor is Wp.Paragraph next && next.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
+        {
+            pageBreak.Remove();
+            paragraph.ParagraphProperties!.PageBreakBefore = new Wp.PageBreakBefore();
+        }
+        return paragraph;
+    }
+
+    // 标题开头已有的通用编号：第×章/节/部分/篇、一、、1. / 1、/ 1.1、（一）/（1）。
+    static readonly Regex LeadingNumberPattern = new(
+        @"^\s*(第[一二三四五六七八九十百零〇两\d]+[章节部分篇]|[一二三四五六七八九十百]+[、.．]|\d+(\.\d+)*[、.．\s]|[（(][一二三四五六七八九十\d]+[）)])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>整本导出给商务章节标题段加上统一的章节编号，沿用标题首个文字的格式；标题已有自动编号或开头已有编号时不加。</summary>
+    static void PrependNumber(Wp.Paragraph? title, string numberText)
+    {
+        if (title is null || numberText.Length == 0) return;
+        if (title.ParagraphProperties?.NumberingProperties is not null || LeadingNumberPattern.IsMatch(title.InnerText)) return;
+        var source = title.Elements<Wp.Run>().FirstOrDefault(run => run.Elements<Wp.Text>().Any(text => text.Text.Length > 0));
+        var run = new Wp.Run();
+        if (source?.RunProperties is not null) run.AppendChild((Wp.RunProperties)source.RunProperties.CloneNode(true));
+        run.AppendChild(new Wp.Text(numberText) { Space = SpaceProcessingModeValues.Preserve });
+        if (source is not null) source.InsertBeforeSelf(run);
+        else title.AppendChild(run);
+    }
+
+    /// <summary>
+    /// 去掉模版提取时 Agent 选定的格式文字（表单编号、格式名称、格式说明，见 TemplateFieldScanner.AddFormatTexts）。
+    /// 因此变空的段落一并删除：段内书签移到下一段，段前分页移到下一段。整本导出并入章节和正文页单章预览都最先调用。
+    /// </summary>
+    internal static void RemoveFormatText(Wp.Body container)
+    {
+        var touched = new List<Wp.Paragraph>();
+        foreach (var control in container.Descendants<Wp.SdtRun>().ToList())
+        {
+            var tag = control.SdtProperties?.GetFirstChild<Wp.Tag>()?.Val?.Value ?? "";
+            if (!tag.StartsWith(TemplateFieldSdtWriter.FormatTagPrefix, StringComparison.Ordinal)) continue;
+            if (control.Ancestors<Wp.Paragraph>().FirstOrDefault() is { } owner && !touched.Contains(owner)) touched.Add(owner);
+            control.Remove();
+        }
+        foreach (var paragraph in touched)
+        {
+            if (paragraph.Parent is null
+                || paragraph.ParagraphProperties?.SectionProperties is not null
+                || paragraph.Descendants<Wp.Text>().Any(text => text.Text.Trim().Length > 0)
+                || paragraph.Descendants().Any(item => item is Wp.Drawing or Wp.Picture or Wp.EmbeddedObject or Wp.Break or Wp.FieldChar or Wp.SdtElement or Wp.TabChar))
+            {
+                continue;
+            }
+            if (paragraph.NextSibling() is Wp.Paragraph next)
+            {
+                var anchor = (OpenXmlElement?)next.ParagraphProperties;
+                foreach (var bookmark in paragraph.Descendants().Where(item => item is Wp.BookmarkStart or Wp.BookmarkEnd).ToList())
+                {
+                    bookmark.Remove();
+                    anchor = anchor is null ? next.PrependChild(bookmark) : next.InsertAfter(bookmark, anchor);
+                }
+                if (paragraph.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
+                {
+                    (next.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
+                }
+            }
+            paragraph.Remove();
         }
     }
 }

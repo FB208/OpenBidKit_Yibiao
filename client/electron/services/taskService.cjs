@@ -7,6 +7,7 @@ const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
 const { runBidTemplateExtractionTask } = require('./bidTemplateExtractionTask.cjs');
+const { hasRulePageChapters, runRulePageCompileTask } = require('./rulePageCompileTask.cjs');
 const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cjs');
 const {
   OUTLINE_AGENT_TASK_KEY,
@@ -14,7 +15,7 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
-const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { loadBusinessFillReview, editBusinessFillValues } = require('./businessTemplateFillTask.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
@@ -79,6 +80,15 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'bidTemplateExtractionTask',
+  },
+  'rule-page-compile': {
+    label: '规则和页码编制',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'rulePageCompileTask',
   },
   'global-facts-generation': {
     label: '全局事实设定',
@@ -476,6 +486,10 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         'contentGenerationPlans',
         'contentGenerationRuntime',
       ]);
+    }
+
+    if (task.type === 'rule-page-compile') {
+      copyPatchFields(patch, state, ['contentGenerationRuntime']);
     }
 
     if (task.type === 'content-generation') {
@@ -1275,6 +1289,36 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-template-extraction'), partial, recoveredTask));
   }
 
+  // 重新编制中断后记为失败，编制状态记为中断，正文页可再次重新编制。
+  function recoverInterruptedRulePageCompileTask(technicalPlan) {
+    if (activeTasks.has('rule-page-compile')) {
+      return;
+    }
+
+    const compileTask = technicalPlan.rulePageCompileTask;
+    if (!isActiveTaskStatus(compileTask?.status)) {
+      return;
+    }
+
+    const message = '上次规则和页码编制未完成，请在正文页重新编制。';
+    const recoveredTask = {
+      ...compileTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(compileTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(compileTask.logs) ? compileTask.logs : []), message],
+      updated_at: now(),
+    };
+    const runtime = technicalPlan.contentGenerationRuntime;
+    const partial = {
+      rulePageCompileTask: recoveredTask,
+      ...(runtime?.rule_page ? { contentGenerationRuntime: { ...runtime, rule_page: { ...runtime.rule_page, status: 'interrupted', error: null } } } : {}),
+    };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('rule-page-compile'), partial, recoveredTask));
+  }
+
   function recoverInterruptedGlobalFactsAdjustmentTask(technicalPlan) {
     if (activeTasks.has('global-facts-adjustment')) {
       return;
@@ -1575,6 +1619,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedBidTemplateExtractionTask(technicalPlanRecoveryState);
+  recoverInterruptedRulePageCompileTask(technicalPlanRecoveryState);
   recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
@@ -1650,6 +1695,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
           technicalPlanStore.clearBidTemplate();
         },
       });
@@ -1671,6 +1717,14 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           technicalPlanStore.clearBidTemplate();
         },
       });
+    },
+    // 正文页“重新编制”：单独运行规则和页码编制；正文任务运行或暂停时不允许，避免与正文副流程同时写模版。
+    startRulePageCompile(payload) {
+      const contentStatus = technicalPlanStore.loadTechnicalPlan().contentGenerationTask?.status;
+      if (isActiveTaskStatus(contentStatus) || contentStatus === 'paused') {
+        throw new Error('正文任务未结束，请完成或重置后再重新编制');
+      }
+      return startManagedTask('rule-page-compile', payload, runRulePageCompileTask, {}, { primarySession: true });
     },
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTaskV2, {
@@ -1728,12 +1782,15 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
             && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
               || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
       }
-      // 商务模版尚未填写完成时同样需要启动，由正文任务按需只执行副 Agent。
+      // 商务模版尚未填写完成、规则和页码尚未编制时同样需要启动，由正文任务按需只执行副 Agent。
       const businessFillPending = technicalPlanStore.hasBidTemplate()
         && technicalPlan.contentGenerationRuntime?.business_fill?.phase !== 'completed';
+      const rulePagePending = hasRulePageChapters(technicalPlanStore, technicalPlan.outlineData?.outline)
+        && technicalPlan.contentGenerationRuntime?.rule_page?.phase !== 'completed';
       if (!sectionRegeneration && !continuing && !taskPayload?.regenerate
         && technicalPlan.contentGenerationTask?.status === 'success'
         && !businessFillPending
+        && !rulePagePending
         && !hasPendingSections(technicalPlan.outlineData?.outline || [])) {
         const task = technicalPlan.contentGenerationTask;
         emit(task, { technicalPlanPatch: technicalPlan });
@@ -1911,7 +1968,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     },
     // 仅重置正文阶段，保留目录、全局事实和生成配置。
     async resetContentGeneration() {
-      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation']);
+      // 正文页单独运行的“重新编制”也使用正文会话和运行时，一并取消并等待结束后再清理。
+      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation', 'rule-page-compile']);
       technicalPlanStore.updateTechnicalPlanWithoutReload({ invalidateContentGeneration: true });
       return technicalPlanStore.loadTechnicalPlan();
     },

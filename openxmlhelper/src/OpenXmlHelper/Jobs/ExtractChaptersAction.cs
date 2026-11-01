@@ -19,6 +19,9 @@ sealed class ExtractChapterSpec
     /// <summary>章节字段是否自动填写；为 false 时写入字段时统一改为人工。</summary>
     [JsonPropertyName("auto_fill")]
     public bool? AutoFill { get; set; }
+    /// <summary>规则和页码章节；扫描时为其提供表格位置候选，并允许 fill_by=rule。</summary>
+    [JsonPropertyName("rule_page")]
+    public bool? RulePage { get; set; }
 }
 
 sealed class ExtractChaptersRequest
@@ -63,6 +66,7 @@ static class ExtractChaptersAction
                     StartBlock = item.StartBlock,
                     EndBlock = item.EndBlock,
                     AutoFill = item.AutoFill,
+                    RulePage = item.RulePage,
                 })
                 .Where(item => item.Title.Length > 0)
                 .ToList();
@@ -140,6 +144,7 @@ static class ExtractChaptersAction
                         Id = match.Chapter.Id.Length > 0 ? match.Chapter.Id : null,
                         Title = match.Chapter.Title,
                         AutoFill = match.Chapter.AutoFill ?? true,
+                        RulePage = match.Chapter.RulePage == true ? true : null,
                         StartBlock = startBlock,
                         EndBlock = destBody.ChildElements.Count,
                     });

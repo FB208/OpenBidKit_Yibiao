@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
-import type { OutlineContentMode } from '../../../shared/types';
+import { OUTLINE_CONTENT_MODE_LABELS, OUTLINE_RULE_BASIS_LABELS } from '../../../shared/types';
+import type { OutlineContentMode, OutlineRuleBasis } from '../../../shared/types';
 import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
 import type { OutlineAttribute, OutlineSelectionBasis, OutlineSelectionItem, OutlineSelectionState } from '../types';
 
@@ -22,6 +22,7 @@ interface SelectionRow {
 
 const outlineAttributes: OutlineAttribute[] = ['通用', '商务/资信', '技术', '其他', '目录', '报价', '业绩'];
 const contentModes = Object.keys(OUTLINE_CONTENT_MODE_LABELS) as OutlineContentMode[];
+const ruleBases = Object.keys(OUTLINE_RULE_BASIS_LABELS) as OutlineRuleBasis[];
 const basisLabels: Record<OutlineSelectionBasis, string> = {
   'format-template': '依据：招标文件投标文件格式',
   'response-requirements': '依据：响应文件要求（未找到明确格式）',
@@ -76,6 +77,8 @@ function OutlineSelectionDialog({
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const leafRows = rows.filter((row) => !row.item.children?.length);
   const selectedLeafCount = leafRows.filter((row) => selectedIdSet.has(row.item.id)).length;
+  // 选用的规则和页码目录必须标明应答依据，程序据此给编制 Agent 对应的评分要求。
+  const missingRuleBasis = leafRows.some((row) => selectedIdSet.has(row.item.id) && row.item.content_mode === 'rule-page' && !row.item.rule_basis);
 
   useEffect(() => {
     if (!open) return;
@@ -146,7 +149,13 @@ function OutlineSelectionDialog({
       ...item,
       content_mode: contentMode,
       ...(contentMode === 'other' ? {} : { content_mode_note: undefined }),
+      ...(contentMode === 'rule-page' ? {} : { rule_basis: undefined }),
     })));
+  };
+
+  const changeRuleBasis = (itemId: string, ruleBasis: OutlineRuleBasis) => {
+    reportInteraction();
+    setItems((current) => updateItem(current, itemId, (item) => ({ ...item, rule_basis: ruleBasis })));
   };
 
   return (
@@ -221,15 +230,28 @@ function OutlineSelectionDialog({
                       <span className="outline-selection-blank is-attribute" aria-hidden="true">—</span>
                     )}
                     {leaf && item.content_mode ? (
-                      <select
-                        className="outline-selection-mode"
-                        value={item.content_mode}
-                        aria-label={`${item.title}的内容处理模式`}
-                        onChange={(event) => changeContentMode(item.id, event.target.value as OutlineContentMode)}
-                        disabled={saving}
-                      >
-                        {contentModes.map((mode) => <option key={mode} value={mode}>{OUTLINE_CONTENT_MODE_LABELS[mode]}</option>)}
-                      </select>
+                      <div className="outline-selection-mode">
+                        <select
+                          value={item.content_mode}
+                          aria-label={`${item.title}的内容处理模式`}
+                          onChange={(event) => changeContentMode(item.id, event.target.value as OutlineContentMode)}
+                          disabled={saving}
+                        >
+                          {contentModes.map((mode) => <option key={mode} value={mode}>{OUTLINE_CONTENT_MODE_LABELS[mode]}</option>)}
+                        </select>
+                        {item.content_mode === 'rule-page' && (
+                          <select
+                            className={item.rule_basis ? undefined : 'is-missing'}
+                            value={item.rule_basis || ''}
+                            aria-label={`${item.title}的应答依据`}
+                            onChange={(event) => changeRuleBasis(item.id, event.target.value as OutlineRuleBasis)}
+                            disabled={saving}
+                          >
+                            <option value="" disabled>选择应答依据</option>
+                            {ruleBases.map((basis) => <option key={basis} value={basis}>依据：{OUTLINE_RULE_BASIS_LABELS[basis]}</option>)}
+                          </select>
+                        )}
+                      </div>
                     ) : (
                       <span className="outline-selection-blank is-mode" aria-hidden="true">—</span>
                     )}
@@ -248,7 +270,7 @@ function OutlineSelectionDialog({
 
           <footer className="outline-selection-actions">
             <div className="outline-selection-summary">
-              <span>{selectedLeafCount ? `将使用 ${selectedLeafCount} 个目录` : '请至少选择一个目录'}</span>
+              <span>{!selectedLeafCount ? '请至少选择一个目录' : missingRuleBasis ? '请为规则和页码目录选择应答依据' : `将使用 ${selectedLeafCount} 个目录`}</span>
               <div className="outline-selection-auto-answer">
                 <label>
                   <AppSwitch checked={autoAnswerEnabled} disabled={autoAnswerSaving || saving} onCheckedChange={(checked) => void setAutoAnswerEnabled(checked)} />
@@ -268,7 +290,7 @@ function OutlineSelectionDialog({
                 type="button"
                 className="primary-action"
                 onClick={() => onConfirm(items, selectedIds)}
-                disabled={saving || !selectedLeafCount}
+                disabled={saving || !selectedLeafCount || missingRuleBasis}
               >
                 {saving ? '正在保存...' : '确认选择'}
               </button>

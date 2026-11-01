@@ -3081,6 +3081,17 @@
   font-size: 13px;
 }
 
+.outline-selection-mode {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.outline-selection-row select.is-missing {
+  color: var(--yb-warning-deep);
+  border-color: var(--yb-warning-border);
+}
+
 .outline-selection-row input[type="checkbox"] {
   width: 17px;
   height: 17px;
@@ -3193,8 +3204,13 @@
     display: none;
   }
 
-  .outline-selection-row select.outline-selection-mode {
+  .outline-selection-row .outline-selection-mode {
     grid-area: mode;
+    width: min(160px, 100%);
+  }
+
+  .outline-selection-mode select {
+    width: 100%;
   }
 
   .outline-selection-row input[type="checkbox"] {
@@ -4402,6 +4418,7 @@
 }
 
 .outline-content-mode-badge.is-template-fill,
+.outline-content-mode-badge.is-rule-page,
 .outline-content-mode-badge.is-directory-generate,
 .outline-content-mode-badge.is-manual-fill {
   color: #9a5b13;

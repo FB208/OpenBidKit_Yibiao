@@ -25,7 +25,7 @@ function collectCurrentTemplateItems(plan) {
   return collectTemplateItems(withSources(plan.outlineData?.outline));
 }
 
-// “下一步”前核对投标模版：当前非 AI 叶子按提取规则应进入模版却没有对应章节，或填写方式与章节不一致。
+// “下一步”前核对投标模版：当前非 AI 叶子按提取规则应进入模版却没有对应章节，或填写方式（自动填写、规则和页码）与章节不一致。
 // 技术文件独立成册、没有招标 Word 原件或正文已开始时不检查。
 function inspectBidTemplate(workspaceStore) {
   const plan = workspaceStore.loadTechnicalPlan();
@@ -48,9 +48,10 @@ function inspectBidTemplate(workspaceStore) {
     const leaf = leaves.get(item.id);
     if (!leaf) continue;
     const chapter = chapters.get(item.id);
-    const entry = { id: item.id, number: leaf.number, title: leaf.title, auto_fill: item.auto_fill };
+    const rulePage = item.rule_page === true;
+    const entry = { id: item.id, number: leaf.number, title: leaf.title, auto_fill: item.auto_fill, rule_page: rulePage };
     if (!chapter) result.added.push(entry);
-    else if ((chapter.auto_fill !== false) !== item.auto_fill) result.changed.push(entry);
+    else if ((chapter.auto_fill !== false) !== item.auto_fill || (chapter.rule_page === true) !== rulePage) result.changed.push(entry);
   }
   return result;
 }

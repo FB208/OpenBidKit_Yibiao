@@ -6,6 +6,7 @@ const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFil
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
 const { CREDENTIAL_IMAGE_FIELD_LABELS } = require('./credentialLibraryService.cjs');
 const { readTemplateLayout } = require('./pi/piOpenXmlTool.cjs');
+const { buildRuleTableFills, isRuleField } = require('./rulePageTables.cjs');
 const { collectOutlineLeaves } = require('./technicalPlanOutline.cjs');
 
 const BUSINESS_TEMPLATE_FILL_STAGE = 'business-template-fill';
@@ -70,12 +71,15 @@ const BUSINESS_TEMPLATE_FILL_JSON_SCHEMA = {
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validateFillSchema = ajv.compile(BUSINESS_TEMPLATE_FILL_JSON_SCHEMA);
 
-const FIELD_KINDS = new Set(['text', 'choice', 'attachment']);
+const FIELD_KINDS = new Set(['text', 'choice', 'select', 'attachment']);
+const OPTION_KINDS = new Set(['choice', 'select']);
 const FILL_VALUE_KEYS = ['value', 'selected', 'image_id'];
 const UNIT_STATE_KEYS = [...FILL_VALUE_KEYS, 'blank', 'unresolved_reason'];
 
 // 字段清单 v2：同一表格内同名字段出现在多行时逐行填写，其余同名字段填同一个值；同名字段的 fill_by 一致。
-function groupFieldUnits(fields = []) {
+// 规则和页码字段（fill_by=rule）由规则和页码 Agent 编制，不形成商务填写项。
+function groupFieldUnits(allFields = []) {
+  const fields = allFields.filter(field => !isRuleField(field));
   const tableRows = new Map();
   for (const field of fields) {
     if (!field.table_id || !Number.isInteger(field.row)) continue;
@@ -98,8 +102,10 @@ function groupFieldUnits(fields = []) {
         ...(field.subject ? { subject: field.subject } : {}),
         ...(field.section ? { section: field.section } : {}),
         ...(field.instruction ? { instruction: field.instruction } : {}),
-        ...(field.kind === 'choice' ? { options: field.options || [] } : {}),
+        ...(OPTION_KINDS.has(field.kind) ? { options: field.options || [] } : {}),
         ...(perRow ? { table_id: field.table_id, row: field.row } : {}),
+        // 字段在模版中的原句（老模版没有），同名字段取第一处，供填写时让取值能放进原句。
+        ...(field.context ? { context: field.context } : {}),
         field_ids: [],
       };
       unitsByKey.set(key, unit);
@@ -130,18 +136,21 @@ function findIdleListUnits(units, isUnitFilled) {
   return idle;
 }
 
-// 导出时清单表按行处理：未使用的行写入留空，保留占位的空格去掉 AI 留下的留空标记，字段值本身不变。
+// 导出时清单表按行处理：未使用的行写入留空并返回其字段 ID（整本导出删除这些行），保留占位的空格去掉 AI 留下的留空标记，字段值本身不变。
 function applyListRowMarks(fields = []) {
   const fieldsById = new Map(fields.map(field => [field.id, field]));
   const units = groupFieldUnits(fields).filter(unit => unit.table_id);
   const idle = findIdleListUnits(units, unit => !unit.field_ids.every(id => fieldsById.get(id)?.signature)
     && hasFilledValue(readUnitState(unit, fieldsById)));
   const idleByField = new Map(units.flatMap(unit => unit.field_ids.map(id => [id, idle.has(unit.key)])));
-  return fields.map((field) => {
-    if (!idleByField.has(field.id) || hasFilledValue(field)) return field;
-    const rest = Object.fromEntries(Object.entries(field).filter(([key]) => key !== 'blank'));
-    return idleByField.get(field.id) ? { ...rest, blank: true } : rest;
-  });
+  return {
+    fields: fields.map((field) => {
+      if (!idleByField.has(field.id) || hasFilledValue(field)) return field;
+      const rest = Object.fromEntries(Object.entries(field).filter(([key]) => key !== 'blank'));
+      return idleByField.get(field.id) ? { ...rest, blank: true } : rest;
+    }),
+    idleFieldIds: [...idleByField].filter(([, isIdle]) => isIdle).map(([id]) => id),
+  };
 }
 
 // 副 Agent 只填写 fill_by=ai 的填写项，附件从资信库图片中推荐。
@@ -166,6 +175,7 @@ function describeUnit(unit) {
     kind: unit.kind,
     ...(unit.instruction ? { instruction: unit.instruction } : {}),
     ...(unit.options ? { options: unit.options } : {}),
+    ...(unit.context ? { context: unit.context } : {}),
   };
 }
 
@@ -308,7 +318,7 @@ function createBusinessTemplateFillPrompt({ resume = false, hasGlobalFacts = fal
 任务：为投标文件商务模版的待填字段取值，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
 
 输入文件：
-- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=attachment 为附件图片。subject 是该字段所描述的对象（要填写谁或什么的信息），section 是字段或表格所在的章节和表格标题。
+- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=select 为择一并给出 options，kind=attachment 为附件图片。subject 是该字段所描述的对象（要填写谁或什么的信息），section 是字段或表格所在的章节和表格标题，context 是字段在模版中的原句（【▢…】为填写处，表格为同行内容）。
 - ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料；企业图片和各条记录下的“图片”列出可用图片的 id、栏目和名称。
 - ${TENDER_INPUT_FILE}：当前标段的招标文件全文。
 - ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。${hasGlobalFacts ? `
@@ -319,15 +329,15 @@ function createBusinessTemplateFillPrompt({ resume = false, hasGlobalFacts = fal
 2. 人员、证书、业绩只能选资信库中的真实记录，按招标文件的资格和评分要求选最匹配的。${hasGlobalFacts ? '全局事实已指定的人员在资信库中存在时必须选同一人；不在资信库中时，相关字段列入 unresolved 并说明原因。' : ''}
 3. tables 中同一行各列取自同一条记录，不同行取不同记录。只把有真实记录的行写入 rows，从该表格 rows 列出的第一行起按顺序连续使用；记录用完后剩余的行不要写入 rows 或 unresolved，程序会把它们留空。已使用的行中个别列没有依据时，按单元格列入 unresolved（写 table_id、row、name 和 reason）。一条可用记录都没有时，只把该表格的第一行整行列入 unresolved（只写 table_id、row 和 reason）。序号类列按行顺序填写。
 4. 项目信息（项目名称、项目编号、招标人、工期或服务期、质量标准、投标有效期等）${hasGlobalFacts ? '以全局事实为准，全局事实未提及时取招标文件原文。' : `取招标文件原文和${BID_INFO_INPUT_FILE}。`}
-5. 勾选项只能从 options 中原样选择，可以多选；没有依据时列入 unresolved。
+5. 勾选项只能从 options 中原样选择，可以多选；择一只能从 options 中原样选一项；没有依据时列入 unresolved。
 6. 附件用 image_id 从资信库图片中选择一张：按栏目和所属记录匹配材料，人员、证书、业绩相关附件必须属于已选用的同一人员、证书或业绩记录；同一张图片可用于多处；没有匹配的图片时列入 unresolved。
 7. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。
-8. 每个值为一段纯文本，需要多行时用换行符；有 instruction 时按其格式要求填写。
+8. 每个值为一段纯文本，需要多行时用换行符；有 instruction 时按其格式要求填写。有 context 时，取值要能直接放进原句的填写处：原句在填写处前后已有的文字（如“项目”“公司”、单位）不要在取值中重复。
 
 结果格式（${FILL_OUTPUT_FILE}）：
 {"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]},{"name":"附件","image_id":"图片 id"}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"table_id":"表格ID","row":2,"name":"列名","reason":"该列无依据的原因"}]}
 - 每个普通字段必须且只能出现在 values 或 unresolved 中一次；写入 rows 的行，每一列都必须给出取值或按单元格列入 unresolved；未使用的行不要写。
-- 文字字段用 value，勾选项用 selected，附件用 image_id；没有表格时 rows 写空数组。
+- 文字字段用 value，勾选项和择一用 selected（择一只写一项），附件用 image_id；没有表格时 rows 写空数组。
 - 程序已预建空的结果文件，首次填充使用 write，内容较多时可分多次写入：首次用 write，之后用 edit 补充，每次写入后保持完整有效 JSON。可用 json-validation 自查结构。
 - 提交后程序会逐项校验，不通过会把问题退回给你，届时修改同一文件。完成后直接结束，不输出总结。`;
 }
@@ -410,15 +420,19 @@ function validateBusinessTemplateFillResult(payload, units, imageIds = new Set()
       }
       return { image_id: item.image_id };
     }
-    if (unit.kind === 'choice') {
+    if (OPTION_KINDS.has(unit.kind)) {
       if (!hasSelected) {
-        issues.push(blockingIssue(`${label} 是勾选项，必须用 selected 从 options 中选择`));
+        issues.push(blockingIssue(`${label} 是${unit.kind === 'select' ? '择一' : '勾选项'}，必须用 selected 从 options 中选择`));
         return null;
       }
       const selected = [...new Set(item.selected.map(option => option.trim()))];
       const invalid = selected.filter(option => !unit.options.includes(option));
       if (invalid.length) {
         issues.push(blockingIssue(`${label} 的选项不在 options 中：${invalid.join('、')}；可选：${unit.options.join('、')}`));
+        return null;
+      }
+      if (unit.kind === 'select' && selected.length !== 1) {
+        issues.push(blockingIssue(`${label} 是择一，selected 只能写一项`));
         return null;
       }
       return { selected };
@@ -652,7 +666,7 @@ function imageOwnerLabels(snapshot = {}) {
 }
 
 // 确认弹窗数据：当前目录商务章节的填写项及当前值、资信库图片目录，以及按章节分组的模版版式。
-// 版式读取空白底稿（正文填写开始前已创建），其块结构与已填写的模版一致。
+// 版式读取空白底稿（正文填写开始前已创建），其块结构与已填写的模版一致；规则和页码字段只读显示。
 async function loadBusinessFillReview({ workspaceStore, credentialLibraryService, openXmlHelperService }) {
   const { layout, chapters, fields } = await loadBusinessFillScope({ workspaceStore, openXmlHelperService });
   const fieldsById = new Map(fields.map(field => [field.id, field]));
@@ -673,6 +687,7 @@ async function loadBusinessFillReview({ workspaceStore, credentialLibraryService
       ...(unit.table_id ? { table_id: unit.table_id, row: unit.row } : {}),
       ...readUnitState(unit, fieldsById),
     })),
+    rule_field_ids: fields.filter(isRuleField).map(field => field.id),
     base_size: layout.base_size,
     chapters: chapters.map(chapter => ({
       id: chapter.id,
@@ -691,10 +706,11 @@ async function loadBusinessFillReview({ workspaceStore, credentialLibraryService
 }
 
 // 正文页预览：按字段清单块号从当前已回填的 bid-template.docx 现截单章，不落盘；没有对应章节时返回 null。
+// 规则和页码章节尚未编制（或目录变更后待重编）时返回 null，页面显示待编制。
 async function previewBusinessChapter({ workspaceStore, openXmlHelperService, nodeId }) {
   if (!workspaceStore.hasBidTemplate()) return null;
   const chapter = (workspaceStore.readBidTemplateFields().chapters || []).find(item => item.id === nodeId);
-  if (!chapter) return null;
+  if (!chapter || (chapter.rule_page && !workspaceStore.readRulePageTables())) return null;
   return openXmlHelperService.createTemplateChapterDocx({
     input: workspaceStore.getBidTemplateRelativePath(),
     startBlock: chapter.start_block,
@@ -727,7 +743,7 @@ async function runBusinessTemplateFill({
   let scopeFieldIds = null;
   const readScopeFields = async () => {
     scopeFieldIds ||= new Set((await loadBusinessFillScope({ workspaceStore, openXmlHelperService, signal })).fields.map(field => field.id));
-    return (workspaceStore.readBidTemplateFields().fields || []).filter(field => scopeFieldIds.has(field.id));
+    return (workspaceStore.readBidTemplateFields().fields || []).filter(field => scopeFieldIds.has(field.id) && !isRuleField(field));
   };
 
   if (current.phase === 'filling') {
@@ -822,8 +838,12 @@ async function runBusinessTemplateFill({
   return current;
 }
 
-// 以空白底稿按字段值重新生成商务模版 Word，返回所选图片已从资信库删除的字段名称。
-// blankSignatures 时签章位置写入留空，清除“待填写”占位，供整本导出线下盖章。
+// 商务填写、规则和页码编制与编辑保存都会回填同一份 bid-template.docx，逐个执行。
+let renderQueue = Promise.resolve();
+
+// 以空白底稿按字段值和规则和页码编制结果重新生成商务模版 Word，返回所选图片已从资信库删除的字段名称。
+// forExport 时签章位置写入留空、清除“待填写”占位供线下盖章，页码引用保留标记由整本导出换成页码域；否则显示引用的小节标题。
+// removeRowFieldIds 为整本导出要删除的清单表未使用行的字段 ID，助手只删整行字段都在其中的行。
 async function renderBusinessTemplate({
   workspaceStore,
   credentialLibraryService,
@@ -831,7 +851,8 @@ async function renderBusinessTemplate({
   fields,
   signal,
   output = workspaceStore.getBidTemplateRelativePath(),
-  blankSignatures = false,
+  forExport = false,
+  removeRowFieldIds = [],
 }) {
   const imagePaths = new Map((credentialLibraryService.load().images || []).map(image => [image.imageId, `credential-library/${image.relativePath}`]));
   const missingImages = new Set();
@@ -842,22 +863,30 @@ async function renderBusinessTemplate({
       // 确认后图片已从资信库删除时保留占位。
       if (image) values.push({ id: field.id, image });
       else missingImages.add(field.name);
-    } else if (Object.hasOwn(field, 'selected')) values.push({ id: field.id, selected: field.selected });
+    } else if (Object.hasOwn(field, 'selected')) {
+      // 择一把备选原文换成选中项，勾选项只改方框。
+      values.push(field.kind === 'select' ? { id: field.id, option: field.selected[0] } : { id: field.id, selected: field.selected });
+    }
     else if (Object.hasOwn(field, 'blank')) values.push({ id: field.id, blank: true });
     // 纯空白文字值（AI 用空格表示留空）按留空回填，助手不接受空白文字。
     else if (Object.hasOwn(field, 'value')) values.push(textOf(field.value) ? { id: field.id, value: field.value } : { id: field.id, blank: true });
-    else if (blankSignatures && field.signature) values.push({ id: field.id, blank: true });
+    else if (forExport && field.signature) values.push({ id: field.id, blank: true });
   }
-  await openXmlHelperService.runJob({
+  const ruleTables = buildRuleTableFills(workspaceStore.readRulePageTables(), workspaceStore.loadTechnicalPlan().outlineData?.outline, { forExport });
+  const run = renderQueue.then(() => openXmlHelperService.runJob({
     action: 'fill-template-fields',
     request: {
       input: workspaceStore.getBidTemplateBlankRelativePath(),
       output,
       values,
+      rule_tables: ruleTables,
+      remove_row_field_ids: removeRowFieldIds,
     },
     timeoutMs: FILL_RENDER_TIMEOUT_MS,
     signal,
-  });
+  }));
+  renderQueue = run.catch(() => {});
+  await run;
   return missingImages;
 }
 
@@ -886,18 +915,18 @@ async function editBusinessFillValues({ workspaceStore, credentialLibraryService
 }
 
 // 整本导出用：以空白底稿和已确认的字段值临时生成一份商务模版，签章位置留白；用户在 Word 中对 bid-template.docx 的修改不带入。
-// 清单表按行保留占位，返回的字段带导出时的留空结果，未填写项统计与 Word 中的标记一致。
+// 清单表未使用的行删除（一行都没填时保留第一行的占位），返回的字段带导出时的留空结果，未填写项统计与 Word 中的标记一致。
 async function renderBusinessTemplateForExport({ workspaceStore, credentialLibraryService, openXmlHelperService }) {
   workspaceStore.ensureBidTemplateBlank();
   const template = workspaceStore.readBidTemplateFields();
-  const fields = applyListRowMarks(template.fields || []);
+  const { fields, idleFieldIds } = applyListRowMarks(template.fields || []);
   const name = `bid-template-export-${crypto.randomUUID()}.docx`;
   const output = path.posix.join(path.posix.dirname(workspaceStore.getBidTemplateRelativePath()), name);
   const outputPath = path.join(path.dirname(workspaceStore.getBidTemplatePath()), name);
   const cleanup = () => fs.rmSync(outputPath, { force: true });
   try {
     const missingImages = await renderBusinessTemplate({
-      workspaceStore, credentialLibraryService, openXmlHelperService, fields, output, blankSignatures: true,
+      workspaceStore, credentialLibraryService, openXmlHelperService, fields, output, forExport: true, removeRowFieldIds: idleFieldIds,
     });
     return { input: output, chapters: template.chapters || [], fields, missingImages, cleanup };
   } catch (error) {
@@ -927,8 +956,11 @@ module.exports = {
   buildFieldsInput,
   buildConfirmedEntries,
   summarizeFillStats,
+  collectLayoutFieldIds,
+  loadBusinessFillScope,
   loadBusinessFillReview,
   previewBusinessChapter,
+  renderBusinessTemplate,
   editBusinessFillValues,
   renderBusinessTemplateForExport,
   countPendingUnits,

@@ -640,6 +640,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         pendingMarkCount: result.pendingMarkCount || 0,
         toc: result.toc || null,
         tocOnlyBytes: result.toc?.tocOnly ? new Uint8Array(fs.readFileSync(path.join(result.jobDir, result.toc.tocOnly))) : null,
+        pageRefs: result.pageRefs || null,
       };
     } finally {
       // 清理不抛错；计数在清理后归还，存储清理不会与之并发。
@@ -649,20 +650,29 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
     }
   }
 
-  /** 把测量得到的页码写入整本导出目录的页码域缓存值；完整文档和只含目录的小文档共用，返回新文档和未写入页码的条数。 */
-  async function fillTocPageNumbers(bytes, pageNumbers) {
+  /**
+   * 把测量得到的页码写入整本导出目录和页码引用的域缓存值；完整文档和只含目录的小文档共用。
+   * pageNumbers / pageRefs 为 null 时不回填对应部分，返回新文档和未写入页码的目录条数、页码引用数。
+   */
+  async function fillTocPageNumbers(bytes, pageNumbers, pageRefs = null) {
     let result;
     activeJobCount += 1;
     try {
       result = await runner.runJob({
         action: 'fill-toc-page-numbers',
-        request: { input: 'input.docx', output: 'output.docx', page_numbers: pageNumbers },
+        request: {
+          input: 'input.docx',
+          output: 'output.docx',
+          ...(pageNumbers ? { page_numbers: pageNumbers } : {}),
+          ...(pageRefs ? { page_refs: pageRefs } : {}),
+        },
         prepare: (jobDir) => fs.writeFileSync(path.join(jobDir, 'input.docx'), bytes),
         timeoutMs: 10 * 60 * 1000,
       });
       return {
         bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, 'output.docx'))),
         missingCount: result.toc?.missingCount || 0,
+        refMissingCount: result.pageRefs?.missingCount || 0,
       };
     } finally {
       if (result) await removeHelperDir(result.jobDir, getOpenXmlJobsDir(app));

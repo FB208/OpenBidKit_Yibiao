@@ -63,6 +63,9 @@ sealed class TemplateLayoutRow
 
 sealed class TemplateLayoutCell
 {
+    /// <summary>起始网格列（0 起），规则表按此定位格子；补齐的 gridBefore / gridAfter 空格不写。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Column { get; set; }
     [JsonPropertyName("col_span")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? ColSpan { get; set; }
@@ -312,6 +315,7 @@ sealed class TemplateLayoutReader
                 var rowSpan = merge is null ? 1 : 1 + CountMergedRows(rows, rowIndex, cell.ColumnStart);
                 layoutRow.Cells.Add(new TemplateLayoutCell
                 {
+                    Column = cell.ColumnStart,
                     ColSpan = cell.ColumnSpan > 1 ? cell.ColumnSpan : null,
                     RowSpan = rowSpan > 1 ? rowSpan : null,
                     Borders = HasNoCellBorders(cell.Cell) ? false : null,

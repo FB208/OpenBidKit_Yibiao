@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -9,6 +10,7 @@ namespace Yibiao.OpenXmlHelper.Jobs;
 static class TemplateFieldSdtWriter
 {
     public const string TagPrefix = "yibiao:field:";
+    public const string FormatTagPrefix = "yibiao:format:";
     public const string PlaceholderFill = "FCE8E6";
     public const string PlaceholderTextColor = "000000";
 
@@ -39,10 +41,14 @@ static class TemplateFieldSdtWriter
                 WrapParagraphs(group, field, wordId, written);
                 break;
             case TemplateFieldKinds.CheckboxGroup:
+            case TemplateFieldKinds.Alternatives:
                 WrapParagraphRange(paragraph, candidate.Start, candidate.Length, field, wordId, written);
                 break;
             case TemplateFieldKinds.AttachmentNote:
                 InsertAttachmentSlot(paragraph, field, wordId, written, candidate.FallbackTarget);
+                break;
+            case TemplateFieldKinds.TableSlot:
+                WriteTableSlot(paragraph, candidate.InsertAfter, field, wordId, written);
                 break;
             default:
                 if (candidate.FallbackTarget is { } fallback)
@@ -106,6 +112,12 @@ static class TemplateFieldSdtWriter
             return written;
         }
 
+        if (value.Option is { } option)
+        {
+            ChooseOption(control, name, option, written);
+            return written;
+        }
+
         if (value.Image is { } imagePath)
         {
             FillImage(mainPart, control, name, imagePath, nextDrawingId(), written);
@@ -115,11 +127,12 @@ static class TemplateFieldSdtWriter
         var blank = value.Blank == true;
         // 留空只清除待填写占位；勾选项等原有内容保持原样。
         if (blank && !control.InnerText.Contains(PlaceholderText(name), StringComparison.Ordinal)) return written;
-        var lines = blank ? [""] : (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        IReadOnlyList<string> lines = blank ? [""] : (value.Value ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         switch (control)
         {
             case Wp.SdtRun run:
             {
+                if (!blank) lines = FitFollowingText(lines, FollowingText(run));
                 var content = run.SdtContentRun ?? run.AppendChild(new Wp.SdtContentRun());
                 var sourceRun = content.Descendants<Wp.Run>().FirstOrDefault();
                 content.RemoveAllChildren();
@@ -186,6 +199,24 @@ static class TemplateFieldSdtWriter
         {
             throw new InvalidOperationException($"勾选项“{name}”中找不到选项：{string.Join('、', missing)}");
         }
+    }
+
+    /// <summary>择一只把控件内的备选原文换成选中项，沿用原文格式；不按后文调整，选中项必须出现在原文中。</summary>
+    static void ChooseOption(Wp.SdtElement control, string name, string option, List<OpenXmlElement> written)
+    {
+        if (control is not Wp.SdtRun run || run.SdtContentRun is not { } content)
+        {
+            throw new InvalidOperationException($"择一“{name}”的控件类型不支持填写");
+        }
+        if (!content.InnerText.Contains(option, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"择一“{name}”中找不到选项：{option}");
+        }
+        var sourceRun = content.Descendants<Wp.Run>().FirstOrDefault();
+        content.RemoveAllChildren();
+        written.Add(content.AppendChild(sourceRun is null
+            ? new Wp.Run(new Wp.Text(option) { Space = SpaceProcessingModeValues.Preserve })
+            : CreateTextRun(option, sourceRun)));
     }
 
     /// <summary>附件写入内嵌图片：等比缩放且不放大原图，宽不超过所在单元格或版心，高不超过版心；文本框兼容显示写入字段名称。</summary>
@@ -270,6 +301,33 @@ static class TemplateFieldSdtWriter
     /// <summary>字段占位文字：AI 填写与人工处理相同，与正文和导出提示统一为“【待填写】”，用户搜索一个关键词即可找到。</summary>
     static string PlaceholderText(string name) => $"【待填写：{name}】";
 
+    // 行内字段后紧跟的下一个标签，如“日期：”。
+    static readonly Regex FollowingLabelPattern = new(@"^[\p{IsCJKUnifiedIdeographs}A-Za-z]{1,8}[：:]", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>行内字段之后同段紧跟的文字（取前 12 个字），用于判断是否与下一个标签相连。</summary>
+    static string FollowingText(Wp.SdtRun control)
+    {
+        var builder = new StringBuilder();
+        foreach (var sibling in control.ElementsAfter())
+        {
+            foreach (var text in sibling.Descendants<Wp.Text>()) builder.Append(text.Text);
+            if (builder.Length >= 12) break;
+        }
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// 单行取值后紧跟“标签：”且值不以空白结尾时补两个全角空格，避免原下划线空位填写后与下一个标签相连；只是排版，不改取值文字。
+    /// 取值能否放进原句由填写 Agent 按字段原句判断，程序不按字形截改。
+    /// </summary>
+    static IReadOnlyList<string> FitFollowingText(IReadOnlyList<string> lines, string following)
+    {
+        if (lines.Count != 1 || lines[0].Length == 0 || following.Length == 0) return lines;
+        var value = lines[0];
+        if (!char.IsWhiteSpace(value[^1]) && FollowingLabelPattern.IsMatch(following)) value += "　　";
+        return [value];
+    }
+
     /// <summary>文本框兼容显示（mc:Fallback）只有纯文字占位，按同名占位的出现顺序同步写入相同文字。</summary>
     static void FillFallback(Wp.SdtElement control, string name, IReadOnlyList<string> lines)
     {
@@ -288,7 +346,7 @@ static class TemplateFieldSdtWriter
     }
 
     /// <summary>沿用占位格式并去掉淡红底，多行值用换行符分隔。</summary>
-    static Wp.Run CreateValueRun(IReadOnlyList<string> lines, Wp.Run? sourceRun)
+    internal static Wp.Run CreateValueRun(IReadOnlyList<string> lines, Wp.Run? sourceRun)
     {
         var properties = sourceRun?.RunProperties is null
             ? new Wp.RunProperties()
@@ -414,20 +472,28 @@ static class TemplateFieldSdtWriter
             throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
         }
 
-        var firstStart = runTexts.Take(firstIndex).Sum(item => item.Length);
-        var lastStart = runTexts.Take(lastIndex).Sum(item => item.Length);
-        var prefix = runTexts[firstIndex][..(start - firstStart)];
-        var suffix = runTexts[lastIndex][(end - lastStart)..];
-        var firstRun = runs[firstIndex];
-        var lastRun = runs[lastIndex];
+        // 被替换的文字去掉；范围起点处的换行和分页留在前面，范围内和终点处的移到替换内容之后，不丢失版面断点。
+        SplitAround(
+            runs, runTexts, firstIndex, lastIndex,
+            before: (position => position < start, position => position <= start),
+            middle: [replacement],
+            after: (position => position >= end, position => position > start),
+            written);
+    }
 
-        if (prefix.Length > 0) AddWritten(written, firstRun.InsertBeforeSelf(CreateTextRun(prefix, firstRun)));
-        firstRun.InsertBeforeSelf(replacement);
-        if (suffix.Length > 0) AddWritten(written, firstRun.InsertBeforeSelf(CreateTextRun(suffix, lastRun)));
-        for (var index = firstIndex; index <= lastIndex; index += 1)
-        {
-            runs[index].Remove();
-        }
+    /// <summary>格式文字保留原文和格式，只把范围包进格式文字控件，导出和预览时由 BusinessTemplateMerger.RemoveFormatText 去掉。</summary>
+    public static IReadOnlyList<OpenXmlElement> MarkFormatText(TemplateFieldCandidate candidate, int wordId)
+    {
+        if (candidate.Target is not Wp.Paragraph paragraph) throw new InvalidOperationException($"候选位置已失效：{candidate.CandidateId}");
+        var written = new List<OpenXmlElement>();
+        WrapRange(
+            paragraph,
+            candidate.Start,
+            candidate.Length,
+            [new Wp.SdtAlias { Val = "格式文字" }, new Wp.SdtId { Val = wordId }, new Wp.Tag { Val = $"{FormatTagPrefix}{candidate.CandidateId}" }],
+            candidate.CandidateId,
+            written);
+        return written;
     }
 
     /// <summary>同段勾选项保留原文和格式，只把覆盖范围包进内容控件。</summary>
@@ -437,43 +503,46 @@ static class TemplateFieldSdtWriter
         int length,
         TemplateFieldDefinition field,
         int wordId,
+        List<OpenXmlElement> written) =>
+        WrapRange(paragraph, start, length, CreateIdentity(field, wordId), field.Name, written);
+
+    static void WrapRange(
+        Wp.Paragraph paragraph,
+        int start,
+        int length,
+        OpenXmlElement[] identity,
+        string label,
         List<OpenXmlElement> written)
     {
         var runs = paragraph.Elements<Wp.Run>().ToList();
         var runTexts = runs.Select(ReadRunText).ToList();
-        EnsureRange(runTexts, start, length, field);
         var end = start + length;
         var firstIndex = FindRunIndex(runTexts, start, preferNextAtBoundary: true);
         var lastIndex = FindRunIndex(runTexts, end, preferNextAtBoundary: false);
-        if (length == 0 || firstIndex < 0 || lastIndex < firstIndex)
+        if (start < 0 || length <= 0 || end > runTexts.Sum(item => item.Length) || firstIndex < 0 || lastIndex < firstIndex)
         {
-            throw new InvalidOperationException($"模板字段位置已漂移：{field.Name}");
+            throw new InvalidOperationException($"模板字段位置已漂移：{label}");
         }
 
+        // 范围内的文字、制表符和中间的换行分页包进控件，起点处的断点留在前面，终点处的留在后面。
         var covered = new List<Wp.Run>();
         for (var index = firstIndex; index <= lastIndex; index += 1)
         {
             var runStart = runTexts.Take(index).Sum(item => item.Length);
-            var from = Math.Max(0, start - runStart);
-            var to = Math.Min(runTexts[index].Length, end - runStart);
-            if (to > from) covered.Add(CreateTextRun(runTexts[index][from..to], runs[index]));
+            if (SliceRun(runs[index], runStart, position => position >= start && position < end, position => position > start && position < end) is { } slice)
+            {
+                covered.Add(slice);
+            }
         }
 
-        var identity = CreateIdentity(field, wordId);
         written.AddRange(identity);
         var control = new Wp.SdtRun(new Wp.SdtProperties(identity), new Wp.SdtContentRun(covered));
-        var firstStart = runTexts.Take(firstIndex).Sum(item => item.Length);
-        var lastStart = runTexts.Take(lastIndex).Sum(item => item.Length);
-        var prefix = runTexts[firstIndex][..(start - firstStart)];
-        var suffix = runTexts[lastIndex][(end - lastStart)..];
-        var firstRun = runs[firstIndex];
-        if (prefix.Length > 0) written.Add(firstRun.InsertBeforeSelf(CreateTextRun(prefix, firstRun)));
-        firstRun.InsertBeforeSelf(control);
-        if (suffix.Length > 0) written.Add(firstRun.InsertBeforeSelf(CreateTextRun(suffix, runs[lastIndex])));
-        for (var index = firstIndex; index <= lastIndex; index += 1)
-        {
-            runs[index].Remove();
-        }
+        SplitAround(
+            runs, runTexts, firstIndex, lastIndex,
+            before: (position => position < start, position => position <= start),
+            middle: [control],
+            after: (position => position >= end, position => position >= end),
+            written);
     }
 
     /// <summary>跨段勾选项整体包进块级内容控件，选项段落原样保留。</summary>
@@ -498,6 +567,31 @@ static class TemplateFieldSdtWriter
             paragraph.Remove();
             content.AppendChild(paragraph);
         }
+    }
+
+    /// <summary>
+    /// 表格位置写成块级内容控件，内容为一段占位（沿用原段落格式）；回填时整体换成表格。
+    /// 替换编制说明时原段落移除，顶层块数不变；章节只有标题时在标题段之后插入。
+    /// </summary>
+    static void WriteTableSlot(
+        Wp.Paragraph paragraph,
+        bool insertAfter,
+        TemplateFieldDefinition field,
+        int wordId,
+        List<OpenXmlElement> written)
+    {
+        var identity = CreateIdentity(field, wordId);
+        written.AddRange(identity);
+        var placeholder = CreateSlotParagraph(paragraph, CreatePlaceholderRun(field, paragraph.Elements<Wp.Run>().FirstOrDefault()));
+        written.Add(placeholder);
+        var control = new Wp.SdtBlock(new Wp.SdtProperties(identity), new Wp.SdtContentBlock(placeholder));
+        if (insertAfter)
+        {
+            paragraph.InsertAfterSelf(control);
+            return;
+        }
+        paragraph.InsertBeforeSelf(control);
+        paragraph.Remove();
     }
 
     /// <summary>附件说明保持原文，在其后插入一段附件占位；文本框兼容显示同步插入纯文字占位。返回新插入的段落，供后续部分继续向后插入。</summary>
@@ -540,36 +634,101 @@ static class TemplateFieldSdtWriter
         OpenXmlElement replacement,
         List<OpenXmlElement>? written)
     {
-        var totalLength = runTexts.Sum(item => item.Length);
-        if (start == totalLength)
-        {
-            runs[^1].InsertAfterSelf(replacement);
-            return;
-        }
-
-        var runIndex = FindRunIndex(runTexts, start, preferNextAtBoundary: true);
+        // 插入点归前面的文字（插在标签之后），同一位置的换行和分页留在插入内容之后，字段不会被挤到下一行或下一页。
+        var runIndex = FindRunIndex(runTexts, start, preferNextAtBoundary: false);
         if (runIndex < 0)
         {
-            paragraph.AppendChild(replacement);
+            if (start == 0) runs[0].InsertBeforeSelf(replacement);
+            else runs[^1].InsertAfterSelf(replacement);
             return;
         }
 
-        var runStart = runTexts.Take(runIndex).Sum(item => item.Length);
-        var offset = start - runStart;
-        var run = runs[runIndex];
-        var text = runTexts[runIndex];
-        if (offset == 0)
+        SplitAround(
+            runs, runTexts, runIndex, runIndex,
+            before: (position => position < start, position => position < start),
+            middle: [replacement],
+            after: (position => position >= start, position => position >= start),
+            written);
+    }
+
+    /// <summary>
+    /// 把 firstIndex 到 lastIndex 的 run 按位置切成前段和后段，与中间内容一起插回原位置，再删除原 run。
+    /// 每段各给一对判断：文字和制表符按字符位置，换行和分页按所在位置（不占字符）。
+    /// </summary>
+    static void SplitAround(
+        IReadOnlyList<Wp.Run> runs,
+        IReadOnlyList<string> runTexts,
+        int firstIndex,
+        int lastIndex,
+        (Func<int, bool> Char, Func<int, bool> ZeroWidth) before,
+        IReadOnlyList<OpenXmlElement> middle,
+        (Func<int, bool> Char, Func<int, bool> ZeroWidth) after,
+        List<OpenXmlElement>? written)
+    {
+        var anchor = runs[firstIndex];
+        var befores = new List<Wp.Run>();
+        var afters = new List<Wp.Run>();
+        for (var index = firstIndex; index <= lastIndex; index += 1)
         {
-            run.InsertBeforeSelf(replacement);
-            return;
+            var runStart = runTexts.Take(index).Sum(item => item.Length);
+            if (SliceRun(runs[index], runStart, before.Char, before.ZeroWidth) is { } head) befores.Add(head);
+            if (SliceRun(runs[index], runStart, after.Char, after.ZeroWidth) is { } tail) afters.Add(tail);
         }
+        foreach (var run in befores) AddWritten(written, anchor.InsertBeforeSelf(run));
+        foreach (var element in middle) anchor.InsertBeforeSelf(element);
+        foreach (var run in afters) AddWritten(written, anchor.InsertBeforeSelf(run));
+        for (var index = firstIndex; index <= lastIndex; index += 1)
+        {
+            runs[index].Remove();
+        }
+    }
 
-        var prefix = text[..offset];
-        var suffix = text[offset..];
-        if (prefix.Length > 0) AddWritten(written, run.InsertBeforeSelf(CreateTextRun(prefix, run)));
-        run.InsertBeforeSelf(replacement);
-        if (suffix.Length > 0) AddWritten(written, run.InsertBeforeSelf(CreateTextRun(suffix, run)));
-        run.Remove();
+    /// <summary>切出 run 中满足判断的内容，沿用原 run 属性；渲染缓存的分页标记丢弃；没有内容时返回 null。</summary>
+    static Wp.Run? SliceRun(Wp.Run run, int runStart, Func<int, bool> keepChar, Func<int, bool> keepZeroWidth)
+    {
+        var slice = new Wp.Run();
+        if (run.RunProperties is not null) slice.AppendChild((Wp.RunProperties)run.RunProperties.CloneNode(true));
+        var offset = runStart;
+        var hasContent = false;
+        foreach (var child in run.ChildElements)
+        {
+            switch (child)
+            {
+                case Wp.RunProperties or Wp.LastRenderedPageBreak:
+                    break;
+                case Wp.Text text:
+                {
+                    var builder = new StringBuilder();
+                    for (var index = 0; index < text.Text.Length; index += 1)
+                    {
+                        if (keepChar(offset + index)) builder.Append(text.Text[index]);
+                    }
+                    if (builder.Length > 0)
+                    {
+                        slice.AppendChild(new Wp.Text(builder.ToString()) { Space = SpaceProcessingModeValues.Preserve });
+                        hasContent = true;
+                    }
+                    offset += text.Text.Length;
+                    break;
+                }
+                case Wp.TabChar:
+                    if (keepChar(offset))
+                    {
+                        slice.AppendChild(child.CloneNode(true));
+                        hasContent = true;
+                    }
+                    offset += 1;
+                    break;
+                default:
+                    if (keepZeroWidth(offset))
+                    {
+                        slice.AppendChild(child.CloneNode(true));
+                        hasContent = true;
+                    }
+                    break;
+            }
+        }
+        return hasContent ? slice : null;
     }
 
     static void EnsureRange(IReadOnlyList<string> runTexts, int start, int length, TemplateFieldDefinition field)
@@ -652,8 +811,5 @@ static class TemplateFieldSdtWriter
         return run;
     }
 
-    static string ReadRunText(Wp.Run run)
-    {
-        return string.Concat(run.Elements<Wp.Text>().Select(item => item.Text));
-    }
+    static string ReadRunText(Wp.Run run) => TemplateFieldScanner.RunText(run);
 }

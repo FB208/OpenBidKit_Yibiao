@@ -1,11 +1,13 @@
 import { buildInvalidBidAndRejectionItemsPrompt } from '../../../shared/prompts';
-import type { BidAnalysisMode } from '../types';
+import type { OutlineMode } from '../../../shared/types';
 
 export interface BidAnalysisTaskDefinition {
   id: string;
   label: string;
   description: string;
   required: boolean;
+  /** 只在这些生成类型下必选（技术评分要求、商务评分要求），给出时不看 required。 */
+  requiredIn?: OutlineMode[];
   output: 'markdown' | 'json';
   buildTaskPrompt: () => string;
 }
@@ -68,7 +70,8 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
     id: 'techRequirements',
     label: '技术评分要求',
     description: '提取技术评分项、权重分值、评分标准和原文位置。',
-    required: true,
+    required: false,
+    requiredIn: ['response-file', 'standalone-technical'],
     output: 'markdown',
     buildTaskPrompt: () => `任务：提取技术评分要求。
 
@@ -272,10 +275,29 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
   {
     id: 'businessScoring',
     label: '商务评分要求',
-    description: '商务评分因素，为商务方案准备。',
+    description: '提取技术评分以外的评分项、分值、评分标准和原文位置。',
     required: false,
+    requiredIn: ['response-file', 'standalone-business'],
     output: 'markdown',
-    buildTaskPrompt: () => '任务：提取招标文件中的商务评分因素，为编写投标文件中的商务方案做准备。保持原文准确性，整理成方便阅读的 Markdown，不要使用表格；如果原文是表格，请转换为列表。仅输出整理结果。',
+    buildTaskPrompt: () => `任务：提取技术评分以外的评分信息（商务、资信、业绩、服务承诺、价格等），并按语义区分“商务评分项”和“商务评分要求”。
+
+分类原则：
+1. 商务评分项：评分表中技术评分以外的每一个具体评分项，例如价格、业绩、资质证书、人员资格、服务承诺、商务条款偏离等。
+2. 商务评分要求：约束上述评分的通用规则或说明，例如证明材料要求、扣分或判定口径、计分方法、表后说明等。
+3. 技术评分项和只适用于技术评分的规则不在本项提取。
+
+每一项按以下结构输出，信息缺失时标注“没有提及”：
+## 商务评分项
+【评分项名称】：<原文描述>
+【权重/分值】：<具体分值或占比>
+【评分标准】：<详细规则>
+【数据来源】：<章节、条款、页码或表格位置>
+
+## 商务评分要求
+【评分要求名称】：<要求或规则名称>
+【适用范围】：<适用于哪些评分项或评审环节>
+【要求/判定口径】：<具体要求、解释、扣分或判定规则>
+【数据来源】：<章节、条款、页码或表格位置>`,
   },
   {
     id: 'discardedBids',
@@ -313,8 +335,13 @@ export const bidAnalysisTasks: BidAnalysisTaskDefinition[] = [
   },
 ];
 
-export function getBidAnalysisTasks(mode: BidAnalysisMode) {
-  return mode === 'full' ? bidAnalysisTasks : bidAnalysisTasks.filter((task) => task.required);
+// 必选解析项：带 requiredIn 的按生成类型决定，其余看 required；与 Main 的同名判断保持一致。
+export function isRequiredBidAnalysisTask(task: BidAnalysisTaskDefinition, outlineMode: OutlineMode) {
+  return task.requiredIn ? task.requiredIn.includes(outlineMode) : task.required;
+}
+
+export function getRequiredBidAnalysisTasks(outlineMode: OutlineMode) {
+  return bidAnalysisTasks.filter((task) => isRequiredBidAnalysisTask(task, outlineMode));
 }
 
 export function getBidAnalysisTaskById(taskId: string) {

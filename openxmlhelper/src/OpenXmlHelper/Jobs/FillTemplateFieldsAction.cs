@@ -67,6 +67,11 @@ static class FillTemplateFieldsAction
                     }
                     writtenElements.AddRange(TemplateFieldSdtWriter.Fill(mainPart, matched[0], value, () => ++drawingId));
                 }
+                foreach (var table in request.RuleTables ?? [])
+                {
+                    writtenElements.AddRange(RuleTableWriter.Fill(wordDocument.Body!, controls, table));
+                }
+                ListRowRemover.Remove(controls, request.RemoveRowFieldIds ?? []);
 
                 wordDocument.Save();
                 // 与 apply-template-fields 一致，只校验本动作写入且仍留在文档中的元素。
@@ -101,7 +106,7 @@ static class FillTemplateFieldsAction
         }
     }
 
-    /// <summary>每个字段只能出现一次，文字、勾选项、图片、留空恰好给出一种；文字值和图片路径非空，勾选项至少选中一项。</summary>
+    /// <summary>每个字段只能出现一次，文字、勾选项、择一、图片、留空恰好给出一种；文字值、选中项和图片路径非空，勾选项至少选中一项。</summary>
     static List<TemplateFieldFillValue> NormalizeValues(IEnumerable<TemplateFieldFillValue>? source)
     {
         var values = (source ?? []).Select(item => new TemplateFieldFillValue
@@ -109,6 +114,7 @@ static class FillTemplateFieldsAction
             Id = (item.Id ?? "").Trim(),
             Value = item.Value,
             Selected = item.Selected?.Select(option => (option ?? "").Trim()).Where(option => option.Length > 0).Distinct(StringComparer.Ordinal).ToList(),
+            Option = item.Option,
             Image = string.IsNullOrWhiteSpace(item.Image) ? null : item.Image.Trim(),
             Blank = item.Blank,
         }).ToList();
@@ -117,11 +123,12 @@ static class FillTemplateFieldsAction
         if (duplicates.Count > 0) problems.Add($"字段重复：{string.Join('、', duplicates)}");
         if (values.Any(item => item.Id.Length == 0)) problems.Add("存在缺少 id 的字段");
         var invalid = values
-            .Where(item => (item.Value is not null ? 1 : 0) + (item.Selected is not null ? 1 : 0) + (item.Image is not null ? 1 : 0) + (item.Blank == true ? 1 : 0) != 1
-                || (item.Selected is not null ? item.Selected.Count == 0 : item.Value is not null && string.IsNullOrWhiteSpace(item.Value)))
+            .Where(item => (item.Value is not null ? 1 : 0) + (item.Selected is not null ? 1 : 0) + (item.Option is not null ? 1 : 0) + (item.Image is not null ? 1 : 0) + (item.Blank == true ? 1 : 0) != 1
+                || (item.Selected is not null ? item.Selected.Count == 0 : item.Value is not null && string.IsNullOrWhiteSpace(item.Value))
+                || item.Option is not null && string.IsNullOrWhiteSpace(item.Option))
             .Select(item => item.Id)
             .ToList();
-        if (invalid.Count > 0) problems.Add($"字段值为空，或未恰好给出文字、勾选项、图片、留空之一：{string.Join('、', invalid)}");
+        if (invalid.Count > 0) problems.Add($"字段值为空，或未恰好给出文字、勾选项、择一、图片、留空之一：{string.Join('、', invalid)}");
         if (problems.Count > 0) throw new InvalidOperationException($"回填字段无效：{string.Join("；", problems)}");
         return values;
     }

@@ -48,6 +48,7 @@ function labelConfigValue(groupKey, value) {
       regenerate: '重新生成正文',
       retry_minimum_words: '继续补足字数',
       regenerate_section: '小节重新生成',
+      recompile_rule_page: '规则和页码重新编制',
     },
   };
 

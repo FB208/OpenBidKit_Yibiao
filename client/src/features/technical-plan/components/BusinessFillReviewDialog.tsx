@@ -71,6 +71,7 @@ function BusinessFillReviewDialog({
     return [...groups.entries()];
   }, [review]);
   const imagesById = useMemo(() => new Map((review?.images || []).map((image) => [image.image_id, image])), [review]);
+  const ruleFieldIds = useMemo(() => new Set(review?.rule_field_ids || []), [review]);
   const unitsByFieldId = useMemo(
     () => new Map(units.flatMap((unit) => unit.field_ids.map((fieldId) => [fieldId, unit] as const))),
     [units],
@@ -119,7 +120,7 @@ function BusinessFillReviewDialog({
     const draft = drafts[unit.key];
     if (!draft || unit.signature || !isFilled(unit, draft)) return [];
     if (unit.kind === 'attachment') return [{ key: unit.key, image_id: draft.imageId }];
-    if (unit.kind === 'choice') return [{ key: unit.key, selected: draft.selected }];
+    if (unit.kind === 'choice' || unit.kind === 'select') return [{ key: unit.key, selected: draft.selected }];
     return [{ key: unit.key, value: draft.value }];
   });
 
@@ -215,6 +216,7 @@ function BusinessFillReviewDialog({
                   idleKeys={idleKeys}
                   imageGroups={imageGroups}
                   imagesById={imagesById}
+                  ruleFieldIds={ruleFieldIds}
                   saving={saving}
                   onDraftChange={updateDraft}
                 />

@@ -8,11 +8,11 @@ import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { generationSettingsTabs, type GenerationSettingsTab } from '../generationSettingsTabs';
-import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getRequiredBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, BidTemplateInspection, BusinessFillReviewValue, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
-import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
+import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
@@ -103,7 +103,6 @@ const initialExportProgress: ExportProgressState = {
 };
 
 const MAX_UI_TASK_LOGS = 80;
-const requiredBidAnalysisTasks = getBidAnalysisTasks('key');
 
 function hasOwnField<T extends object>(value: T, field: PropertyKey) {
   return Object.prototype.hasOwnProperty.call(value, field);
@@ -159,8 +158,8 @@ function buildWordControlWarningDialog(task: BackgroundTaskState): WordControlWa
   return null;
 }
 
-function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
-  return requiredBidAnalysisTasks.every((task) => {
+function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks, outlineMode: OutlineMode) {
+  return getRequiredBidAnalysisTasks(outlineMode).every((task) => {
     const state = tasks[task.id];
     return state?.status === 'success' && state.content.trim();
   });
@@ -208,7 +207,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const steps = skipGlobalFacts ? technicalPlanSteps.filter((step) => step !== 'global-facts') : technicalPlanSteps;
   const activeIndex = Math.max(0, steps.indexOf(state.step));
   const activeStepNumber = String(activeIndex + 1).padStart(2, '0');
-  const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
+  const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks, state.outlineMode);
   const isBidSectionExtractionRunning = state.bidSectionExtractionTask?.status === 'running' || state.bidSectionExtractionTask?.status === 'pausing';
   const isBidAnalysisTaskRunning = state.bidAnalysisTask?.status === 'running' || state.bidAnalysisTask?.status === 'pausing';
   const selectedBidSectionValid = state.bidSectionMode !== 'multiple'
@@ -218,8 +217,10 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
   const technicalScoreMissing = state.bidAnalysisTasks.techRequirements?.status === 'success'
     && isMissingTechnicalScoreItems(state.bidAnalysisTasks.techRequirements.content);
+  // 技术评分项缺失另有无技术评分项模式；商务评分要求整项缺失（如最低价法）按没有商务评分处理，都不拦截下一步。
   const firstMissingBidAnalysisTask = bidAnalysisTasks.find((task) => (
     task.id !== 'techRequirements'
+    && task.id !== 'businessScoring'
     && state.bidAnalysisSelectedTaskIds.includes(task.id)
     && isMissingBidAnalysisResult(task, state.bidAnalysisTasks[task.id]?.content)
   ));
@@ -243,6 +244,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     ['目录生成', state.outlineGenerationTask],
     ['目录AI调整', state.outlineAdjustmentTask],
     ['投标模版提取', state.bidTemplateExtractionTask],
+    ['规则和页码编制', state.rulePageCompileTask],
     ['全局事实设定', state.globalFactsTask],
     ['全局事实AI调整', state.globalFactsAdjustmentTask],
     ['正文生成', state.contentGenerationTask],
@@ -613,6 +615,14 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
             bidTemplateExtractionTask: trimTaskLogs(technicalPlan.bidTemplateExtractionTask) || latestTask,
             bidTemplateExists: hasOwnField(technicalPlan, 'bidTemplateExists') ? Boolean(technicalPlan.bidTemplateExists) : prev.bidTemplateExists,
             bidTemplateChapterIds: hasOwnField(technicalPlan, 'bidTemplateChapterIds') ? technicalPlan.bidTemplateChapterIds : prev.bidTemplateChapterIds,
+          };
+        }
+
+        if (taskType === 'rule-page-compile') {
+          return {
+            ...prev,
+            rulePageCompileTask: trimTaskLogs(technicalPlan.rulePageCompileTask) || latestTask,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
         }
 
@@ -1204,6 +1214,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           stepNumber={activeStepNumber}
           hasTenderFile={Boolean(state.tenderFile)}
           mode={state.bidAnalysisMode}
+          outlineMode={state.outlineMode}
           selectedTaskIds={state.bidAnalysisSelectedTaskIds}
           bidSectionMode={state.bidSectionMode}
           bidSections={state.bidSections}
@@ -1236,6 +1247,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           contentTaskStatus={state.contentGenerationTask?.status}
           aiAdjustmentRunning={isOutlineAdjusting}
           templateExtractionTask={state.bidTemplateExtractionTask}
+          rulePageCompileTask={state.rulePageCompileTask}
           onOutlineSaved={saveOutline}
           onOutlineSelectionSaved={saveOutlineSelection}
           onSortGuardChange={(guard) => {
@@ -1252,6 +1264,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           task={state.globalFactsTask}
           aiAdjustmentRunning={isGlobalFactsAdjusting}
           contentTaskStatus={contentTaskStatus}
+          rulePageCompileStatus={state.rulePageCompileTask?.status}
           hasGeneratedBody={hasGeneratedBody}
           focusGroupRequest={globalFactsFocusRequest}
           onGlobalFactsSaved={saveGlobalFacts}
@@ -1265,6 +1278,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
+          rulePageCompileTask={state.rulePageCompileTask}
           contentGenerationRuntime={state.contentGenerationRuntime}
           contentGenerationOptions={state.contentGenerationOptions}
           exportTemplateId={state.exportTemplateId}
@@ -1397,7 +1411,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
               <strong>{`${bidTemplateMismatch?.changed.length} 个节点的填写方式已变化`}</strong>
               <ul>
                 {bidTemplateMismatch?.changed.map((item) => (
-                  <li key={item.id}>{`${item.number} ${item.title}（改为${item.auto_fill ? '自动填写' : '人工填写'}）`}</li>
+                  <li key={item.id}>{`${item.number} ${item.title}（改为${item.rule_page ? '规则和页码' : item.auto_fill ? '自动填写' : '人工填写'}）`}</li>
                 ))}
               </ul>
             </section>

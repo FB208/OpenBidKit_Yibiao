@@ -245,7 +245,10 @@ static class TableOfContentsBuilder
         return Math.Max(1, width);
     }
 
-    /// <summary>按文档顺序收集有效大纲级别 0-8 的段落（含表格内，不含文本框和目录自身），并加上目录书签。</summary>
+    /// <summary>
+    /// 按文档顺序收集目录之后有效大纲级别 0-8 的段落（含表格内，不含文本框和目录自身），并加上目录书签。
+    /// 目录之前的封面等前置页不进目录。
+    /// </summary>
     static List<TocEntry> CollectEntries(MainDocumentPart mainPart, Wp.Body body, Wp.SdtBlock sdt)
     {
         var styleLevels = WordWorkspace.ReadStyleOutlineLevels(mainPart);
@@ -274,7 +277,9 @@ static class TableOfContentsBuilder
             }
             // Word 目录不收文本框；兼容显示的文本框在 Fallback 里，同样含 txbxContent。
             if (paragraph.Ancestors<Wp.TextBoxContent>().Any()) continue;
+            // 自动编号按全文计数，目录之前的段落也要计入。
             var label = numbering.Next(paragraph);
+            if (!afterToc) continue;
             var level = WordWorkspace.ReadOutlineLevel(paragraph, styleLevels);
             if (level >= 9) continue;
             var text = ParagraphText(paragraph);

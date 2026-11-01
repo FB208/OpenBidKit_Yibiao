@@ -37,10 +37,26 @@ static class ApplyTemplateFieldsAction
 
             var chapterRanges = TemplateChapterRanges.Read(inputPath);
             TemplateFieldDefinitionFile definitions;
+            string preview;
             using (var document = WordprocessingDocument.Open(tempDocumentPath, true))
             {
                 var candidates = TemplateFieldScanner.Scan(document, chapterRanges);
+                // Agent 要去掉的原文、标题段和补充的位置都在同一次扫描的段落上解析，之后与规则候选一样参与校验和写入。
+                var removals = TemplatePositionResolver.ResolveRemovals(request.Removals, candidates);
+                var headings = TemplateHeadings.Resolve(request.Headings, candidates, removals);
+                TemplatePositionResolver.Resolve(request.Positions, candidates);
+                PlaceTableSlots(candidates, headings);
                 var normalized = NormalizeSelections(request, candidates);
+                CheckSelectedRanges(normalized.Select(item => item.Candidate).Concat(removals));
+                // 效果正文按写入前的段落文字生成，定位号与模版正文一致，供 Agent 审阅后修改分类。
+                preview = TemplateTextRenderer.RenderPreview(
+                    candidates,
+                    normalized.ToDictionary<NormalizedSelection, TemplateFieldCandidate, string>(
+                        item => item.Candidate,
+                        item => TemplateTextRenderer.PreviewLabel(item.Candidate, item.Fields.Select(field => field.Name).ToList(), item.Selection.FillBy == TemplateFieldKinds.RuleFillBy),
+                        ReferenceEqualityComparer.Instance),
+                    removals,
+                    headings);
                 var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
                 var body = mainPart.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
                 // 写入会插入附件段落、把跨段勾选项包进块级控件，先记下各章首块，写完再换算块号。
@@ -72,27 +88,39 @@ static class ApplyTemplateFieldsAction
                                 : null,
                             Instruction = part.Instruction,
                             Kind = kind,
-                            Options = kind == TemplateFieldKinds.ChoiceField ? item.Candidate.Options : null,
+                            Options = kind is TemplateFieldKinds.ChoiceField or TemplateFieldKinds.SelectField ? item.Candidate.Options : null,
                             TableId = item.Candidate.TableId,
                             Row = item.Candidate.TableId is null ? null : item.Candidate.RowNumber,
+                            Context = string.IsNullOrWhiteSpace(item.Candidate.Context) ? null : item.Candidate.Context,
                         };
                         definitions.Fields.Add(field);
                         fields.Add((field, nextWordId++));
                     }
                     applications.Add((item.Candidate, fields));
                 }
+                // 去掉的原文不生成字段，包进格式文字控件，和字段一起按段内位置倒序写入，同段先写靠后的范围，前面的位置不受影响。
+                var formatWordIds = removals.ToDictionary(item => item.CandidateId, _ => nextWordId++, StringComparer.Ordinal);
+                applications.AddRange(removals.Select(item => (item, new List<(TemplateFieldDefinition Field, int WordId)>())));
 
                 var writtenElements = new List<OpenXmlElement>();
                 foreach (var application in applications
                     .OrderByDescending(item => item.Candidate.Start)
                     .ThenByDescending(item => item.Candidate.Order))
                 {
-                    writtenElements.AddRange(application.Fields.Count == 1
-                        ? TemplateFieldSdtWriter.Apply(application.Candidate, application.Fields[0].Field, application.Fields[0].WordId)
-                        : TemplateFieldSdtWriter.ApplyAttachmentParts(application.Candidate, application.Fields));
+                    var written = application.Fields.Count switch
+                    {
+                        0 => TemplateFieldSdtWriter.MarkFormatText(application.Candidate, formatWordIds[application.Candidate.CandidateId]),
+                        1 => TemplateFieldSdtWriter.Apply(application.Candidate, application.Fields[0].Field, application.Fields[0].WordId),
+                        _ => TemplateFieldSdtWriter.ApplyAttachmentParts(application.Candidate, application.Fields),
+                    };
+                    writtenElements.AddRange(written);
+                    // 表格位置替换掉章首段（章节没有标题段）时，章节起点改为替换后的块级控件。
+                    var replacedStart = chapterStarts.FindIndex(item => ReferenceEquals(item, application.Candidate.Target));
+                    if (replacedStart >= 0 && chapterStarts[replacedStart].Parent is null) chapterStarts[replacedStart] = written[^1];
                 }
 
-                definitions.Chapters = ResolveFinalChapters(body, chapterRanges, chapterStarts);
+                var hasHeadings = TemplateHeadings.Mark(body, headings);
+                definitions.Chapters = ResolveFinalChapters(body, chapterRanges, chapterStarts, hasHeadings);
                 mainPart.Document.Save();
                 // 原件自带的不规范写法由 Word/WPS 兼容，只校验本动作写入且仍留在文档中的元素。
                 var validator = new OpenXmlValidator(FileFormatVersions.Microsoft365);
@@ -118,6 +146,10 @@ static class ApplyTemplateFieldsAction
             tempDocumentPath = null;
             File.Move(tempFieldsPath, fieldsOutputPath, overwrite: true);
             tempFieldsPath = null;
+            File.WriteAllText(
+                Path.Combine(JobFolder.GetJobDirectory(workspace, jobId), TemplateTextRenderer.PreviewFileName),
+                preview,
+                new UTF8Encoding(false));
             return JobResult.Success(Name, WordWorkspace.ToRelativePath(workspace, outputPath), definitions.Fields.Count);
         }
         catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
@@ -135,11 +167,25 @@ static class ApplyTemplateFieldsAction
         }
     }
 
-    /// <summary>按各章首块写入后所在的顶层块换算最终块号；章节首尾相接，最后一章止于正文末尾（不含分节属性）。</summary>
+    /// <summary>表格位置指向本章标题段时改为插在标题段之后，标题段保留。</summary>
+    static void PlaceTableSlots(TemplateFieldCandidateFile candidates, IReadOnlyList<TemplateParagraphEntry?> headings)
+    {
+        foreach (var candidate in candidates.Candidates.Where(item => item.Kind == TemplateFieldKinds.TableSlot))
+        {
+            var index = candidates.Chapters.FindIndex(item => item.StartBlock == candidate.Chapter?.StartBlock);
+            if (index < 0 || !ReferenceEquals(headings[index]?.Paragraph, candidate.Target)) continue;
+            candidate.InsertAfter = true;
+            candidate.Start += candidate.Length;
+            candidate.Length = 0;
+        }
+    }
+
+    /// <summary>按各章首块写入后所在的顶层块换算最终块号；章节首尾相接，最后一章止于正文末尾（不含分节属性）。记下各章是否有标题段。</summary>
     static List<TemplateChapterRange> ResolveFinalChapters(
         Wp.Body body,
         IReadOnlyList<TemplateChapterRange> chapterRanges,
-        IReadOnlyList<OpenXmlElement> chapterStarts)
+        IReadOnlyList<OpenXmlElement> chapterStarts,
+        IReadOnlyList<bool> hasHeadings)
     {
         var blocks = body.ChildElements.ToList();
         var blockCount = blocks.Count(item => item is not Wp.SectionProperties);
@@ -155,6 +201,8 @@ static class ApplyTemplateFieldsAction
             Id = item.Id,
             Title = item.Title,
             AutoFill = item.AutoFill,
+            RulePage = item.RulePage,
+            Heading = hasHeadings[index],
             StartBlock = starts[index],
             EndBlock = index + 1 < starts.Count ? starts[index + 1] : blockCount,
         }).ToList();
@@ -203,9 +251,7 @@ static class ApplyTemplateFieldsAction
 
     sealed record NormalizedField(string Name, string? Instruction, string FillBy);
 
-    static List<NormalizedSelection> NormalizeSelections(
-        ApplyTemplateFieldsRequest request,
-        TemplateFieldCandidateFile candidateFile)
+    static List<NormalizedSelection> NormalizeSelections(ApplyTemplateFieldsRequest request, TemplateFieldCandidateFile candidateFile)
     {
         var candidateMap = candidateFile.Candidates.ToDictionary(item => item.CandidateId, StringComparer.Ordinal);
         var ignoredIds = (request.IgnoredCandidateIds ?? [])
@@ -230,9 +276,9 @@ static class ApplyTemplateFieldsAction
         {
             throw new InvalidOperationException("模板字段缺少 candidate_id、name 或 subject");
         }
-        if (selections.Any(item => item.FillBy is not ("ai" or "manual")))
+        if (selections.Any(item => item.FillBy is not ("ai" or "manual" or TemplateFieldKinds.RuleFillBy)))
         {
-            throw new InvalidOperationException("fill_by 只能是 ai 或 manual");
+            throw new InvalidOperationException("fill_by 只能是 ai、manual 或 rule");
         }
 
         var fieldIds = selections.Select(item => item.CandidateId).ToList();
@@ -249,18 +295,66 @@ static class ApplyTemplateFieldsAction
         var overlapIds = fieldIds.Intersect(ignoredIds, StringComparer.Ordinal).ToList();
         var classifiedIds = fieldIds.Concat(ignoredIds).Distinct(StringComparer.Ordinal).ToList();
         var unknownIds = classifiedIds.Where(item => !candidateMap.ContainsKey(item)).ToList();
-        var missingIds = candidateMap.Keys.Except(classifiedIds, StringComparer.Ordinal).ToList();
+        var unclassified = candidateMap.Values
+            .Where(item => !classifiedIds.Contains(item.CandidateId, StringComparer.Ordinal))
+            .ToList();
+        var missingIds = unclassified.Where(item => !item.FromPosition).Select(item => item.CandidateId).ToList();
+        var unusedPositionIds = unclassified.Where(item => item.FromPosition).Select(item => item.CandidateId).ToList();
         var classificationErrors = new List<string>();
         if (duplicateFieldIds.Count > 0) classificationErrors.Add($"fields 重复：{string.Join('、', duplicateFieldIds)}");
         if (duplicateIgnoredIds.Count > 0) classificationErrors.Add($"ignored_candidate_ids 重复：{string.Join('、', duplicateIgnoredIds)}");
         if (overlapIds.Count > 0) classificationErrors.Add($"同时出现在 fields 和 ignored_candidate_ids：{string.Join('、', overlapIds)}");
         if (unknownIds.Count > 0) classificationErrors.Add($"无效候选：{string.Join('、', unknownIds)}");
         if (missingIds.Count > 0) classificationErrors.Add($"尚未分类：{string.Join('、', missingIds)}");
+        if (unusedPositionIds.Count > 0) classificationErrors.Add($"补充位置没有对应字段，写入 fields，不需要的从 positions 中删除：{string.Join('、', unusedPositionIds)}");
         if (classificationErrors.Count > 0)
         {
             throw new InvalidOperationException(
                 $"候选分类未通过（候选总数 {candidateMap.Count}，fields {selections.Count} 项，ignored_candidate_ids {ignoredIds.Count} 项）：{string.Join("；", classificationErrors)}。" +
-                "apply-template-fields 不会记忆或合并前一次失败调用的参数；请重新提交完整 fields 和 ignored_candidate_ids，每个候选必须且只能归入一类，禁止增量补交或使用通配符。");
+                "apply-template-fields 不会记忆或合并前一次失败调用的参数；请重新提交完整 fields 和 ignored_candidate_ids，每个候选必须且只能归入一类（不需要的补充位置可放入 ignored_candidate_ids），禁止增量补交或使用通配符。");
+        }
+
+        // rule 只用于规则和页码章节的表格单元格和表格位置（回填时按表格结构写入），表格位置只能由 rule 编制。
+        var ruleErrors = new List<string>();
+        bool IsRule(TemplateFieldSelection item) => item.FillBy == TemplateFieldKinds.RuleFillBy;
+        foreach (var item in selections)
+        {
+            var candidate = candidateMap[item.CandidateId];
+            if (candidate.FromPosition && IsRule(item) && candidate.Kind != TemplateFieldKinds.TableSlot)
+            {
+                ruleErrors.Add($"{item.CandidateId} 是补充位置，只有 op=table 的位置能使用 fill_by=rule");
+            }
+            else if (candidate.Kind == TemplateFieldKinds.TableSlot && !IsRule(item))
+            {
+                ruleErrors.Add($"{item.CandidateId} 是表格位置，fill_by 只能是 rule");
+            }
+            else if (IsRule(item) && candidate.Chapter?.RulePage != true)
+            {
+                ruleErrors.Add($"{item.CandidateId} 不在规则和页码章节，不能使用 fill_by=rule");
+            }
+            else if (IsRule(item) && candidate.Kind != TemplateFieldKinds.TableSlot && candidate.TableId is null)
+            {
+                ruleErrors.Add($"{item.CandidateId} 不是表格单元格或表格位置，不能使用 fill_by=rule");
+            }
+        }
+        // 规则表的数据行由程序整行替换，同一行中的其他位置也只能是 rule 字段或忽略。
+        var ruleRows = selections
+            .Where(IsRule)
+            .Select(item => candidateMap[item.CandidateId])
+            .Where(candidate => candidate.TableId is not null)
+            .Select(candidate => (candidate.TableId, candidate.RowNumber))
+            .ToHashSet();
+        foreach (var item in selections.Where(item => !IsRule(item)))
+        {
+            var candidate = candidateMap[item.CandidateId];
+            if (candidate.TableId is not null && ruleRows.Contains((candidate.TableId, candidate.RowNumber)))
+            {
+                ruleErrors.Add($"{item.CandidateId} 与 rule 字段在同一数据行，也须设 fill_by=rule 或放入 ignored_candidate_ids");
+            }
+        }
+        if (ruleErrors.Count > 0)
+        {
+            throw new InvalidOperationException($"规则和页码字段无效：{string.Join("；", ruleErrors.Take(10))}");
         }
 
         // parts 只用于附件位置，至少两项且候选内不重名；部分未写 instruction 时沿用所在项。
@@ -332,6 +426,34 @@ static class ApplyTemplateFieldsAction
         }
 
         return normalized;
+    }
+
+    /// <summary>同一段内选用的字段和去掉的原文不能重叠，否则写入时位置会互相破坏。</summary>
+    static void CheckSelectedRanges(IEnumerable<TemplateFieldCandidate> selected)
+    {
+        var conflicts = new List<string>();
+        foreach (var group in selected
+            .Where(item => item.Target is Wp.Paragraph && item.TargetGroup is null)
+            .GroupBy(item => item.Target!, ReferenceEqualityComparer.Instance))
+        {
+            var items = group.ToList();
+            for (var index = 0; index < items.Count; index += 1)
+            {
+                for (var other = index + 1; other < items.Count; other += 1)
+                {
+                    if (TemplateFieldScanner.RangesOverlap(items[index].Start, items[index].Length, items[other].Start, items[other].Length))
+                    {
+                        conflicts.Add($"{items[index].CandidateId} 与 {items[other].CandidateId}");
+                    }
+                }
+            }
+        }
+        if (conflicts.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"这些位置在同一段内重叠，只能写入其中一个：{string.Join("、", conflicts.Take(10))}。" +
+                "要改变已有候选的处理方式，把该候选放入 ignored_candidate_ids；不需要的补充位置从 positions 中删除；去掉的文字（rm…）不要与字段重叠。");
+        }
     }
 
     /// <summary>章节名与表格标题以“ / ”连接，两者相同时只写一次，均为空时不写。</summary>

@@ -4,7 +4,7 @@ using DocumentFormat.OpenXml.Packaging;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
 
-/// <summary>扫描内部投标模板并把待填候选写入任务目录，供模板 Agent 分类。</summary>
+/// <summary>扫描内部投标模板，把待填候选和带定位号的模版正文写入任务目录，供模板 Agent 分类和补充位置。</summary>
 static class ScanTemplateFieldsAction
 {
     public const string Name = "scan-template-fields";
@@ -24,10 +24,15 @@ static class ScanTemplateFieldsAction
             var chapterRanges = TemplateChapterRanges.Read(inputPath);
             using var document = WordprocessingDocument.Open(inputPath, false);
             var payload = TemplateFieldScanner.Scan(document, chapterRanges);
-            var outputPath = Path.Combine(JobFolder.GetJobDirectory(workspace, jobId), OutputFileName);
+            var jobDirectory = JobFolder.GetJobDirectory(workspace, jobId);
             File.WriteAllText(
-                outputPath,
+                Path.Combine(jobDirectory, OutputFileName),
                 JsonSerializer.Serialize(payload, JsonOptions.Signal) + "\n",
+                new UTF8Encoding(false));
+            // 带定位号的模版正文，供 Agent 通读后补充规则没有识别的位置。
+            File.WriteAllText(
+                Path.Combine(jobDirectory, TemplateTextRenderer.FileName),
+                TemplateTextRenderer.Render(payload),
                 new UTF8Encoding(false));
             return JobResult.Success(Name, OutputFileName, payload.Candidates.Count);
         }

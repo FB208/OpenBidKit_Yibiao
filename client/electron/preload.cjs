@@ -332,6 +332,7 @@ const bridge = {
     confirmBusinessFillReview: (payload) => ipcRenderer.invoke('tasks:confirm-business-fill-review', payload),
     suppressBusinessFillReviewAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-business-fill-review-auto-confirmation', payload),
     startBidTemplateExtraction: () => ipcRenderer.invoke('tasks:start-bid-template-extraction'),
+    startRulePageCompile: () => ipcRenderer.invoke('tasks:start-rule-page-compile'),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),

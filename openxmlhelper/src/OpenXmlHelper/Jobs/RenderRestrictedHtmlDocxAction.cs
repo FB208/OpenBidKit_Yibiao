@@ -114,6 +114,10 @@ static class RenderRestrictedHtmlDocxAction
                 result.BusinessFieldIds = rendered.BusinessFieldIds;
                 result.BusinessWarnings = rendered.BusinessWarnings;
             }
+            if (rendered.PageRefs is { } pageRefs)
+            {
+                result.PageRefs = new PageRefJobResult { Count = pageRefs.Count, MissingCount = pageRefs.MissingCount, Anchors = pageRefs.Anchors };
+            }
             if (rendered.Toc is { } toc)
             {
                 result.Toc = new TocJobResult { Entries = toc.Entries, StartBlock = toc.StartBlock, EndBlock = toc.EndBlock };

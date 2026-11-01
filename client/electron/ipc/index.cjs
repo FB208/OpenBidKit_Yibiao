@@ -229,6 +229,7 @@ const workspaceDatabaseChannels = [
   'tasks:confirm-business-fill-review',
   'tasks:suppress-business-fill-review-auto-confirmation',
   'tasks:start-bid-template-extraction',
+  'tasks:start-rule-page-compile',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
   'tasks:pause-content-generation',

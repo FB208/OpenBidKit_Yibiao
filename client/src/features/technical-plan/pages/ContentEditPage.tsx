@@ -5,7 +5,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
-import type { BackgroundTaskState, BusinessFillReview, BusinessTemplateFillState, BusinessFillReviewValue, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections } from '../types';
+import type { BackgroundTaskState, BusinessFillReview, BusinessTemplateFillState, BusinessFillReviewValue, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections, RulePageState } from '../types';
 import BusinessFillReviewDialog from '../components/BusinessFillReviewDialog';
 import ContentWordPreview from '../components/ContentWordPreview';
 import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
@@ -21,6 +21,7 @@ interface ContentEditPageProps {
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
+  rulePageCompileTask?: BackgroundTaskState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   contentGenerationOptions?: ContentGenerationOptions;
   exportTemplateId: string;
@@ -67,6 +68,7 @@ const statusLabels: Record<TreeStatus, string> = {
 
 const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>, string> = {
   'template-fill': '商务模版中没有该小节的章节（如招标文件为 PDF），导出时保留“待填写”提示，请导出后按招标文件格式补充。',
+  'rule-page': '商务模版中没有该小节的章节（如招标文件为 PDF），导出时保留“待填写”提示，请导出后按招标文件要求逐项编制并填写页码。',
   'directory-generate': '导出时根据实际页码自动生成目录。',
   'manual-fill': '该小节已标记为人工填写，请在导出后补充内容。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
@@ -158,6 +160,23 @@ function getBusinessFillPhaseLabel(businessFill: BusinessTemplateFillState | und
   return businessFill.phase === 'reviewing' ? '待确认' : businessFill.phase === 'rendering' ? '回填 Word 中' : '填写中';
 }
 
+// 规则和页码各章节一起编制，共用编制状态。
+function getRulePageLabel(rulePage: RulePageState | undefined, { paused, inFlight }: { paused: boolean; inFlight: boolean }) {
+  if (!rulePage) return '待编制';
+  if (rulePage.phase === 'completed') return '已编制';
+  if (rulePage.status === 'error') return '编制失败';
+  if (rulePage.status === 'paused' || (paused && rulePage.status === 'running')) return '已暂停';
+  if (rulePage.status === 'interrupted' || !inFlight) return '已中断';
+  return rulePage.phase === 'rendering' ? '回填 Word 中' : '编制中';
+}
+
+function getRulePageTreeStatus(rulePage: RulePageState | undefined, inFlight: boolean): TreeStatus {
+  if (rulePage?.phase === 'completed') return 'success';
+  if (rulePage?.status === 'error') return 'error';
+  if (inFlight && rulePage?.status === 'running') return 'running';
+  return 'pending';
+}
+
 // 商务章节在目录树中的圆点与父目录汇总沿用现有状态。
 function getBusinessTreeStatus(businessFill: BusinessTemplateFillState | undefined, taskInFlight: boolean): TreeStatus {
   if (businessFill?.phase === 'completed') return 'success';
@@ -173,13 +192,16 @@ function buildOutlineMeta(
   sectionWords: Record<string, number> = {},
   businessChapterIds: Set<string> = new Set(),
   businessTreeStatus: TreeStatus = 'pending',
+  ruleChapterIds: Set<string> = new Set(),
+  ruleTreeStatus: TreeStatus = 'pending',
 ) {
   const meta = new Map<string, OutlineNodeMeta>();
 
   function visit(item: OutlineItem): OutlineNodeMeta {
     if (!item.children?.length) {
       const ai = item.content_mode === 'ai-generate';
-      const baseStatus = ai || !businessChapterIds.has(item.id) ? getLeafStatus(item, sections) : businessTreeStatus;
+      const baseStatus = ruleChapterIds.has(item.id) ? ruleTreeStatus
+        : ai || !businessChapterIds.has(item.id) ? getLeafStatus(item, sections) : businessTreeStatus;
       const status: TreeStatus = planning && ai && baseStatus === 'idle' ? 'planning' : baseStatus;
       const words = ai ? sectionWords[item.id] || 0 : 0;
       const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words };
@@ -208,6 +230,7 @@ function ContentEditPage({
   outlineWordControlSnapshot,
   outlineData,
   task,
+  rulePageCompileTask,
   contentGenerationRuntime,
   contentGenerationOptions,
   exportTemplateId,
@@ -289,9 +312,18 @@ function ContentEditPage({
   }, [allLeaves, bidTemplateChapterIds]);
   const businessTreeStatus = getBusinessTreeStatus(businessFill, taskInFlight);
   const businessPhaseLabel = getBusinessFillPhaseLabel(businessFill, { paused, taskInFlight });
+  // 规则和页码与商务模版填写并行编制，也可单独“重新编制”；有商务模版章节的规则和页码小节按编制状态显示。
+  const rulePage = contentGenerationRuntime?.rule_page ?? contentStats?.rule_page;
+  const rulePageCompiling = rulePageCompileTask?.status === 'running' || rulePageCompileTask?.status === 'pausing';
+  const rulePageInFlight = taskInFlight || rulePageCompiling;
+  const ruleChapterIds = useMemo(() => new Set(allLeaves
+    .filter((item) => item.content_mode === 'rule-page' && businessChapterIds.has(item.id))
+    .map((item) => item.id)), [allLeaves, businessChapterIds]);
+  const rulePageLabel = getRulePageLabel(rulePage, { paused, inFlight: rulePageInFlight });
+  const ruleTreeStatus = getRulePageTreeStatus(rulePage, rulePageInFlight);
   const outlineMeta = useMemo(() => outlineData?.outline
-    ? buildOutlineMeta(outlineData.outline, sections, planning, sectionWords, businessChapterIds, businessTreeStatus)
-    : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections, sectionWords, businessChapterIds, businessTreeStatus]);
+    ? buildOutlineMeta(outlineData.outline, sections, planning, sectionWords, businessChapterIds, businessTreeStatus, ruleChapterIds, ruleTreeStatus)
+    : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections, sectionWords, businessChapterIds, businessTreeStatus, ruleChapterIds, ruleTreeStatus]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
     const status = getLeafStatus(item, sections);
     return {
@@ -305,8 +337,8 @@ function ContentEditPage({
   const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
     if (item.content_mode && !(item.content_mode !== 'ai-generate' && businessChapterIds.has(item.id))) counts[item.content_mode] += 1;
     return counts;
-  }, { 'ai-generate': 0, 'template-fill': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
-  const pendingCount = modeCounts['template-fill'] + modeCounts['manual-fill'] + modeCounts.other;
+  }, { 'ai-generate': 0, 'template-fill': 0, 'rule-page': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
+  const pendingCount = modeCounts['template-fill'] + modeCounts['rule-page'] + modeCounts['manual-fill'] + modeCounts.other;
   const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
@@ -323,10 +355,24 @@ function ContentEditPage({
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
   const retryingBodyGeneration = taskFailed && !contentGenerationRuntime?.target_item_id && contentStats?.phase === 'generating';
-  const selectedIsBusinessWord = Boolean(selectedItem && selectedIsLeaf && selectedItem.content_mode !== 'ai-generate' && businessChapterIds.has(selectedItem.id));
-  // 结果文档重新回填（回填完成、编辑保存）或目录、章节变化时撤下旧的商务预览。
+  const selectedIsRuleChapter = Boolean(selectedItem && ruleChapterIds.has(selectedItem.id));
+  // 规则和页码尚未编制完成时不预览，显示编制状态。
+  const selectedIsBusinessWord = Boolean(selectedItem && selectedIsLeaf && selectedItem.content_mode !== 'ai-generate' && businessChapterIds.has(selectedItem.id)
+    && (!selectedIsRuleChapter || rulePage?.phase === 'completed'));
+  // 结果文档重新回填（商务回填完成、编辑保存、规则和页码编制完成）或目录、章节变化时撤下旧的商务预览。
   const businessDocumentVersion = businessFill?.phase === 'completed' ? businessFill.updated_at : businessFill?.phase;
-  const businessWordContext = useMemo(() => ({}), [wordContentContext, bidTemplateChapterIds, businessDocumentVersion]);
+  const rulePageDocumentVersion = rulePage?.phase === 'completed' ? rulePage.updated_at : rulePage?.phase;
+  const businessWordContext = useMemo(() => ({}), [wordContentContext, bidTemplateChapterIds, businessDocumentVersion, rulePageDocumentVersion]);
+  const rulePageRecompileDisabled = taskBlocksGeneration || rulePageCompiling || task?.status === 'error';
+  const recompileRulePage = async () => {
+    try {
+      await window.yibiao!.tasks.startRulePageCompile();
+      trackConfigUsage({ content_generation_action: 'recompile_rule_page' });
+      showToast('已开始重新编制规则和页码小节', 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重新编制失败', 'error');
+    }
+  };
   const selectedWordContext = selectedIsBusinessWord ? businessWordContext : wordContentContext;
   const wordRequestVersion = wordPreviewRequest?.sectionId === selectedItemId && wordPreviewRequest.context === selectedWordContext
     ? wordPreviewRequest.version : 0;
@@ -469,6 +515,7 @@ function ContentEditPage({
             : running
               ? latestTaskLog || '商务模版填写中。'
               : '当前目录没有 AI 生成小节，点击“填写商务模版”后将结合资信库和招标文件填写商务模版。',
+    ...(ruleChapterIds.size ? { rulePage: `规则和页码：${rulePage?.phase === 'completed' ? `已编制 ${rulePage.table_count} 张表，${rulePage.row_count} 行` : rulePageLabel}` } : {}),
   } : null;
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   useEffect(() => {
@@ -859,6 +906,7 @@ function ContentEditPage({
           <span className="content-outline-text">
             <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
             <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}`
+              : ruleChapterIds.has(item.id) ? `${modeLabel} · ${rulePageLabel}${rulePage?.phase === 'completed' ? ' · Word 预览' : ''}`
               : businessChapterIds.has(item.id) ? `${modeLabel} · ${businessPhaseLabel} · Word 预览`
                 : item.content_mode === 'directory-generate' ? `${modeLabel} · 导出时生成` : `${modeLabel || '未标记'} · ${statusLabels[status]}` : `${leafCount} 个小节`}</small>
           </span>
@@ -929,7 +977,7 @@ function ContentEditPage({
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
-          <span title={`模板填写 ${modeCounts['template-fill']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          <span title={`模板填写 ${modeCounts['template-fill']}，规则和页码 ${modeCounts['rule-page']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
           {bidTemplateExists && (
             <span className={`content-business-fill-status${businessFill?.status === 'error' ? ' is-error' : ''}`} title={businessFillTitle}>
               商务模版 <strong>{businessFillLabel}</strong>
@@ -1021,6 +1069,7 @@ function ContentEditPage({
                   label={`${businessPanel?.label ?? progressPhaseLabel}进度 ${businessPanel?.progress ?? displayProgress}%`}
                 />
                 <p>{businessPanel?.description ?? progressDescription}</p>
+                {businessPanel?.rulePage && <p>{businessPanel.rulePage}</p>}
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>
             )}
@@ -1038,6 +1087,15 @@ function ContentEditPage({
               <p>{selectedItem?.description || '选择左侧目录项查看生成正文。'}</p>
             </div>
             <div className="content-reader-actions">
+              {selectedIsRuleChapter && (
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={rulePageRecompileDisabled}
+                  title={rulePageRecompileDisabled ? '正文任务未结束或正在编制时不能重新编制' : '按当前目录重新编制全部规则和页码小节'}
+                  onClick={() => void recompileRulePage()}
+                >重新编制</button>
+              )}
               <span className={`content-status-badge is-${selectedIsWord || selectedIsBusinessWord ? 'pending' : selectedStatus}`}>{selectedIsWord || selectedIsBusinessWord ? 'Word 只读预览' : statusLabels[selectedStatus]}</span>
             </div>
           </div>
@@ -1046,6 +1104,13 @@ function ContentEditPage({
             <ContentWordPreview key={selectedItem.id} sectionId={selectedItem.id} requestVersion={wordRequestVersion} contentContext={wordContentContext} />
           ) : selectedItem && selectedIsBusinessWord ? (
             <ContentWordPreview key={`business-${selectedItem.id}`} source="business" sectionId={selectedItem.id} requestVersion={wordRequestVersion} contentContext={businessWordContext} />
+          ) : selectedItem && selectedIsRuleChapter ? (
+            <div className="markdown-empty-state content-generation-empty">
+              <strong>{rulePage?.status === 'error' ? `编制失败：${rulePage.error || '未知错误'}` : `规则和页码${rulePageLabel}`}</strong>
+              <p>{rulePageInFlight
+                ? '正在按招标文件逐项编制表格，完成后在这里预览。'
+                : '生成正文时与商务模版填写并行编制，页码在导出时按实际排版填写；目录变更后需重新编制，可点击“重新编制”单独编制。'}</p>
+            </div>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error'
