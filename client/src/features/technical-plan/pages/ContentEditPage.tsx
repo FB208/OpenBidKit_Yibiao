@@ -1,17 +1,16 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { AppDialog, MarkdownEditor, MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
+import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
-import { countReadableWords } from '../../../shared/utils/wordCount';
-import type { BackgroundTaskState, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections } from '../types';
+import type { BackgroundTaskState, BusinessFillReview, BusinessTemplateFillState, BusinessFillReviewSubmission, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections, RulePageState } from '../types';
+import BusinessFillReviewDialog from '../components/BusinessFillReviewDialog';
 import ContentWordPreview from '../components/ContentWordPreview';
 import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
-import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
 import { getDefaultImageLayoutShares, type ImageLayoutKey } from '../../../../electron/shared/imageLayout/index.mjs';
 
@@ -22,14 +21,17 @@ interface ContentEditPageProps {
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
+  rulePageCompileTask?: BackgroundTaskState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   contentGenerationOptions?: ContentGenerationOptions;
   exportTemplateId: string;
   sections: ContentGenerationSections;
+  bidTemplateExists?: boolean;
+  bidTemplateChapterIds?: string[];
   onOpenGenerationSettingsAppearance: () => void;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
   onContentGenerationReset: () => Promise<void>;
-  onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
+  onBusinessFillReviewSave: (submission: BusinessFillReviewSubmission) => Promise<void>;
 }
 
 type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning' | 'pending';
@@ -65,8 +67,9 @@ const statusLabels: Record<TreeStatus, string> = {
 };
 
 const pendingModeDescriptions: Record<Exclude<OutlineContentMode, 'ai-generate'>, string> = {
-  'template-fill': '该小节已标记为模板填写，后续将从招标文件提取并填充内容。',
-  'directory-generate': '该小节已标记为目录生成，不进入 AI 正文生成流程。',
+  'template-fill': '商务模版中没有该小节的章节（如招标文件为 PDF），导出时保留“待填写”提示，请导出后按招标文件格式补充。',
+  'rule-page': '商务模版中没有该小节的章节（如招标文件为 PDF），导出时保留“待填写”提示，请导出后按招标文件要求逐项编制并填写页码。',
+  'directory-generate': '导出时根据实际页码自动生成目录。',
   'manual-fill': '该小节已标记为人工填写，请在导出后补充内容。',
   other: '该小节采用其他处理模式，暂不进入 AI 正文生成流程。',
 };
@@ -92,10 +95,6 @@ function findItem(items: OutlineItem[], id: string): OutlineItem | null {
   return null;
 }
 
-function countWords(content: string) {
-  return countReadableWords(content);
-}
-
 function getLeafContent(item: OutlineItem, sections: ContentGenerationSections) {
   const section = sections[item.id];
   return section && Object.prototype.hasOwnProperty.call(section, 'content')
@@ -103,14 +102,17 @@ function getLeafContent(item: OutlineItem, sections: ContentGenerationSections) 
     : item.content || '';
 }
 
+// 非 AI 小节没有正文，状态由商务模版章节决定（见 buildOutlineMeta）；目录在导出时自动生成，不算待处理。
 function getLeafStatus(item: OutlineItem, sections: ContentGenerationSections): TreeStatus {
+  if (item.content_mode === 'directory-generate') return 'success';
+  if (item.content_mode !== 'ai-generate') return 'pending';
   const section = sections[item.id];
   if (section?.status) {
     return section.status;
   }
 
   if (getLeafContent(item, sections).trim()) return 'success';
-  return item.content_mode === 'ai-generate' ? 'idle' : 'pending';
+  return 'idle';
 }
 
 function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): TreeStatus {
@@ -148,14 +150,60 @@ function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
   return 'idle';
 }
 
-function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSections, planning: boolean, sectionWords: Record<string, number> = {}) {
+// 商务模版整份一起填写，各章节共用填写状态；标签与页头“商务模版”一致。
+function getBusinessFillPhaseLabel(businessFill: BusinessTemplateFillState | undefined, { paused, taskInFlight }: { paused: boolean; taskInFlight: boolean }) {
+  if (!businessFill) return '待填写';
+  if (businessFill.phase === 'completed') return '已完成';
+  if (businessFill.status === 'error') return '填写失败';
+  if (businessFill.status === 'paused' || (paused && businessFill.status === 'running')) return '已暂停';
+  if (businessFill.status === 'interrupted' || !taskInFlight) return '已中断';
+  return businessFill.phase === 'reviewing' ? '待确认' : businessFill.phase === 'rendering' ? '回填 Word 中' : '填写中';
+}
+
+// 规则和页码各章节一起编制，共用编制状态。
+function getRulePageLabel(rulePage: RulePageState | undefined, { paused, inFlight }: { paused: boolean; inFlight: boolean }) {
+  if (!rulePage) return '待编制';
+  if (rulePage.phase === 'completed') return '已编制';
+  if (rulePage.status === 'error') return '编制失败';
+  if (rulePage.status === 'paused' || (paused && rulePage.status === 'running')) return '已暂停';
+  if (rulePage.status === 'interrupted' || !inFlight) return '已中断';
+  return rulePage.phase === 'rendering' ? '回填 Word 中' : '编制中';
+}
+
+function getRulePageTreeStatus(rulePage: RulePageState | undefined, inFlight: boolean): TreeStatus {
+  if (rulePage?.phase === 'completed') return 'success';
+  if (rulePage?.status === 'error') return 'error';
+  if (inFlight && rulePage?.status === 'running') return 'running';
+  return 'pending';
+}
+
+// 商务章节在目录树中的圆点与父目录汇总沿用现有状态。
+function getBusinessTreeStatus(businessFill: BusinessTemplateFillState | undefined, taskInFlight: boolean): TreeStatus {
+  if (businessFill?.phase === 'completed') return 'success';
+  if (businessFill?.status === 'error') return 'error';
+  if (taskInFlight && businessFill?.status === 'running' && (businessFill.phase === 'filling' || businessFill.phase === 'rendering')) return 'running';
+  return 'pending';
+}
+
+function buildOutlineMeta(
+  items: OutlineItem[],
+  sections: ContentGenerationSections,
+  planning: boolean,
+  sectionWords: Record<string, number> = {},
+  businessChapterIds: Set<string> = new Set(),
+  businessTreeStatus: TreeStatus = 'pending',
+  ruleChapterIds: Set<string> = new Set(),
+  ruleTreeStatus: TreeStatus = 'pending',
+) {
   const meta = new Map<string, OutlineNodeMeta>();
 
   function visit(item: OutlineItem): OutlineNodeMeta {
     if (!item.children?.length) {
-      const baseStatus = getLeafStatus(item, sections);
-      const status: TreeStatus = planning && item.content_mode === 'ai-generate' && baseStatus === 'idle' ? 'planning' : baseStatus;
-      const words = item.content_mode === 'ai-generate' ? sectionWords[item.id] || 0 : countWords(getLeafContent(item, sections));
+      const ai = item.content_mode === 'ai-generate';
+      const baseStatus = ruleChapterIds.has(item.id) ? ruleTreeStatus
+        : ai || !businessChapterIds.has(item.id) ? getLeafStatus(item, sections) : businessTreeStatus;
+      const status: TreeStatus = planning && ai && baseStatus === 'idle' ? 'planning' : baseStatus;
+      const words = ai ? sectionWords[item.id] || 0 : 0;
       const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words };
       meta.set(item.id, nodeMeta);
       return nodeMeta;
@@ -175,18 +223,6 @@ function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSecti
   return meta;
 }
 
-const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage }: { content: string; onPreviewImage: (src: string, alt: string) => void }) {
-  return (
-    <MarkdownRenderer
-      imageMode="preview"
-      imageClassName="markdown-clickable-image"
-      onPreviewImage={onPreviewImage}
-    >
-      {content}
-    </MarkdownRenderer>
-  );
-});
-
 function ContentEditPage({
   stepNumber,
   hasOriginalPlan,
@@ -194,29 +230,28 @@ function ContentEditPage({
   outlineWordControlSnapshot,
   outlineData,
   task,
+  rulePageCompileTask,
   contentGenerationRuntime,
   contentGenerationOptions,
   exportTemplateId,
   sections,
+  bidTemplateExists = false,
+  bidTemplateChapterIds,
   onOpenGenerationSettingsAppearance,
   onContentGenerationOptionsChange,
   onContentGenerationReset,
-  onContentSaved,
+  onBusinessFillReviewSave,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
   const allLeaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
   const leaves = useMemo(() => allLeaves.filter((item) => item.content_mode === 'ai-generate'), [allLeaves]);
   const [selectedItemId, setSelectedItemId] = useState('');
   const [wordPreviewRequest, setWordPreviewRequest] = useState<{ sectionId: string; context: object; version: number }>();
-  const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [isPreviewing, setIsPreviewing] = useState(false);
-  const [draftContent, setDraftContent] = useState('');
   const [confirmRegenerateItem, setConfirmRegenerateItem] = useState<OutlineItem | null>(null);
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
   const [statsCollapsed, setStatsCollapsed] = useState(false);
   const [progressNow, setProgressNow] = useState(Date.now);
-  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [pausePending, setPausePending] = useState(false);
   const [developerStageActionPending, setDeveloperStageActionPending] = useState<'continue' | 'restart' | null>(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
@@ -229,6 +264,11 @@ function ContentEditPage({
   const generationStarting = useRef(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
   const [developerMode, setDeveloperMode] = useState(false);
+  // confirm：任务等待确认时打开；edit：填写完成后从“编辑提取结果”打开。
+  const [businessReviewMode, setBusinessReviewMode] = useState<'confirm' | 'edit' | null>(null);
+  const businessReviewOpen = businessReviewMode !== null;
+  const [businessReview, setBusinessReview] = useState<BusinessFillReview | null>(null);
+  const [businessReviewSaving, setBusinessReviewSaving] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
@@ -236,10 +276,6 @@ function ContentEditPage({
   // 清空、目录变化或新任务使旧预览失效；扫描和正式转换进度不触发临时转换。
   const hasContentTask = Boolean(task || contentGenerationRuntime?.html_output);
   const wordContentContext = useMemo(() => ({}), [outlineData, hasContentTask, task?.task_id]);
-  const wordRequestVersion = wordPreviewRequest?.sectionId === selectedItemId && wordPreviewRequest.context === wordContentContext
-    ? wordPreviewRequest.version : 0;
-  const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
-  const exportFormatPreviewStyle = useMemo<CSSProperties>(() => buildExportFormatCssVars(exportFormat), [exportFormat]);
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
   const paused = task?.status === 'paused';
@@ -266,7 +302,28 @@ function ContentEditPage({
   const layoutChecking = phaseVisible && contentStats?.phase === 'layout-checking';
   const contentCorrecting = auditing || tableCleaning;
   const sectionWords = contentGenerationRuntime?.section_words;
-  const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning, sectionWords) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections, sectionWords]);
+  // 商务模版填写与正文并行；没有 AI 小节时只填写商务模版。
+  const businessFill = contentGenerationRuntime?.business_fill ?? contentStats?.business_fill;
+  // 非 AI 小节在商务模版中有对应章节时，从当前结果文档截取该章只读预览，目录树显示商务填写状态。
+  // 目录生成小节在导出时生成目录，老项目模版中残留的目录章节不再预览。
+  const businessChapterIds = useMemo(() => {
+    const tocIds = new Set(allLeaves.filter((item) => item.content_mode === 'directory-generate').map((item) => item.id));
+    return new Set((bidTemplateChapterIds || []).filter((id) => !tocIds.has(id)));
+  }, [allLeaves, bidTemplateChapterIds]);
+  const businessTreeStatus = getBusinessTreeStatus(businessFill, taskInFlight);
+  const businessPhaseLabel = getBusinessFillPhaseLabel(businessFill, { paused, taskInFlight });
+  // 规则和页码与商务模版填写并行编制，也可单独“重新编制”；有商务模版章节的规则和页码小节按编制状态显示。
+  const rulePage = contentGenerationRuntime?.rule_page ?? contentStats?.rule_page;
+  const rulePageCompiling = rulePageCompileTask?.status === 'running' || rulePageCompileTask?.status === 'pausing';
+  const rulePageInFlight = taskInFlight || rulePageCompiling;
+  const ruleChapterIds = useMemo(() => new Set(allLeaves
+    .filter((item) => item.content_mode === 'rule-page' && businessChapterIds.has(item.id))
+    .map((item) => item.id)), [allLeaves, businessChapterIds]);
+  const rulePageLabel = getRulePageLabel(rulePage, { paused, inFlight: rulePageInFlight });
+  const ruleTreeStatus = getRulePageTreeStatus(rulePage, rulePageInFlight);
+  const outlineMeta = useMemo(() => outlineData?.outline
+    ? buildOutlineMeta(outlineData.outline, sections, planning, sectionWords, businessChapterIds, businessTreeStatus, ruleChapterIds, ruleTreeStatus)
+    : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections, sectionWords, businessChapterIds, businessTreeStatus, ruleChapterIds, ruleTreeStatus]);
   const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
     const status = getLeafStatus(item, sections);
     return {
@@ -276,11 +333,12 @@ function ContentEditPage({
     };
   }, { completedCount: 0, failedCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
   const { completedCount, failedCount, totalWords } = contentSummary;
+  // 待处理只统计没有商务模版章节的非 AI 小节，有章节的按商务填写状态显示；目录在导出时自动生成，不计入。
   const modeCounts = allLeaves.reduce<Record<OutlineContentMode, number>>((counts, item) => {
-    if (item.content_mode) counts[item.content_mode] += 1;
+    if (item.content_mode && !(item.content_mode !== 'ai-generate' && businessChapterIds.has(item.id))) counts[item.content_mode] += 1;
     return counts;
-  }, { 'ai-generate': 0, 'template-fill': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
-  const pendingCount = modeCounts['template-fill'] + modeCounts['directory-generate'] + modeCounts['manual-fill'] + modeCounts.other;
+  }, { 'ai-generate': 0, 'template-fill': 0, 'rule-page': 0, 'directory-generate': 0, 'manual-fill': 0, other: 0 });
+  const pendingCount = modeCounts['template-fill'] + modeCounts['rule-page'] + modeCounts['manual-fill'] + modeCounts.other;
   const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
   const planningTotal = contentStats?.planning_total || leaves.length;
   const planningCompleted = contentStats?.planning_completed || 0;
@@ -297,6 +355,44 @@ function ContentEditPage({
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
   const retryingBodyGeneration = taskFailed && !contentGenerationRuntime?.target_item_id && contentStats?.phase === 'generating';
+  const selectedIsRuleChapter = Boolean(selectedItem && ruleChapterIds.has(selectedItem.id));
+  // 规则和页码尚未编制完成时不预览，显示编制状态。
+  const selectedIsBusinessWord = Boolean(selectedItem && selectedIsLeaf && selectedItem.content_mode !== 'ai-generate' && businessChapterIds.has(selectedItem.id)
+    && (!selectedIsRuleChapter || rulePage?.phase === 'completed'));
+  // 结果文档重新回填（商务回填完成、编辑保存、规则和页码编制完成）或目录、章节变化时撤下旧的商务预览。
+  const businessDocumentVersion = businessFill?.phase === 'completed' ? businessFill.updated_at : businessFill?.phase;
+  const rulePageDocumentVersion = rulePage?.phase === 'completed' ? rulePage.updated_at : rulePage?.phase;
+  const businessWordContext = useMemo(() => ({}), [wordContentContext, bidTemplateChapterIds, businessDocumentVersion, rulePageDocumentVersion]);
+  const rulePageRecompileDisabled = taskBlocksGeneration || rulePageCompiling || task?.status === 'error';
+  const recompileRulePage = async () => {
+    try {
+      await window.yibiao!.tasks.startRulePageCompile();
+      trackConfigUsage({ content_generation_action: 'recompile_rule_page' });
+      showToast('已开始重新编制规则和页码小节', 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重新编制失败', 'error');
+    }
+  };
+  const selectedWordContext = selectedIsBusinessWord ? businessWordContext : wordContentContext;
+  const wordRequestVersion = wordPreviewRequest?.sectionId === selectedItemId && wordPreviewRequest.context === selectedWordContext
+    ? wordPreviewRequest.version : 0;
+  const businessOnly = !leaves.length && bidTemplateExists;
+  const businessFillPending = bidTemplateExists && businessFill?.phase !== 'completed';
+  const retryingBusinessFill = taskFailed && businessFill?.status === 'error';
+  const businessCompleted = businessOnly && task?.status === 'success' && businessFill?.phase === 'completed';
+  const businessFillSummary = businessFill?.phase === 'completed'
+    ? `已填 ${businessFill.filled_count} 项，人工 ${businessFill.manual_count} 项，无法确定 ${businessFill.unresolved.length} 项`
+    : '';
+  const businessFillLabel = businessFill?.phase === 'completed' ? businessFillSummary : businessPhaseLabel;
+  // 与一级目录确认相同：任务运行中等待确认时自动弹窗，关闭后可从命令栏重新打开。
+  const awaitingBusinessReview = taskInFlight && businessFill?.phase === 'reviewing' && businessFill.status === 'running';
+  // 等待确认时打开确认弹窗；填写完成后可随时编辑，与正文生成并行不冲突。
+  const businessReviewEditable = awaitingBusinessReview || businessFill?.phase === 'completed';
+  const businessFillTitle = businessFill?.status === 'error'
+    ? `失败原因：${businessFill.error || '未知错误'}`
+    : businessFill?.phase === 'completed' && businessFill.unresolved.length
+      ? `无法确定的字段：\n${businessFill.unresolved.map((item) => `${item.label}：${item.reason}`).join('\n')}`
+      : `商务模版的 AI 字段和附件由副 Agent 结合资信库、招标文件${leaves.length ? '和全局事实' : ''}填写，确认后回填 Word；签字和盖章保留人工处理。`;
   const latestTaskLog = task?.logs?.[task.logs.length - 1] || '';
   const taskErrorMessage = task?.error || latestTaskLog || '正文生成任务失败';
   // 单轮审计：先并发核对各小节事实，再由主 Agent 跨节比对并统一修复。
@@ -402,7 +498,78 @@ function ContentEditPage({
                 : completedCount
                   ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。`
                   : '点击生成正文后，目录会实时显示每个小节状态。';
+  // 没有 AI 小节时进度区改为展示商务模版填写状态。
+  const businessPanel = businessOnly ? {
+    progress: businessCompleted ? 100 : task?.progress || 0,
+    label: businessCompleted ? '商务模版填写完成' : '商务模版填写',
+    count: businessFillLabel,
+    tone: businessCompleted ? 'success' as const : 'primary' as const,
+    description: taskFailed
+      ? taskErrorMessage
+      : businessCompleted
+        ? `商务模版填写完成：${businessFillSummary}。`
+        : pausing
+          ? '正在暂停商务模版填写。'
+          : paused
+            ? '商务模版填写已暂停，可点击继续。'
+            : running
+              ? latestTaskLog || '商务模版填写中。'
+              : '当前目录没有 AI 生成小节，点击“填写商务模版”后将结合资信库和招标文件填写商务模版。',
+    ...(ruleChapterIds.size ? { rulePage: `规则和页码：${rulePage?.phase === 'completed' ? `已编制 ${rulePage.table_count} 张表，${rulePage.row_count} 行` : rulePageLabel}` } : {}),
+  } : null;
   const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
+  useEffect(() => {
+    if (!awaitingBusinessReview) {
+      setBusinessReviewMode((current) => current === 'confirm' ? null : current);
+      return;
+    }
+    setBusinessReviewMode('confirm');
+  }, [awaitingBusinessReview, task?.task_id]);
+
+  useEffect(() => {
+    if (!businessReviewOpen) return;
+    let cancelled = false;
+    setBusinessReview(null);
+    window.yibiao.technicalPlan.getBusinessFillReview()
+      .then((review) => { if (!cancelled) setBusinessReview(review); })
+      .catch((error) => { if (!cancelled) showToast(error instanceof Error ? error.message : '读取商务模版字段值失败', 'error'); });
+    return () => { cancelled = true; };
+  }, [businessReviewOpen, showToast]);
+
+  const confirmBusinessReview = async (submission: BusinessFillReviewSubmission) => {
+    if (!task?.task_id) return;
+    try {
+      setBusinessReviewSaving(true);
+      await window.yibiao.tasks.confirmBusinessFillReview({ taskId: task.task_id, ...submission });
+      setBusinessReviewMode(null);
+      showToast('已确认商务模版字段值，正在回填 Word', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '确认商务模版字段值失败', 'error');
+    } finally {
+      setBusinessReviewSaving(false);
+    }
+  };
+
+  // 填写完成后编辑字段值：Main 按新值重新回填 Word 后保存。
+  const saveBusinessReviewEdit = async (submission: BusinessFillReviewSubmission) => {
+    try {
+      setBusinessReviewSaving(true);
+      await onBusinessFillReviewSave(submission);
+      setBusinessReviewMode(null);
+      showToast('商务模版字段值已保存，并重新回填 Word', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '保存商务模版字段值失败', 'error');
+    } finally {
+      setBusinessReviewSaving(false);
+    }
+  };
+
+  // 用户修改字段值时停止当前弹窗的自动确认计时。
+  const suppressBusinessReviewAutoConfirmation = () => {
+    if (!task?.task_id) return;
+    void window.yibiao.tasks.suppressBusinessFillReviewAutoConfirmation({ taskId: task.task_id }).catch(() => undefined);
+  };
+
   const generationButtonLabel = pausing
     ? '正在暂停中...'
     : running
@@ -423,13 +590,15 @@ function ContentEditPage({
           ? '重试去表格'
         : retryingLayoutCheck
           ? '重试格式自检'
+        : retryingBusinessFill
+          ? '重试商务模版填写'
+        : businessOnly
+          ? businessFill?.phase === 'completed' ? '重新填写商务模版' : '填写商务模版'
           : completedCount === leaves.length && leaves.length
-              ? '重新生成正文'
+              ? businessFillPending ? '填写商务模版' : '重新生成正文'
               : completedCount > 0
                 ? '继续生成正文'
                 : '生成正文';
-  const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
-  const handlePreviewImage = useCallback((src: string, alt: string) => setPreviewImage({ src, alt }), []);
 
   useEffect(() => {
     if (!outlineData?.outline?.length) {
@@ -461,15 +630,6 @@ function ContentEditPage({
       setDeveloperStageActionPending(null);
     }
   }, [task?.status]);
-
-  useEffect(() => {
-    if (!selectedItem || selectedItem.id === editingItemId) {
-      return;
-    }
-    setEditingItemId(null);
-    setIsPreviewing(false);
-    setDraftContent('');
-  }, [editingItemId, selectedItem]);
 
   const pauseGeneration = async () => {
     if (!running) {
@@ -519,9 +679,6 @@ function ContentEditPage({
     try {
       if (!await ensureValidContentTemplate()) return;
       setDeveloperStageActionPending('restart');
-      setEditingItemId(null);
-      setIsPreviewing(false);
-      setDraftContent('');
       await window.yibiao?.tasks.startContentGeneration({ developerRestart: true, regenerate: true });
       showToast('已从正文编排重新执行全部阶段', 'success');
     } catch (error) {
@@ -536,9 +693,6 @@ function ContentEditPage({
     if (resetPending) return;
     setResetPending(true);
     try {
-      setEditingItemId(null);
-      setIsPreviewing(false);
-      setDraftContent('');
       await onContentGenerationReset();
       setResetDialogOpen(false);
       showToast('正文阶段已重置', 'success');
@@ -551,11 +705,15 @@ function ContentEditPage({
 
   // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingExportRepair)) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingBusinessFill && !retryingExportRepair)) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingExportRepair ? '导出修复已从原会话继续' : retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
+      showToast(retryingExportRepair
+        ? '导出修复已从原会话继续'
+        : retryingBusinessFill && !retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck
+        ? '商务模版填写已从原会话继续'
+        : retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动失败小节重试失败', 'error');
     }
@@ -571,7 +729,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingExportRepair) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingBusinessFill || retryingExportRepair) {
       void retryFailedSections();
       return;
     }
@@ -594,12 +752,6 @@ function ContentEditPage({
       return;
     }
 
-    if (regenerate) {
-      setEditingItemId(null);
-      setIsPreviewing(false);
-      setDraftContent('');
-    }
-
     await window.yibiao?.tasks.startContentGeneration({
       regenerate,
       generationOptions: savedGenerationOptions,
@@ -615,7 +767,9 @@ function ContentEditPage({
       consistency_repair_mode: 'agent',
       enable_original_plan_coverage_audit: false,
     }, config);
-    showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
+    showToast(businessOnly
+      ? '商务模版填写任务已在后台启动'
+      : regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
   // AI 生图开启但生图模型不可用时先弹窗提醒；用户继续后直接关闭本项目 AI 生图，编排阶段不再安排 AI 图片。
@@ -648,22 +802,24 @@ function ContentEditPage({
     setGenerationSubmitting(true);
     if (confirmedConcurrency) setConcurrencyWarning('');
     try {
-      if (!await ensureValidContentTemplate()) return;
+      // 没有 AI 小节时只填写商务模版，不需要正文模板和并发提示。
+      if (leaves.length && !await ensureValidContentTemplate()) return;
       const config = await window.yibiao?.config.load();
-      if (config && !confirmedConcurrency && (config.concurrency_limit < 50 || config.image_model.concurrency_limit < 50)) {
+      if (leaves.length && config && !confirmedConcurrency && (config.concurrency_limit < 50 || config.image_model.concurrency_limit < 50)) {
         setConcurrencyWarning(`当前设置的文本模型并发${config.concurrency_limit}，生图模型并发${config.image_model.concurrency_limit}，建议设置50或更高，否则生成速度会比较慢`);
         return;
       }
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = await resolveAiImageOptions(
-        normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable),
-        nextImageModelAvailable,
-        'generation',
-        disableAiImages,
-      );
+      const normalizedOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
+      // 没有 AI 小节时只填写商务模版，不涉及生图，不提示 AI 生图不可用。
+      const savedGenerationOptions = leaves.length
+        ? await resolveAiImageOptions(normalizedOptions, nextImageModelAvailable, 'generation', disableAiImages)
+        : normalizedOptions;
       if (!savedGenerationOptions) return;
-      const regenerate = leaves.length > 0 && completedCount === leaves.length;
+      const regenerate = leaves.length > 0
+        ? completedCount === leaves.length && !businessFillPending
+        : businessFill?.phase === 'completed';
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
           : completedCount > 0
@@ -720,57 +876,14 @@ function ContentEditPage({
     }
   };
 
-  const startEditingContent = () => {
-    if (taskBlocksGeneration) {
-      showToast('请先完成当前正文生成任务，再编辑正文', 'info');
-      return;
-    }
-
-    if (!selectedItem || !selectedIsLeaf) {
-      showToast('请选择一个叶子小节后再编辑正文', 'info');
-      return;
-    }
-
-    setEditingItemId(selectedItem.id);
-    setIsPreviewing(false);
-    setDraftContent(selectedContent);
-  };
-
-  const togglePreview = () => {
-    setIsPreviewing((prev) => !prev);
-  };
-
-  const cancelEditingContent = () => {
-    setEditingItemId(null);
-    setIsPreviewing(false);
-    setDraftContent('');
-  };
-
-  const saveEditingContent = async () => {
-    if (taskBlocksGeneration) {
-      showToast('当前正文生成任务正在运行或已暂停，暂不能保存正文', 'info');
-      return;
-    }
-
-    if (!selectedItem || !selectedIsLeaf || !outlineData?.outline?.length) {
-      return;
-    }
-
-    try {
-      await onContentSaved(selectedItem, draftContent);
-      setEditingItemId(null);
-      setIsPreviewing(false);
-      showToast('正文已保存', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '正文保存失败', 'error');
-    }
-  };
-
   // 每次明确点击都读取最新正文；重复点击同一小节也生成新的临时 Word。
   const selectOutlineItem = (item: OutlineItem) => {
     setSelectedItemId(item.id);
-    if (!item.children?.length && item.content_mode === 'ai-generate') {
+    if (item.children?.length) return;
+    if (item.content_mode === 'ai-generate') {
       setWordPreviewRequest((previous) => ({ sectionId: item.id, context: wordContentContext, version: (previous?.version || 0) + 1 }));
+    } else if (businessChapterIds.has(item.id)) {
+      setWordPreviewRequest((previous) => ({ sectionId: item.id, context: businessWordContext, version: (previous?.version || 0) + 1 }));
     }
   };
 
@@ -780,7 +893,6 @@ function ContentEditPage({
     const isLeaf = !item.children?.length;
     const previewReady = isLeaf && item.content_mode === 'ai-generate' && previewReadySectionIds.has(item.id);
     const leafCount = meta?.leafCount || 0;
-    const words = meta?.words || 0;
     const modeLabel = isLeaf && item.content_mode ? OUTLINE_CONTENT_MODE_LABELS[item.content_mode] : '';
 
     return (
@@ -793,7 +905,10 @@ function ContentEditPage({
           <span className="content-outline-dot" aria-hidden="true" />
           <span className="content-outline-text">
             <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
-            <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}` : `${modeLabel || '未标记'} · ${statusLabels[status]} · ${words} 字` : `${leafCount} 个小节`}</small>
+            <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}`
+              : ruleChapterIds.has(item.id) ? `${modeLabel} · ${rulePageLabel}${rulePage?.phase === 'completed' ? ' · Word 预览' : ''}`
+              : businessChapterIds.has(item.id) ? `${modeLabel} · ${businessPhaseLabel} · Word 预览`
+                : item.content_mode === 'directory-generate' ? `${modeLabel} · 导出时生成` : `${modeLabel || '未标记'} · ${statusLabels[status]}` : `${leafCount} 个小节`}</small>
           </span>
           {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
             <Popover.Root
@@ -857,12 +972,17 @@ function ContentEditPage({
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>
           <strong>正文生成</strong>
-          <p>只对标记为“AI生成”的叶子小节生成正文，其他模式保留为待处理。</p>
+          <p>对标记为“AI生成”的叶子小节生成正文；存在商务模版时同步填写模版字段，其他模式保留为待处理。</p>
         </div>
         <div className="content-generation-stats" aria-label="正文生成统计">
           <span><strong>{leaves.length}</strong> 个 AI 小节</span>
           {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
-          <span title={`模板填写 ${modeCounts['template-fill']}，目录生成 ${modeCounts['directory-generate']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          <span title={`模板填写 ${modeCounts['template-fill']}，规则和页码 ${modeCounts['rule-page']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          {bidTemplateExists && (
+            <span className={`content-business-fill-status${businessFill?.status === 'error' ? ' is-error' : ''}`} title={businessFillTitle}>
+              商务模版 <strong>{businessFillLabel}</strong>
+            </span>
+          )}
           {hasOriginalPlan && (
             <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
               原方案图片 <strong>{originalRestoration && typeof originalRestoration.total_images === 'number'
@@ -880,6 +1000,17 @@ function ContentEditPage({
           )}
         </div>
         <div className="content-generation-actions">
+          {bidTemplateExists && (
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setBusinessReviewMode(awaitingBusinessReview ? 'confirm' : 'edit')}
+              disabled={!businessReviewEditable}
+              title={businessReviewEditable ? undefined : '商务模版字段值填写完成或等待确认时可编辑'}
+            >
+              编辑提取结果
+            </button>
+          )}
           {developerMode && (
             <button
               type="button"
@@ -910,7 +1041,7 @@ function ContentEditPage({
               </button>
             </>
           ) : (
-            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={generationSubmitting || sectionSubmitting || pausing || !leaves.length}>
+            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={generationSubmitting || sectionSubmitting || pausing || (!leaves.length && !bidTemplateExists)}>
               {generationButtonLabel}
             </button>
           )}
@@ -925,14 +1056,20 @@ function ContentEditPage({
           </div>
           <div className={`content-outline-stats${statsCollapsed ? ' is-collapsed' : ''}`}>
             <button type="button" onClick={() => setStatsCollapsed((prev) => !prev)} aria-expanded={!statsCollapsed}>
-              <span>{displayProgressLabel}</span>
-              <strong>{displayProgressCount}</strong>
+              <span>{businessPanel?.label ?? displayProgressLabel}</span>
+              <strong>{businessPanel?.count ?? displayProgressCount}</strong>
               <em>{statsCollapsed ? '展开' : '折叠'}</em>
             </button>
             {!statsCollapsed && (
               <div className="content-outline-stats-body">
-                <ProgressBar value={displayProgress} tone={progressTone} active={progressActive} label={`${progressPhaseLabel}进度 ${displayProgress}%`} />
-                <p>{progressDescription}</p>
+                <ProgressBar
+                  value={businessPanel?.progress ?? displayProgress}
+                  tone={businessPanel?.tone ?? progressTone}
+                  active={progressActive || (businessOnly && taskInFlight)}
+                  label={`${businessPanel?.label ?? progressPhaseLabel}进度 ${businessPanel?.progress ?? displayProgress}%`}
+                />
+                <p>{businessPanel?.description ?? progressDescription}</p>
+                {businessPanel?.rulePage && <p>{businessPanel.rulePage}</p>}
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>
             )}
@@ -950,47 +1087,36 @@ function ContentEditPage({
               <p>{selectedItem?.description || '选择左侧目录项查看生成正文。'}</p>
             </div>
             <div className="content-reader-actions">
-              <span className={`content-status-badge is-${selectedIsWord ? 'pending' : selectedStatus}`}>{selectedIsWord ? 'Word 只读预览' : statusLabels[selectedStatus]}</span>
-              {selectedIsWord ? null : editing ? (
-                <>
-                  <button type="button" className={isPreviewing ? 'secondary-action' : 'primary-action'} onClick={togglePreview}>
-                    {isPreviewing ? '编辑' : '预览'}
-                  </button>
-                  <button type="button" className="primary-action" onClick={saveEditingContent} disabled={taskBlocksGeneration}>保存</button>
-                  <button type="button" className="secondary-action" onClick={cancelEditingContent}>取消</button>
-                </>
-              ) : (
-                <button type="button" className="secondary-action" onClick={startEditingContent} disabled={!selectedItem || !selectedIsLeaf || taskBlocksGeneration}>编辑</button>
+              {selectedIsRuleChapter && (
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={rulePageRecompileDisabled}
+                  title={rulePageRecompileDisabled ? '正文任务未结束或正在编制时不能重新编制' : '按当前目录重新编制全部规则和页码小节'}
+                  onClick={() => void recompileRulePage()}
+                >重新编制</button>
               )}
+              <span className={`content-status-badge is-${selectedIsWord || selectedIsBusinessWord ? 'pending' : selectedStatus}`}>{selectedIsWord || selectedIsBusinessWord ? 'Word 只读预览' : statusLabels[selectedStatus]}</span>
             </div>
           </div>
 
           {selectedItem && selectedIsWord ? (
             <ContentWordPreview key={selectedItem.id} sectionId={selectedItem.id} requestVersion={wordRequestVersion} contentContext={wordContentContext} />
-          ) : selectedItem && selectedIsLeaf && editing && !isPreviewing ? (
-            <MarkdownEditor
-              value={draftContent}
-              onChange={setDraftContent}
-              placeholder="输入 Markdown 正文..."
-              disabled={taskBlocksGeneration}
-            />
-          ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
-            <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title="正文预览全屏查看">
-              {draftContent.trim() ? (
-                <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} />
-              ) : (
-                <p className="content-editor-empty">暂无预览内容</p>
-              )}
-            </MarkdownFullscreenViewer>
-          ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
-            <MarkdownFullscreenViewer className="markdown-viewer content-generation-output export-format-preview" style={exportFormatPreviewStyle} title={`${selectedItem.number} ${selectedItem.title}全屏查看`}>
-              <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
-            </MarkdownFullscreenViewer>
+          ) : selectedItem && selectedIsBusinessWord ? (
+            <ContentWordPreview key={`business-${selectedItem.id}`} source="business" sectionId={selectedItem.id} requestVersion={wordRequestVersion} contentContext={businessWordContext} />
+          ) : selectedItem && selectedIsRuleChapter ? (
+            <div className="markdown-empty-state content-generation-empty">
+              <strong>{rulePage?.status === 'error' ? `编制失败：${rulePage.error || '未知错误'}` : `规则和页码${rulePageLabel}`}</strong>
+              <p>{rulePageInFlight
+                ? '正在按招标文件逐项编制表格，完成后在这里预览。'
+                : '生成正文时与商务模版填写并行编制，页码在导出时按实际排版填写；目录变更后需重新编制，可点击“重新编制”单独编制。'}</p>
+            </div>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
               <strong>{getLeafStatus(selectedItem, sections) === 'error'
                 ? sections[selectedItem.id]?.error || '正文生成失败'
-                : selectedItem.content_mode === 'ai-generate' ? '正文待生成' : '该小节等待后续处理'}</strong>
+                : selectedItem.content_mode === 'ai-generate' ? '正文待生成'
+                  : selectedItem.content_mode === 'directory-generate' ? '导出时生成目录' : '该小节等待后续处理'}</strong>
               <p>{selectedItem.content_mode && selectedItem.content_mode !== 'ai-generate'
                 ? `${pendingModeDescriptions[selectedItem.content_mode]}${selectedItem.content_mode === 'other' && selectedItem.content_mode_note ? ` ${selectedItem.content_mode_note}` : ''}`
                 : taskInFlight ? '如果该小节正在生成，模型返回内容后会实时显示在这里。' : paused ? '任务已暂停，可点击继续。' : '点击生成正文后，后台会按 AI 生成小节生成内容。'}</p>
@@ -1061,6 +1187,17 @@ function ContentEditPage({
         )}
       />
 
+      <BusinessFillReviewDialog
+        open={businessReviewOpen}
+        mode={businessReviewMode || 'confirm'}
+        review={businessReview}
+        autoAnswerAt={businessFill?.auto_answer_at}
+        saving={businessReviewSaving}
+        onDismiss={() => setBusinessReviewMode(null)}
+        onInteraction={businessReviewMode === 'confirm' ? suppressBusinessReviewAutoConfirmation : undefined}
+        onConfirm={(submission) => { void (businessReviewMode === 'edit' ? saveBusinessReviewEdit(submission) : confirmBusinessReview(submission)); }}
+      />
+
       <Dialog.Root
         open={resetDialogOpen}
         onOpenChange={(open) => {
@@ -1073,7 +1210,7 @@ function ContentEditPage({
             <div className="content-regenerate-card-head">
               <Dialog.Title>重置正文阶段？</Dialog.Title>
               <Dialog.Description>
-                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存。目录、全局事实及 Step 02 生成设置会保留。
+                将停止当前正文任务，并清空已生成正文、生成进度、正文编排缓存；已填写的商务模版恢复为待填写。目录、全局事实及 Step 02 生成设置会保留。
               </Dialog.Description>
             </div>
             <div className="content-regenerate-actions">
@@ -1112,16 +1249,6 @@ function ContentEditPage({
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
               <button type="button" className="primary-action" onClick={() => void startSectionRegeneration()} disabled={taskBlocksGeneration}>开始重新生成</button>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-      <Dialog.Root open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="image-preview-modal" />
-          <Dialog.Content className="image-preview-card">
-            <Dialog.Close className="image-preview-close" type="button" aria-label="关闭图片预览">×</Dialog.Close>
-            <Dialog.Title>{previewImage?.alt || '图片预览'}</Dialog.Title>
-            {previewImage && <img src={previewImage.src} alt={previewImage.alt} />}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

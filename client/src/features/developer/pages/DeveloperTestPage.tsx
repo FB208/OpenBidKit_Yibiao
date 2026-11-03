@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { aiClient } from '../../../shared/ai/aiClient';
-import { getBidAnalysisTasks } from '../../technical-plan/services/bidAnalysisWorkflow';
+import { bidAnalysisTasks } from '../../technical-plan/services/bidAnalysisWorkflow';
 
 type RunningMode = 'text' | 'json' | null;
 
@@ -27,7 +27,7 @@ interface JsonTestResult {
   requirements: Array<{ title: string; score: number }>;
 }
 
-const textTask = getBidAnalysisTasks('full').find((task) => task.id === 'projectInfo');
+const textTask = bidAnalysisTasks.find((task) => task.id === 'projectInfo');
 
 const textSystemPrompt = `你是专业的招标文件分析助手。请严格基于用户提供的招标文件原文完成提取和总结。
 

@@ -14,9 +14,14 @@ sealed class JobRequest
 /// <summary>任务结果。</summary>
 sealed class JobResult
 {
+    /// <summary>文件被占用、无权限等运行环境问题，调用方无法通过修改参数解决。</summary>
+    public const string EnvironmentErrorKind = "environment";
+
     public bool Ok { get; set; }
     public string? Action { get; set; }
     public string? Error { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ErrorKind { get; set; }
     public string? Output { get; set; }
     public int? BlockCount { get; set; }
 
@@ -28,6 +33,26 @@ sealed class JobResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ImageWarning>? ImageWarnings { get; set; }
 
+    /// <summary>整本导出并入的商务模版章节中出现的字段 ID，去重；Main 据此统计未填写项。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? BusinessFieldIds { get; set; }
+
+    /// <summary>并入商务模版时去掉的、无法迁移的内容说明。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? BusinessWarnings { get; set; }
+
+    /// <summary>整本导出正文中“【待填写”标记的处数，Main 写入导出提示。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PendingMarkCount { get; set; }
+
+    /// <summary>整本导出生成的目录，或目录页码回填结果。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TocJobResult? Toc { get; set; }
+
+    /// <summary>整本导出的页码引用与锚点，或页码引用回填结果。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PageRefJobResult? PageRefs { get; set; }
+
     public static JobResult Success(string action, string? output = null, int? blockCount = null) => new()
     {
         Ok = true,
@@ -36,7 +61,39 @@ sealed class JobResult
         BlockCount = blockCount,
     };
 
-    public static JobResult Fail(string error) => new() { Ok = false, Error = error };
+    public static JobResult Fail(string error, string? errorKind = null) => new() { Ok = false, Error = error, ErrorKind = errorKind };
+}
+
+/// <summary>页码引用：渲染时返回引用数、未导出小节的引用数和全部锚点；回填时返回缺页码的引用数。</summary>
+sealed class PageRefJobResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Count { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MissingCount { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<PageAnchor>? Anchors { get; set; }
+}
+
+/// <summary>目录结果：渲染时返回条目、目录页块号和只含目录的小文档；回填页码时返回未能写入页码的条数。</summary>
+sealed class TocJobResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<TocEntry>? Entries { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StartBlock { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EndBlock { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TocOnly { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MissingCount { get; set; }
 }
 
 /// <summary>解析任务目录并读写 request / result。</summary>

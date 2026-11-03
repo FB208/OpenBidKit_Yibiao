@@ -6,6 +6,8 @@ const { runContentSectionRegenerationTask } = require('./contentSectionRegenerat
 const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
+const { runBidTemplateExtractionTask } = require('./bidTemplateExtractionTask.cjs');
+const { hasRulePageChapters, runRulePageCompileTask } = require('./rulePageCompileTask.cjs');
 const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cjs');
 const {
   OUTLINE_AGENT_TASK_KEY,
@@ -13,6 +15,8 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+const { loadBusinessFillReview, editBusinessFillValues } = require('./businessTemplateFillTask.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
@@ -67,6 +71,24 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'technicalPlan',
     field: 'outlineAdjustmentTask',
+  },
+  'bid-template-extraction': {
+    label: '投标模版提取',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'bidTemplateExtractionTask',
+  },
+  'rule-page-compile': {
+    label: '规则和页码编制',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'rulePageCompileTask',
   },
   'global-facts-generation': {
     label: '全局事实设定',
@@ -349,7 +371,7 @@ function createTask(type, payload) {
 // 依赖待检文档的暗标任务；从招标文件提取预设与待检文档无关，换文档时不取消。
 const BLIND_CHECK_DOCUMENT_TASK_TYPES = ['blind-check-run', 'blind-check-fix'];
 
-function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService }) {
+function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
@@ -464,6 +486,10 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         'contentGenerationPlans',
         'contentGenerationRuntime',
       ]);
+    }
+
+    if (task.type === 'rule-page-compile') {
+      copyPatchFields(patch, state, ['contentGenerationRuntime']);
     }
 
     if (task.type === 'content-generation') {
@@ -742,6 +768,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       outlineSelectionWaiter: null,
       outlineSelectionResult: null,
       outlineSelectionAutoConfirmationId: null,
+      businessFillReviewWaiter: null,
+      businessFillReviewAutoConfirmationId: null,
       isPauseRequested() {
         return this.pauseRequested;
       },
@@ -772,6 +800,62 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         this.registerOutlineSelectionAutoConfirmation?.();
         return promise;
       },
+      // 商务模版字段值确认：signal 中止（暂停）时拒绝等待并注销自动确认，自动确认以 null 提交表示保留已存值。
+      waitForBusinessFillReview({ signal, onAutoAnswerAtChange } = {}) {
+        if (signal?.aborted) return Promise.reject(signal.reason);
+        this.releaseBusinessFillReview();
+        let resolve;
+        let reject;
+        const promise = new Promise((resolvePromise, rejectPromise) => {
+          resolve = resolvePromise;
+          reject = rejectPromise;
+        });
+        promise.catch(() => undefined);
+        const onAbort = () => this.releaseBusinessFillReview(signal.reason);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        this.businessFillReviewWaiter = {
+          resolve: (value) => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve(value);
+          },
+          reject: (error) => {
+            signal?.removeEventListener('abort', onAbort);
+            reject(error);
+          },
+        };
+        const confirmationId = `business-fill-review:${currentTask.task_id}`;
+        this.businessFillReviewAutoConfirmationId = confirmationId;
+        autoConfirmationService.register({
+          id: confirmationId,
+          submit: () => this.confirmBusinessFillReview({ taskId: currentTask.task_id, values: null }),
+          onStateChange: ({ auto_answer_at: autoAnswerAt }) => onAutoAnswerAtChange?.(autoAnswerAt || null),
+        });
+        return promise;
+      },
+      releaseBusinessFillReview(error) {
+        const waiter = this.businessFillReviewWaiter;
+        this.businessFillReviewWaiter = null;
+        autoConfirmationService.unregister(this.businessFillReviewAutoConfirmationId);
+        this.businessFillReviewAutoConfirmationId = null;
+        if (waiter && error) waiter.reject(error);
+        return waiter;
+      },
+      confirmBusinessFillReview(request = {}) {
+        if (type !== 'content-generation' || request.taskId !== currentTask.task_id) {
+          throw new Error('正文任务已变化，请重新打开后再确认');
+        }
+        const waiter = this.releaseBusinessFillReview();
+        if (!waiter) throw new Error('当前正文任务不在商务模版确认阶段');
+        waiter.resolve(Array.isArray(request.values) ? { values: request.values } : null);
+        return { success: true };
+      },
+      // 用户修改字段值后停止本次自动确认。
+      suppressBusinessFillReviewAutoConfirmation(request = {}) {
+        if (type === 'content-generation' && request.taskId === currentTask.task_id) {
+          autoConfirmationService.suppress(this.businessFillReviewAutoConfirmationId);
+        }
+        return { success: true };
+      },
       cancel(reason = '后台任务已取消') {
         const error = new Error(reason);
         error.code = 'TASK_CANCELLED';
@@ -779,6 +863,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         this.outlineSelectionWaiter = null;
         autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
         this.outlineSelectionAutoConfirmationId = null;
+        this.releaseBusinessFillReview(error);
         if (!abortController.signal.aborted) abortController.abort(error);
       },
       waitForSettlement() {
@@ -789,6 +874,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         this.outlineSelectionWaiter = null;
         autoConfirmationService.unregister(this.outlineSelectionAutoConfirmationId);
         this.outlineSelectionAutoConfirmationId = null;
+        this.releaseBusinessFillReview(new Error('正文任务已结束'));
       },
     };
     activeTaskControls.set(type, taskControl);
@@ -937,7 +1023,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         signal: taskControl.signal,
       },
     );
-    runner({ templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+    runner({ templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, credentialLibraryService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
       if (!taskControl.signal.aborted) {
         checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
       }
@@ -1176,6 +1262,61 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     const partial = { outlineAdjustmentTask: recoveredTask };
     technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
     emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-adjustment'), partial, recoveredTask));
+  }
+
+  function recoverInterruptedBidTemplateExtractionTask(technicalPlan) {
+    if (activeTasks.has('bid-template-extraction')) {
+      return;
+    }
+
+    const extractionTask = technicalPlan.bidTemplateExtractionTask;
+    if (!isActiveTaskStatus(extractionTask?.status)) {
+      return;
+    }
+
+    const message = '上次投标模版提取未完成，请在目录页点击“下一步”重新提取。';
+    const recoveredTask = {
+      ...extractionTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(extractionTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(extractionTask.logs) ? extractionTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { bidTemplateExtractionTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-template-extraction'), partial, recoveredTask));
+  }
+
+  // 重新编制中断后记为失败，编制状态记为中断，正文页可再次重新编制。
+  function recoverInterruptedRulePageCompileTask(technicalPlan) {
+    if (activeTasks.has('rule-page-compile')) {
+      return;
+    }
+
+    const compileTask = technicalPlan.rulePageCompileTask;
+    if (!isActiveTaskStatus(compileTask?.status)) {
+      return;
+    }
+
+    const message = '上次规则和页码编制未完成，请在正文页重新编制。';
+    const recoveredTask = {
+      ...compileTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(compileTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(compileTask.logs) ? compileTask.logs : []), message],
+      updated_at: now(),
+    };
+    const runtime = technicalPlan.contentGenerationRuntime;
+    const partial = {
+      rulePageCompileTask: recoveredTask,
+      ...(runtime?.rule_page ? { contentGenerationRuntime: { ...runtime, rule_page: { ...runtime.rule_page, status: 'interrupted', error: null } } } : {}),
+    };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('rule-page-compile'), partial, recoveredTask));
   }
 
   function recoverInterruptedGlobalFactsAdjustmentTask(technicalPlan) {
@@ -1477,6 +1618,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
+  recoverInterruptedBidTemplateExtractionTask(technicalPlanRecoveryState);
+  recoverInterruptedRulePageCompileTask(technicalPlanRecoveryState);
   recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
@@ -1505,6 +1648,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         outlineWordControlSnapshot: undefined,
         outlineGenerationTask: undefined,
         outlineAdjustmentTask: undefined,
+        bidTemplateExtractionTask: undefined,
         referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
         globalFactsAdjustmentTask: undefined,
@@ -1535,6 +1679,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         outlineData: null,
         outlineWordControlSnapshot: undefined,
         outlineAdjustmentTask: undefined,
+        bidTemplateExtractionTask: undefined,
         globalFactsTask: undefined,
         globalFactsAdjustmentTask: undefined,
         globalFacts: [],
@@ -1549,6 +1694,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+          agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
           technicalPlanStore.clearBidTemplate();
         },
       });
@@ -1557,6 +1704,27 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       return startManagedTask('outline-adjustment', payload, runOutlineAdjustmentTask, {}, {
         primarySession: agentService.isPrimarySession({ task_key: OUTLINE_AGENT_TASK_KEY }),
       });
+    },
+    // 目录变更后按当前目录重新提取投标模版；先确认目录会话存在，再清空旧模版，避免旧产物让提取校验误判完成。
+    startBidTemplateExtraction(payload) {
+      if (!agentService.hasPersistentTaskSession(OUTLINE_AGENT_TASK_KEY)) {
+        throw new Error('目录生成的 Agent 工作空间不存在，请重新生成目录');
+      }
+      return startManagedTask('bid-template-extraction', payload, runBidTemplateExtractionTask, {}, {
+        primarySession: true,
+        beforeStart: () => {
+          agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
+          technicalPlanStore.clearBidTemplate();
+        },
+      });
+    },
+    // 正文页“重新编制”：单独运行规则和页码编制；正文任务运行或暂停时不允许，避免与正文副流程同时写模版。
+    startRulePageCompile(payload) {
+      const contentStatus = technicalPlanStore.loadTechnicalPlan().contentGenerationTask?.status;
+      if (isActiveTaskStatus(contentStatus) || contentStatus === 'paused') {
+        throw new Error('正文任务未结束，请完成或重置后再重新编制');
+      }
+      return startManagedTask('rule-page-compile', payload, runRulePageCompileTask, {}, { primarySession: true });
     },
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTaskV2, {
@@ -1614,8 +1782,15 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
             && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
               || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
       }
+      // 商务模版尚未填写完成、规则和页码尚未编制时同样需要启动，由正文任务按需只执行副 Agent。
+      const businessFillPending = technicalPlanStore.hasBidTemplate()
+        && technicalPlan.contentGenerationRuntime?.business_fill?.phase !== 'completed';
+      const rulePagePending = hasRulePageChapters(technicalPlanStore, technicalPlan.outlineData?.outline)
+        && technicalPlan.contentGenerationRuntime?.rule_page?.phase !== 'completed';
       if (!sectionRegeneration && !continuing && !taskPayload?.regenerate
         && technicalPlan.contentGenerationTask?.status === 'success'
+        && !businessFillPending
+        && !rulePagePending
         && !hasPendingSections(technicalPlan.outlineData?.outline || [])) {
         const task = technicalPlan.contentGenerationTask;
         emit(task, { technicalPlanPatch: technicalPlan });
@@ -1759,6 +1934,32 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       if (!control?.suppressOutlineSelectionAutoConfirmation) return { success: true };
       return control.suppressOutlineSelectionAutoConfirmation(payload);
     },
+    confirmBusinessFillReview(payload) {
+      const control = activeTaskControls.get('content-generation');
+      if (!control) throw new Error('当前没有等待确认的商务模版');
+      return control.confirmBusinessFillReview(payload);
+    },
+    suppressBusinessFillReviewAutoConfirmation(payload) {
+      return activeTaskControls.get('content-generation')?.suppressBusinessFillReviewAutoConfirmation(payload) || { success: true };
+    },
+    getBusinessFillReview() {
+      return loadBusinessFillReview({ workspaceStore: technicalPlanStore, credentialLibraryService, openXmlHelperService });
+    },
+    // 商务模版填写完成后编辑字段值；与正文并行不冲突，正文任务运行中时同步任务内存中的状态，避免后续 checkpoint 覆盖。
+    async saveBusinessFillReview(payload = {}) {
+      const editor = activeTaskControls.get('content-generation')?.businessFillEditor;
+      const state = editor ? editor.getState() : technicalPlanStore.readContentGenerationRuntime()?.business_fill;
+      if (state?.phase !== 'completed') throw new Error('商务模版尚未填写完成，暂不能编辑');
+      const next = await editBusinessFillValues({
+        workspaceStore: technicalPlanStore,
+        credentialLibraryService,
+        openXmlHelperService,
+        state,
+        values: payload.values || [],
+      });
+      activeTaskControls.get('content-generation')?.businessFillEditor?.apply(next);
+      return { contentGenerationRuntime: technicalPlanStore.saveBusinessFillRuntime(next) };
+    },
     async resetTechnicalPlan() {
       await cancelTechnicalPlanTasks('技术方案已重置，后台任务已取消');
       // 空闲常驻的 openxml 助手不在任务取消范围内,重置前显式关掉,确保没有进程握着招标原件
@@ -1767,7 +1968,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     },
     // 仅重置正文阶段，保留目录、全局事实和生成配置。
     async resetContentGeneration() {
-      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation']);
+      // 正文页单独运行的“重新编制”也使用正文会话和运行时，一并取消并等待结束后再清理。
+      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation', 'rule-page-compile']);
       technicalPlanStore.updateTechnicalPlanWithoutReload({ invalidateContentGeneration: true });
       return technicalPlanStore.loadTechnicalPlan();
     },

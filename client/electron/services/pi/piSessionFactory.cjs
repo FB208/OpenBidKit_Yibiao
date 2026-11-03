@@ -144,6 +144,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     ? codingAgent.defineTool(createPiOpenXmlTool({
       workspaceDir,
       Type: typebox.Type,
+      reportTaskFailure,
       ...openXmlTool,
     }))
     : null;

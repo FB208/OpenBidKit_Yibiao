@@ -1,4 +1,4 @@
-const { numberOutline } = require('./technicalPlanOutline.cjs');
+const { numberOutline, ruleBasisFields } = require('./technicalPlanOutline.cjs');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,6 +8,7 @@ const {
   getTechnicalPlanBidTemplatePath,
   getTechnicalPlanBidTemplateSourcePath,
   getTechnicalPlanBidTemplateFieldsPath,
+  getTechnicalPlanBidTemplateBlankPath,
   getTechnicalPlanOriginalPlanMarkdownPath,
   getTechnicalPlanTenderMarkdownPath,
   getTechnicalPlanTenderOriginalsDir,
@@ -25,6 +26,9 @@ const {
 } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorationAgentConfig.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
+// 与 rulePageCompileTask.cjs 的 RULE_PAGE_TABLES_VERSION 一致；此处不引用任务模块，避免 Store 加载 Agent 依赖。
+const RULE_PAGE_TABLES_VERSION = 3;
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 
@@ -35,6 +39,11 @@ const tenderOriginalsDirRelativePath = path.join('technical-plan', 'tender-origi
 const bidTemplateRelativePath = path.join('technical-plan', 'bid-template.docx').replace(/\\/g, '/');
 const bidTemplateSourceRelativePath = path.join('technical-plan', 'bid-template-source.docx').replace(/\\/g, '/');
 const bidTemplateFieldsRelativePath = path.join('technical-plan', 'bid-template-fields.json').replace(/\\/g, '/');
+const bidTemplateBlankRelativePath = path.join('technical-plan', 'bid-template-blank.docx').replace(/\\/g, '/');
+// 提取底稿末尾追加商务生成模板后的底稿，只在商务填写生成了模板时存在。
+const bidTemplateBaseRelativePath = path.join('technical-plan', 'bid-template-base.docx').replace(/\\/g, '/');
+// 字段清单中由商务模版填写写入的键，前五者互斥（blank 表示逐行清单表未使用的单元格留空），link 为填写 Agent 声明的联动；失效时一并清除。
+const BID_TEMPLATE_FILL_KEYS = ['value', 'selected', 'image_id', 'unresolved_reason', 'blank', 'link'];
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
@@ -103,6 +112,8 @@ const taskFieldTypes = {
   bidAnalysisTask: 'bid-analysis',
   outlineGenerationTask: 'outline-generation',
   outlineAdjustmentTask: 'outline-adjustment',
+  bidTemplateExtractionTask: 'bid-template-extraction',
+  rulePageCompileTask: 'rule-page-compile',
   globalFactsTask: 'global-facts-generation',
   globalFactsAdjustmentTask: 'global-facts-adjustment',
   contentGenerationTask: 'content-generation',
@@ -295,8 +306,9 @@ function getAllBidAnalysisTasks() {
   return getBidAnalysisTasks('full');
 }
 
-function getRequiredBidAnalysisTaskIds() {
-  return getBidAnalysisTasks('key').map((task) => task.id);
+// 必选项随生成类型变化：完整投标文件两种评分要求都必选，独立成册只必选对应的一种。
+function getRequiredBidAnalysisTaskIds(outlineMode) {
+  return getBidAnalysisTasks('key', outlineMode).map((task) => task.id);
 }
 
 function normalizeBidAnalysisTaskIds(taskIds) {
@@ -308,9 +320,9 @@ function normalizeBidAnalysisTaskIds(taskIds) {
     .map((task) => task.id);
 }
 
-function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
+function normalizeBidAnalysisConfig(mode, selectedTaskIds, outlineMode) {
   const allTaskIds = getAllBidAnalysisTasks().map((task) => task.id);
-  const requiredTaskIds = getRequiredBidAnalysisTaskIds();
+  const requiredTaskIds = getRequiredBidAnalysisTaskIds(outlineMode);
   const requiredSet = new Set(requiredTaskIds);
   const selectedSet = new Set([...requiredTaskIds, ...normalizeBidAnalysisTaskIds(selectedTaskIds)]);
   const selectedIds = allTaskIds.filter((taskId) => selectedSet.has(taskId));
@@ -326,8 +338,8 @@ function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
   return { mode: 'key', selectedTaskIds: requiredTaskIds };
 }
 
-function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds) {
-  return normalizeBidAnalysisConfig(mode, selectedTaskIds).selectedTaskIds;
+function getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds, outlineMode) {
+  return normalizeBidAnalysisConfig(mode, selectedTaskIds, outlineMode).selectedTaskIds;
 }
 
 function isValidOutlineExpansionMode(value) {
@@ -366,12 +378,13 @@ function normalizeContentGenerationOptions(options) {
 }
 
 function createDefaultGenerationConfig() {
-  const bidAnalysis = normalizeBidAnalysisConfig('key', []);
+  const outlineMode = 'standalone-technical';
+  const bidAnalysis = normalizeBidAnalysisConfig('key', [], outlineMode);
   return {
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: 'single',
-    outlineMode: 'standalone-technical',
+    outlineMode,
     outlineExpansionMode: 'ai-complement',
     outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
     referenceKnowledgeDocumentIds: [],
@@ -385,14 +398,15 @@ function createDefaultGenerationConfig() {
 function normalizeGenerationConfig(config) {
   const source = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
   const defaults = createDefaultGenerationConfig();
-  const bidAnalysis = normalizeBidAnalysisConfig(source.bidAnalysisMode, source.bidAnalysisSelectedTaskIds);
+  const outlineMode = ['response-file', 'standalone-technical', 'standalone-business'].includes(source.outlineMode)
+    ? source.outlineMode
+    : defaults.outlineMode;
+  const bidAnalysis = normalizeBidAnalysisConfig(source.bidAnalysisMode, source.bidAnalysisSelectedTaskIds, outlineMode);
   return {
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: normalizeBidSectionMode(source.bidSectionMode),
-    outlineMode: ['response-file', 'standalone-technical', 'standalone-business'].includes(source.outlineMode)
-      ? source.outlineMode
-      : defaults.outlineMode,
+    outlineMode,
     outlineExpansionMode: isValidOutlineExpansionMode(source.outlineExpansionMode) ? source.outlineExpansionMode : defaults.outlineExpansionMode,
     outlineWordControlOptions: normalizeOutlineWordControlOptions(source.outlineWordControlOptions),
     referenceKnowledgeDocumentIds: normalizeGenerationDocumentIds(source.referenceKnowledgeDocumentIds),
@@ -420,6 +434,7 @@ function flattenOutlineItems(items, parentNodeId = null, level = 1, rows = []) {
       description: String(item?.description || '').trim(),
       content_mode: item?.children?.length ? null : String(item?.content_mode || '').trim() || null,
       content_mode_note: item?.children?.length || item?.content_mode !== 'other' ? null : String(item?.content_mode_note || '').trim() || null,
+      rule_basis: item?.children?.length ? null : ruleBasisFields(item).rule_basis || null,
       source_requirement_id: item?.source_requirement_id ? String(item.source_requirement_id) : null,
       source_requirement_title: item?.source_requirement_title ? String(item.source_requirement_title) : null,
       knowledge_item_ids_json: Array.isArray(item?.knowledge_item_ids) && item.knowledge_item_ids.length ? JSON.stringify(item.knowledge_item_ids) : null,
@@ -473,6 +488,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
   }
   function deleteGlobalFactsAgentTask() {
     agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY);
@@ -507,6 +524,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const bidTemplatePath = getTechnicalPlanBidTemplatePath(app);
   const bidTemplateSourcePath = getTechnicalPlanBidTemplateSourcePath(app);
   const bidTemplateFieldsPath = getTechnicalPlanBidTemplateFieldsPath(app);
+  const bidTemplateBlankPath = getTechnicalPlanBidTemplateBlankPath(app);
+  // 规则和页码的编制结果，回填商务模版时与字段值一起写入；随模版和正文失效。
+  const rulePageTablesPath = path.join(path.dirname(bidTemplatePath), 'rule-page-tables.json');
+  const bidTemplateBasePath = path.join(path.dirname(bidTemplatePath), 'bid-template-base.docx');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const workspaceDir = path.dirname(path.dirname(tenderMarkdownPath));
@@ -1017,15 +1038,22 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidTemplateSourcePath,
       path.join(sourcePathParts.dir, `${sourcePathParts.name}.chapters.json`),
       bidTemplateFieldsPath,
+      bidTemplateBlankPath,
+      rulePageTablesPath,
+      bidTemplateBasePath,
     ];
     const templateDir = path.dirname(bidTemplatePath);
     if (fs.existsSync(templateDir)) {
       const tempPrefixes = [
         `${path.basename(bidTemplatePath)}.`,
         `${path.basename(bidTemplateFieldsPath)}.`,
+        `${path.basename(bidTemplateBlankPath)}.`,
+        `${path.basename(rulePageTablesPath)}.`,
+        `${path.basename(bidTemplateBasePath)}.`,
       ];
       for (const name of fs.readdirSync(templateDir)) {
-        if (tempPrefixes.some((prefix) => name.startsWith(prefix) && name.includes('.tmp'))) {
+        // 整本导出临时生成的商务模版正常会在导出后删除，这里清理异常退出留下的文件。
+        if (tempPrefixes.some((prefix) => name.startsWith(prefix) && name.includes('.tmp')) || name.startsWith('bid-template-export-')) {
           templateFiles.push(path.join(templateDir, name));
         }
       }
@@ -1039,15 +1067,121 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           { deferOnFailure: false },
         );
       } catch (error) {
-        if (isFileLockError(error)) {
-          const lockError = new Error('投标模版正在被 Word 使用，请关闭后重试');
-          lockError.code = 'BID_TEMPLATE_IN_USE';
-          lockError.cause = error;
-          throw lockError;
-        }
-        throw error;
+        throw toBidTemplateLockError(error);
       }
     }
+  }
+
+  function toBidTemplateLockError(error) {
+    if (!isFileLockError(error)) return error;
+    const lockError = new Error('投标模版正在被 Word 使用，请关闭后重试');
+    lockError.code = 'BID_TEMPLATE_IN_USE';
+    lockError.cause = error;
+    return lockError;
+  }
+
+  function readBidTemplateFields() {
+    return JSON.parse(fs.readFileSync(bidTemplateFieldsPath, 'utf-8'));
+  }
+
+  function hasBidTemplateFillValues(payload) {
+    return (payload?.fields || []).some(field => BID_TEMPLATE_FILL_KEYS.some(key => Object.hasOwn(field, key)));
+  }
+
+  function withoutBidTemplateFillValues(field) {
+    return Object.fromEntries(Object.entries(field).filter(([key]) => !BID_TEMPLATE_FILL_KEYS.includes(key)));
+  }
+
+  // 同目录临时文件写完再改名，Word 占用最终文件时给出关闭提示。
+  function writeBidTemplateFile(targetPath, write) {
+    const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
+    write(tempPath);
+    try {
+      fs.renameSync(tempPath, targetPath);
+    } catch (error) {
+      fs.rmSync(tempPath, { force: true });
+      throw toBidTemplateLockError(error);
+    }
+  }
+
+  // 底稿在首次填写前从刚提取的模版复制；已有填写值说明模版不再是空白，不能充当底稿。
+  function ensureBidTemplateBlank() {
+    if (fs.existsSync(bidTemplateBlankPath)) return;
+    if (hasBidTemplateFillValues(readBidTemplateFields())) {
+      throw new Error('商务模版缺少空白底稿，请重新生成目录');
+    }
+    writeBidTemplateFile(bidTemplateBlankPath, tempPath => fs.copyFileSync(bidTemplatePath, tempPath));
+  }
+
+  // entries 按字段 id 给出 value / selected / image_id / unresolved_reason / blank 之一，未列出的字段清除旧值。
+  function saveBidTemplateFieldValues(entries) {
+    const payload = readBidTemplateFields();
+    payload.fields = payload.fields.map(field => ({ ...withoutBidTemplateFillValues(field), ...(entries[field.id] || {}) }));
+    writeBidTemplateFile(bidTemplateFieldsPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8'));
+    return payload;
+  }
+
+  // 规则和页码编制结果：没有时为 null。
+  // 旧版本的编制结果（按预印表、空白表记录行）不再兼容，视为尚未编制，需要重新编制。
+  function readRulePageTables() {
+    if (!fs.existsSync(rulePageTablesPath)) return null;
+    const payload = JSON.parse(fs.readFileSync(rulePageTablesPath, 'utf-8'));
+    return payload?.version === RULE_PAGE_TABLES_VERSION ? payload : null;
+  }
+
+  function saveRulePageTables(payload) {
+    writeBidTemplateFile(rulePageTablesPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8'));
+  }
+
+  // 商务生成模板（填写 Agent 写出的证明材料、承诺书和只有标题章节的正文）与提取模板同属商务模版：
+  // 章节带 generated，字段带 generated: true；去掉这两部分即为提取底稿对应的清单。
+  function withoutGeneratedTemplates(payload) {
+    return {
+      ...payload,
+      chapters: (payload.chapters || []).filter(chapter => !chapter.generated),
+      fields: (payload.fields || []).filter(field => !field.generated),
+    };
+  }
+
+  // 替换商务生成模板：base 底稿已由助手写好（提取底稿末尾追加生成章节），这里写入章节和字段定义；null 表示没有生成模板，删除 base 底稿。
+  function saveGeneratedTemplates(generated) {
+    const payload = withoutGeneratedTemplates(readBidTemplateFields());
+    if (generated) {
+      payload.chapters = [...payload.chapters, ...generated.chapters];
+      payload.fields = [...payload.fields, ...generated.fields];
+    } else {
+      fs.rmSync(bidTemplateBasePath, { force: true });
+    }
+    writeBidTemplateFile(bidTemplateFieldsPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8'));
+  }
+
+  // 编制结果失效（目录变更、重新编制）时暂存删除；商务模版 Word 不重写，预览和导出按结果缺失处理。
+  function stageRulePageReset(changes) {
+    if (fs.existsSync(rulePageTablesPath)) stageContentFileRemoval(changes, rulePageTablesPath);
+  }
+
+  // 已填值和规则和页码编制结果随正文一起失效：暂存当前模版与清单，再从底稿恢复占位；事务失败时先删新建文件再恢复暂存文件。
+  function stageBusinessTemplateReset(changes) {
+    if (!fs.existsSync(bidTemplateFieldsPath)) return;
+    const payload = readBidTemplateFields();
+    if (!hasBidTemplateFillValues(payload) && !fs.existsSync(rulePageTablesPath) && !fs.existsSync(bidTemplateBasePath)
+      && !(payload.chapters || []).some(chapter => chapter.generated)) return;
+    if (!fs.existsSync(bidTemplateBlankPath)) throw new Error('商务模版缺少空白底稿，请重新生成目录');
+    try {
+      stageContentFileRemoval(changes, bidTemplatePath);
+      stageContentFileRemoval(changes, bidTemplateFieldsPath);
+      stageRulePageReset(changes);
+      stageContentFileRemoval(changes, bidTemplateBasePath);
+    } catch (error) {
+      throw toBidTemplateLockError(error);
+    }
+    changes.created.push(bidTemplatePath);
+    fs.copyFileSync(bidTemplateBlankPath, bidTemplatePath);
+    changes.created.push(bidTemplateFieldsPath);
+    // 商务生成模板随填写值一起失效，清单恢复为提取部分。
+    const extracted = withoutGeneratedTemplates(payload);
+    const blankPayload = { ...extracted, fields: extracted.fields.map(withoutBidTemplateFillValues) };
+    fs.writeFileSync(bidTemplateFieldsPath, `${JSON.stringify(blankPayload, null, 2)}\n`, 'utf-8');
   }
 
   function clearTenderSourceFiles(phase = 'technical-plan-reset') {
@@ -1206,7 +1340,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function getBidItemLabel(itemId, fallbackLabel) {
-    const task = getBidAnalysisTasks('full').find((item) => item.id === itemId) || getBidAnalysisTasks('key').find((item) => item.id === itemId);
+    const task = getAllBidAnalysisTasks().find((item) => item.id === itemId);
     return fallbackLabel || task?.label || itemId;
   }
 
@@ -1271,8 +1405,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  function calculateBidProgress(mode, bidTasks, selectedTaskIds) {
-    const selectedIds = getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds);
+  function calculateBidProgress(mode, bidTasks, selectedTaskIds, outlineMode) {
+    const selectedIds = getBidAnalysisTaskIdsForConfig(mode, selectedTaskIds, outlineMode);
     if (!selectedIds.length) return 0;
     const done = selectedIds.filter((taskId) => ['success', 'error'].includes(bidTasks[taskId]?.status)).length;
     return Math.round((done / selectedIds.length) * 100);
@@ -1290,6 +1424,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         description: row.description || '',
         content_mode: row.content_mode || undefined,
         content_mode_note: row.content_mode_note || undefined,
+        rule_basis: row.rule_basis || undefined,
         source_requirement_id: row.source_requirement_id || undefined,
         source_requirement_title: row.source_requirement_title || undefined,
         knowledge_item_ids: safeJsonParse(row.knowledge_item_ids_json, undefined),
@@ -1338,10 +1473,10 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const nextIds = new Set(rows.map((row) => row.node_id));
     const upsert = db.prepare(`
       INSERT INTO technical_plan_outline_nodes (
-        node_id, parent_node_id, sort_order, level, title, description, content_mode, content_mode_note, source_requirement_id,
+        node_id, parent_node_id, sort_order, level, title, description, content_mode, content_mode_note, rule_basis, source_requirement_id,
         source_requirement_title, knowledge_item_ids_json, content, created_at, updated_at
       ) VALUES (
-        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @content_mode, @content_mode_note, @source_requirement_id,
+        @node_id, @parent_node_id, @sort_order, @level, @title, @description, @content_mode, @content_mode_note, @rule_basis, @source_requirement_id,
         @source_requirement_title, @knowledge_item_ids_json, @content, @created_at, @updated_at
       ) ON CONFLICT(node_id) DO UPDATE SET
         parent_node_id = excluded.parent_node_id,
@@ -1351,6 +1486,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         description = excluded.description,
         content_mode = excluded.content_mode,
         content_mode_note = excluded.content_mode_note,
+        rule_basis = excluded.rule_basis,
         source_requirement_id = excluded.source_requirement_id,
         source_requirement_title = excluded.source_requirement_title,
         knowledge_item_ids_json = excluded.knowledge_item_ids_json,
@@ -1643,21 +1779,16 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
   function clearContentGenerationState(wordChanges) {
     stageContentWordRemoval(wordChanges);
+    stageBusinessTemplateReset(wordChanges);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+    agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
     db.prepare("UPDATE technical_plan_outline_nodes SET content = '', updated_at = ?").run(now());
     db.prepare('DELETE FROM technical_plan_content_sections').run();
     db.prepare('DELETE FROM technical_plan_content_plans').run();
     db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'content-generation'").run();
     updateMeta({ content_generation_runtime_json: null });
-  }
-
-  // 正文任务活动或暂停期间禁止手工保存，避免清空待恢复的图片计划。
-  function assertContentEditingAllowed() {
-    const row = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation' AND status IN ('running', 'pausing', 'paused') LIMIT 1").get();
-    if (row) {
-      throw new Error('当前正文生成任务正在运行或已暂停，请先完成任务再编辑正文');
-    }
   }
 
   function loadOutlinePersistenceSnapshot() {
@@ -1675,6 +1806,15 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const task = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation'").get();
     if (['running', 'pausing', 'paused'].includes(task?.status)) {
       throw new Error('正文生成任务正在运行或暂停中，请结束后再调整目录');
+    }
+    assertRulePageCompileIdle('调整目录');
+  }
+
+  // 正文页“重新编制”单独运行时，目录变更和全局事实保存会清掉它正在写的结果与会话，须等编制结束；应用重启后中断的编制已转为 error。
+  function assertRulePageCompileIdle(action) {
+    const task = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'rule-page-compile'").get();
+    if (['running', 'pausing', 'paused'].includes(task?.status)) {
+      throw new Error(`规则和页码正在编制，请结束后再${action}`);
     }
   }
 
@@ -1745,12 +1885,20 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function createContentWordTransaction(callback) {
     const transaction = db.transaction(callback);
     return (...args) => {
-      const changes = { moves: [], removed: [] };
+      const changes = { moves: [], removed: [], created: [] };
       let result;
       try {
         result = transaction(changes, ...args);
       } catch (error) {
         const restoreErrors = [];
+        // 先删除本次新建的文件，腾出原位置再恢复暂存文件。
+        for (const created of changes.created.reverse()) {
+          try {
+            fs.rmSync(created, { force: true });
+          } catch (restoreError) {
+            restoreErrors.push(restoreError);
+          }
+        }
         for (const [source, target] of changes.moves.reverse()) {
           try {
             if (fs.existsSync(source)) throw new Error(`恢复正文文件时原位置被占用：${source}`);
@@ -1928,6 +2076,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       importedAt: meta.original_plan_imported_at || undefined,
       updatedAt: meta.updated_at,
     } : null;
+    const bidTemplateExists = fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath);
 
     return {
       ...initialState,
@@ -1940,7 +2089,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidAnalysisMode,
       bidAnalysisSelectedTaskIds,
       bidAnalysisTasks,
-      bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds),
+      bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds, generationConfig.outlineMode),
       bidSectionMode: generationConfig.bidSectionMode,
       bidSections,
       bidSectionExtractionStatus: bidSectionExtractionTask?.status
@@ -1961,7 +2110,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       exportTemplateScope: generationConfig.exportTemplateScope,
       contentGenerationOptions: generationConfig.contentGenerationOptions,
       contentGenerationRuntime: safeJsonParse(meta.content_generation_runtime_json, undefined),
-      bidTemplateExists: fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath),
+      bidTemplateExists,
+      // 正文页据此判断非 AI 小节是否有可预览的商务模版章节。
+      bidTemplateChapterIds: bidTemplateExists ? (readBidTemplateFields().chapters || []).map(chapter => chapter.id).filter(Boolean) : [],
       contentGenerationSections: loadContentSections(outlineData),
       contentGenerationPlans: loadContentPlans(),
       outlineData,
@@ -2068,7 +2219,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function saveBidAnalysisConfig({ mode, selectedTaskIds, bidSectionMode } = {}) {
-    const config = normalizeBidAnalysisConfig(mode, selectedTaskIds);
+    const config = normalizeBidAnalysisConfig(mode, selectedTaskIds, loadGenerationConfig().outlineMode);
     saveGenerationConfig({
       bidAnalysisMode: config.mode,
       bidAnalysisSelectedTaskIds: config.selectedTaskIds,
@@ -2101,6 +2252,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const clearAll = reason === 'replace';
     const preservesContentTask = reason === 'sort' || reason === 'edit';
     const invalidatesContentTask = !preservesContentTask;
+    // 规则和页码按目录编制：除排序外的目录变更都需重新编制，引用按节点 ID 记录，排序后导出时重新计算页码。
+    const invalidatesRulePage = reason !== 'sort';
 
     let savedOutlineData = outlineData;
     const transaction = createContentWordTransaction((wordChanges) => {
@@ -2111,6 +2264,18 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           const updateDetails = db.prepare('UPDATE technical_plan_outline_nodes SET title = ?, description = ?, updated_at = ? WHERE node_id = ? AND (title <> ? OR description <> ?)');
           const timestamp = now();
           for (const row of flattenOutlineItems(outlineData?.outline || [])) updateDetails.run(row.title, row.description, timestamp, row.node_id, row.title, row.description);
+          stageRulePageReset(wordChanges);
+          const runtime = safeJsonParse(readMetaRow().content_generation_runtime_json, null);
+          if (runtime?.rule_page) {
+            const { rule_page: _rulePage, ...rest } = runtime;
+            updateMeta({ content_generation_runtime_json: JSON.stringify(rest) });
+          }
+          // 保留的正文任务统计里也有编制状态，一并清除，避免页面回退到旧的已编制状态。
+          const taskStats = safeJsonParse(db.prepare("SELECT stats_json FROM technical_plan_tasks WHERE type = 'content-generation'").get()?.stats_json, null);
+          if (taskStats?.content?.rule_page) {
+            const { rule_page: _taskRulePage, ...content } = taskStats.content;
+            db.prepare("UPDATE technical_plan_tasks SET stats_json = ? WHERE type = 'content-generation'").run(JSON.stringify({ ...taskStats, content }));
+          }
         } else {
           saveSortedOutline(outlineData);
         }
@@ -2134,6 +2299,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       const outlineToSave = buildOutlineWithPersistedContent(outlineData, { snapshot, affectedIds, clearAll });
       const nextIds = new Set(flattenOutlineItems(outlineToSave?.outline || []).map(row => row.node_id));
       reconcileContentWords(wordChanges, { snapshot, affectedIds, nextIds, clearAll });
+      if (clearAll) stageBusinessTemplateReset(wordChanges);
+      else stageRulePageReset(wordChanges);
       savedOutlineData = outlineToSave ? { ...outlineToSave, outline: numberOutline(outlineToSave.outline) } : outlineToSave;
       saveOutlineData(outlineToSave);
       if (!outlineToSave?.outline?.length) {
@@ -2161,13 +2328,19 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
           phase: 'planning',
           direct_generation_item_ids: keepLeafIds([...(retainedRuntime.direct_generation_item_ids || []), ...newLeafIds]),
           pending_item_ids: keepLeafIds([...(retainedRuntime.pending_item_ids || []), ...(generationStarted ? newLeafIds : [])]),
+          // 商务模版填写与 AI 小节无关，局部目录变更保留其状态；规则和页码不保留，变为待编制。
+          ...(previousRuntime.business_fill ? { business_fill: previousRuntime.business_fill } : {}),
         }) });
       }
     });
     transaction();
+    if (invalidatesRulePage) agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
     if (invalidatesContentTask) {
       agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
-      if (clearAll) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+      if (clearAll) {
+        agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+        agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
+      }
       cleanupOriginalImageBatches();
     }
     const savedContentRuntime = safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);
@@ -2185,6 +2358,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const normalizedGlobalFacts = normalizeGlobalFactGroups(globalFacts);
     let savedTask;
     const transaction = createContentWordTransaction((wordChanges) => {
+      assertRulePageCompileIdle('保存全局事实');
       replaceGlobalFacts(normalizedGlobalFacts);
       clearContentGenerationState(wordChanges);
       const timestamp = now();
@@ -2214,25 +2388,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function saveContentGenerationOptions(contentGenerationOptions) {
     const saved = saveGenerationConfig({ contentGenerationOptions });
     return { contentGenerationOptions: saved.contentGenerationOptions };
-  }
-
-  function saveChapterContent({ nodeId, content }) {
-    const transaction = db.transaction(() => {
-      assertContentEditingAllowed();
-      const timestamp = now();
-      const node = db.prepare('SELECT node_id, title FROM technical_plan_outline_nodes WHERE node_id = ?').get(nodeId);
-      if (!node) throw new Error('当前目录中未找到该章节');
-      const nextContent = String(content || '');
-      db.prepare('UPDATE technical_plan_outline_nodes SET content = ?, updated_at = ? WHERE node_id = ?').run(nextContent, timestamp, nodeId);
-      db.prepare(`
-        INSERT INTO technical_plan_content_sections (node_id, status, error, updated_at)
-        VALUES (?, ?, NULL, ?)
-        ON CONFLICT(node_id) DO UPDATE SET status = excluded.status, error = NULL, updated_at = excluded.updated_at
-      `).run(nodeId, nextContent.trim() ? 'success' : 'idle', timestamp);
-    });
-    transaction();
-    cleanupOriginalImageBatches();
-    return {};
   }
 
   async function runBeforeCommit(beforeCommit) {
@@ -2675,7 +2830,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveOutline,
     saveGlobalFacts,
     saveContentGenerationOptions,
-    saveChapterContent,
     clearBidTemplate,
     // 正文 Word 直接保存到技术方案业务目录，独立于 Agent 会话。
     getContentWordOutputDir() {
@@ -2686,6 +2840,16 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         .map((file) => String(file.sourceDocxPath || '').trim())
         .filter((item) => item && fs.existsSync(resolveMarkdownPath(item)));
     },
+    // 没有 Word 原件的招标文件（如 PDF）只有解析后的 Markdown，混合导入时供一级目录与 Word 原文结构一并阅读。
+    listTenderSourceMarkdownsWithoutDocx() {
+      return loadTenderSourceFiles()
+        .filter((file) => {
+          const docxPath = String(file.sourceDocxPath || '').trim();
+          return !docxPath || !fs.existsSync(resolveMarkdownPath(docxPath));
+        })
+        .map((file) => ({ fileName: file.fileName, markdown: readTenderSourceMarkdown(file.id) }))
+        .filter((file) => file.markdown.trim());
+    },
     getBidTemplateRelativePath() {
       return bidTemplateRelativePath;
     },
@@ -2695,6 +2859,34 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     getBidTemplateFieldsRelativePath() {
       return bidTemplateFieldsRelativePath;
     },
+    getBidTemplateBlankRelativePath() {
+      return bidTemplateBlankRelativePath;
+    },
+    // 商务生成模板写入的 base 底稿位置。
+    getBidTemplateGeneratedBaseRelativePath() {
+      return bidTemplateBaseRelativePath;
+    },
+    // 回填、确认弹窗版式和整本导出的底稿：有商务生成模板时为 base 底稿，否则为提取底稿。
+    getBidTemplateBaseRelativePath() {
+      return fs.existsSync(bidTemplateBasePath) ? bidTemplateBaseRelativePath : bidTemplateBlankRelativePath;
+    },
+    readBidTemplateFields,
+    ensureBidTemplateBlank,
+    saveBidTemplateFieldValues,
+    readRulePageTables,
+    saveRulePageTables,
+    saveGeneratedTemplates,
+    resetRulePageTables: createContentWordTransaction(changes => stageRulePageReset(changes)),
+    readContentGenerationRuntime() {
+      return safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);
+    },
+    // 只替换正文运行时中的商务模版填写状态，其余运行时字段保持不变。
+    saveBusinessFillRuntime(businessFill) {
+      const runtime = { ...(safeJsonParse(readMetaRow().content_generation_runtime_json, {}) || {}), business_fill: businessFill };
+      updateMeta({ content_generation_runtime_json: JSON.stringify(runtime) });
+      return runtime;
+    },
+    resetBusinessTemplateFill: createContentWordTransaction(changes => stageBusinessTemplateReset(changes)),
     hasBidTemplate() {
       return fs.existsSync(bidTemplatePath) && fs.existsSync(bidTemplateFieldsPath);
     },

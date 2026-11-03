@@ -195,7 +195,7 @@ function buildPendingContentModeParagraph(item, context) {
   if (String(item?.content || '').trim()) return null;
   const message = getPendingContentModeMessage(item);
   return message
-    ? paragraph([textRun(`[${message}]`, {
+    ? paragraph([textRun(formatPendingMark(message), {
       font: context.bodyRunFont,
       size: context.bodyRunSize,
       color: '8A650B',
@@ -204,17 +204,24 @@ function buildPendingContentModeParagraph(item, context) {
     : null;
 }
 
-/** 各导出路径共用尚未填写的节点提示。 */
+/** 程序写入导出 Word 的待补充提示，与正文和商务占位统一为【待填写：说明】，导出后搜索一个关键词即可逐项处理。 */
+function formatPendingMark(note) {
+  return `【待填写：${note}】`;
+}
+
+/** 各导出路径共用尚未填写的节点提示说明，由 formatPendingMark 包成统一标记。 */
 function getPendingContentModeMessage(item) {
   let message = '';
   if (item?.content_mode === 'template-fill') {
-    message = '待模板填写：后续将从招标文件提取并填充内容。';
+    message = '按招标文件格式补充本节内容';
+  } else if (item?.content_mode === 'rule-page') {
+    message = '按招标文件要求逐项编制本节并填写页码';
   } else if (item?.content_mode === 'directory-generate') {
-    message = '待目录生成：请在导出后生成或更新目录。';
+    message = '生成或更新目录';
   } else if (item?.content_mode === 'manual-fill') {
-    message = '待人工填写：请在导出后补充内容。';
+    message = '补充本节内容';
   } else if (item?.content_mode === 'other') {
-    message = `待处理：${String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式。'}`;
+    message = String(item?.content_mode_note || '').trim() || '该小节采用其他特殊处理模式';
   }
   return message;
 }
@@ -2739,45 +2746,6 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-/** 保留图片来源的扩展名，助手在文件头无法识别时按扩展名声明的类型原样嵌入。 */
-function imageExtensionFromSource(source) {
-  const dataUrl = /^data:([^;,]+)/i.exec(source);
-  if (dataUrl) return mime.extension(dataUrl[1]) || '';
-  return path.extname(source.split(/[?#]/)[0]).slice(1).toLowerCase();
-}
-
-/**
- * 非 AI 节点仍读取已有 Markdown；复用现有图片解析。
- * 单张图片读取失败时原位改为文字提示，原因写入 context.imageFailures，其余正文照常导出。
- */
-async function renderMarkdownForRestrictedHtml(content, assets, context) {
-  const $ = cheerio.load(await renderMarkdownHtml(content, { allowRawHtml: true, enableGfm: true }), null, false);
-  for (const img of $('img').toArray()) {
-    const source = $(img).attr('src') || '';
-    const alt = $(img).attr('alt') || '';
-    let loaded;
-    try {
-      loaded = normalizeImageForDocx(await loadImage(source, context));
-      if (!loaded?.buffer?.length) throw new Error('图片文件不存在或为空');
-    } catch (error) {
-      context.imageFailures.push(error.message);
-      const notice = $('<em>').text(alt ? `[图片无法导出：${alt}]` : '[图片无法导出]');
-      if ($(img).parent().is('p') && $(img).parent().contents().length === 1) $(img).parent().replaceWith($('<p>').append(notice));
-      else $(img).replaceWith(notice);
-      continue;
-    }
-    const ref = `export-images/${assets.size}.${loaded.type || imageExtensionFromSource(source) || 'png'}`;
-    assets.set(ref, loaded.buffer);
-    const figure = $('<figure data-yb-size="wide" data-yb-fit="contain"></figure>');
-    figure.append($('<img>').attr('data-yb-asset-ref', ref));
-    if ($(img).attr('alt')) figure.append($('<figcaption>').text($(img).attr('alt')));
-    // 块级 figure 不能放在 Markdown 图片默认的 p 中。
-    if ($(img).parent().is('p') && $(img).parent().contents().length === 1) $(img).parent().replaceWith(figure);
-    else $(img).replaceWith(figure);
-  }
-  return $.html();
-}
-
 function createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport } = {}) {
   return {
     // 导出前检查技术方案正文，问题交给原正文任务后结束本次导出。
@@ -2885,8 +2853,8 @@ module.exports = {
   buildDocxResult,
   createExportService,
   collectOutlineExportEntries,
+  formatPendingMark,
   getPendingContentModeMessage,
-  renderMarkdownForRestrictedHtml,
 };
 
 // 独立运行本文件可检查原生间距、章节页框和样式范围，不读写用户文件。
@@ -3022,7 +2990,7 @@ if (require.main === module) {
       const $ = cheerio.load(zip.readAsText('word/document.xml'), { xmlMode: true });
       const rels = cheerio.load(zip.readAsText('word/_rels/document.xml.rels'), { xmlMode: true });
       const isWhole = scope === 'document';
-      for (const text of ['混合父标题', '待人工填写', '待处理', '框外子标题']) {
+      for (const text of ['混合父标题', '【待填写：补充本节内容】', '【待填写：该小节采用其他特殊处理模式】', '框外子标题']) {
         const p = $('w\\:p').filter((_, node) => $(node).text().includes(text)).first();
         assert.equal(p.find('w\\:pBdr').length, isWhole ? 1 : 0);
       }

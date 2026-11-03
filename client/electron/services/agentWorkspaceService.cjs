@@ -12,7 +12,7 @@ function isActiveTaskStatus(status) {
   return status === 'running' || status === 'pausing';
 }
 
-// 技术方案 AI 正文使用生成记录判断；底稿、非 AI 正文和可研仍读取 content。
+// 技术方案 AI 正文使用生成记录判断；底稿和可研仍读取 content。
 function hasGeneratedBody(items, plan = {}) {
   return Boolean(plan.contentGenerationTask?.stats?.content?.generation_completed) || (items || []).some(item => (
     item?.children?.length
@@ -118,6 +118,8 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     'bid-analysis': '招标文件解析',
     'outline-generation': '目录生成',
     'outline-adjustment': '目录AI调整',
+    'bid-template-extraction': '投标模版提取',
+    'rule-page-compile': '规则和页码编制',
     'global-facts-generation': '全局事实设定',
     'global-facts-adjustment': '全局事实AI调整',
     'content-generation': '正文生成',

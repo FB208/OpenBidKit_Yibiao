@@ -74,7 +74,7 @@ const tasks = [
 工作要求：保持信息全面准确，尽量使用招标文件中的内容；只关注与项目实施有关的内容，不提取商务信息；直接返回整理好的项目概述。`,
   },
   {
-    id: 'techRequirements', label: '技术评分要求', required: true, output: 'markdown', description: '提取技术评分项、权重分值、评分标准和招标文件中的位置。',
+    id: 'techRequirements', label: '技术评分要求', required: false, requiredIn: ['response-file', 'standalone-technical'], output: 'markdown', description: '提取技术评分项、权重分值、评分标准和招标文件中的位置。',
     prompt: () => `任务：提取技术评分信息，并按语义区分“技术评分项”和“技术评分要求”。
 
 重点识别“技术评分”“评标方法”“评分标准”“技术参数”“技术要求”“技术方案”“技术部分”“评审要素”相关章节，不要提取商务、价格、资质等无关条目。
@@ -144,14 +144,46 @@ const tasks = [
   { id: 'complianceCheck', label: '符合性检查', required: false, output: 'markdown', description: '文件完整性、有效性、规范和偏差处理要求。', prompt: () => '任务：总结招标文件中关于符合性检查的信息，包括文件完整性、文件有效性、文件规范、偏差处理等。整理成 Markdown，不要使用表格。仅输出整理结果。' },
   { id: 'openBid', label: '开标要求', required: false, output: 'json', description: '开标时间地点、参与要求、无效标和流程。', prompt: () => jsonTask('提取开标信息', '提取时间地点、参与要求、无效标认定、异议处理、开标流程。', `{"time_place":"时间地点","part_req":"参与要求","invalid_bid":"无效标认定","objection":"异议处理","bid_process":"开标流程"}`) },
   { id: 'evaluationBid', label: '评标要求', required: false, output: 'json', description: '评标委员会、评分构成、方法和原则。', prompt: () => jsonTask('提取评标信息', '提取评标委员会组成、职责、评分构成、评标方法类型、评标原则和方法细节、其他评标相关说明。', `{"committee":"评标委员会组成","duties":"评标委员会职责","scoring":"评分构成","method":"评标方法类型","principles":"评标原则和方法细节","others":"其他和评标相关的说明"}`) },
-  { id: 'businessScoring', label: '商务评分要求', required: false, output: 'markdown', description: '商务评分因素，为商务方案准备。', prompt: () => '任务：提取招标文件中的商务评分因素，为编写投标文件中的商务方案做准备。整理成 Markdown，不要使用表格。仅输出整理结果。' },
+  {
+    id: 'businessScoring', label: '商务评分要求', required: false, requiredIn: ['response-file', 'standalone-business'], output: 'markdown', description: '提取技术评分以外的评分项、分值、评分标准和招标文件中的位置。',
+    prompt: () => `任务：提取技术评分以外的评分信息（商务、资信、业绩、服务承诺、价格等），并按语义区分“商务评分项”和“商务评分要求”。
+
+分类原则：
+1. 商务评分项：评分表中技术评分以外的每一个具体评分项，例如价格、业绩、资质证书、人员资格、服务承诺、商务条款偏离等。
+2. 商务评分要求：约束上述评分的通用规则或说明，例如证明材料要求、扣分或判定口径、计分方法、表后说明等。
+3. 技术评分项和只适用于技术评分的规则不在本项提取。
+4. 若原文存在层级关系，请保持顺序和来源，不要自行合并不相关条款。
+
+输出格式：
+
+## 商务评分项
+
+【评分项名称】：<招标文件描述，保留原文用语>
+【权重/分值】：<具体分值或占比>
+【评分标准】：<详细规则>
+【数据来源】：<章节、条款、页码或表格位置>
+
+## 商务评分要求
+
+【评分要求名称】：<要求或规则名称>
+【适用范围】：<适用于哪些评分项或评审环节>
+【要求/判定口径】：<具体要求、解释、扣分或判定规则>
+【数据来源】：<章节、条款、页码或表格位置>
+
+若某一类没有内容，请保留对应标题并写“没有提及”。直接返回提取结果。`,
+  },
   { id: 'discardedBids', label: '无效标与废标项', required: false, output: 'markdown', description: '投标无效、废标相关风险项。', prompt: buildInvalidBidAndRejectionItemsPrompt },
   { id: 'signingProcess', label: '合同授予与签订', required: false, output: 'json', description: '中标公示、合同签订、履约保证金和合同文本。', prompt: () => jsonTask('提取合同授予和签订流程', '提取中标公示、合同签订、履约保证金、合同文本等信息。', `{"bid_notice":"中标公示","contract_sign":"合同签订","performance_bond":"履约保证金","contract_text":"合同文本"}`) },
   { id: 'terminationCondition', label: '合同解除和终止', required: false, output: 'json', description: '违约解除、不可抗力、合同终止和争议解决。', prompt: () => jsonTask('提取合同解除和终止条件', '提取违约解除、不可抗力、合同终止、争议解决等信息。', `{"breach_termination":"违约解除","force_majeure":"不可抗力","contract_termination":"合同终止","dispute_resolution":"争议解决"}`) },
 ];
 
-function getBidAnalysisTasks(mode) {
-  return mode === 'full' ? tasks : tasks.filter((task) => task.required);
+// 必选解析项：带 requiredIn 的按生成类型决定（技术评分要求、商务评分要求），其余看 required。
+function isRequiredBidAnalysisTask(task, outlineMode) {
+  return task.requiredIn ? task.requiredIn.includes(outlineMode) : task.required;
+}
+
+function getBidAnalysisTasks(mode, outlineMode) {
+  return mode === 'full' ? tasks : tasks.filter((task) => isRequiredBidAnalysisTask(task, outlineMode));
 }
 
 function normalizeBidAnalysisTaskIds(taskIds) {
@@ -161,8 +193,8 @@ function normalizeBidAnalysisTaskIds(taskIds) {
   return tasks.filter((task) => requestedIds.has(task.id)).map((task) => task.id);
 }
 
-function normalizeBidAnalysisConfig(mode, selectedTaskIds) {
-  const requiredTaskIds = getBidAnalysisTasks('key').map((task) => task.id);
+function normalizeBidAnalysisConfig(mode, selectedTaskIds, outlineMode) {
+  const requiredTaskIds = getBidAnalysisTasks('key', outlineMode).map((task) => task.id);
   const requiredSet = new Set(requiredTaskIds);
   const selectedSet = new Set([...requiredTaskIds, ...normalizeBidAnalysisTaskIds(selectedTaskIds)]);
   const selectedIds = tasks.filter((task) => selectedSet.has(task.id)).map((task) => task.id);
@@ -271,7 +303,9 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
 }
 
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, checkpointTask, payload }) {
-  const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds);
+  const storedPlanForHint = workspaceStore.loadTechnicalPlan() || {};
+  const outlineMode = storedPlanForHint.outlineMode;
+  const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds, outlineMode);
   const mode = config.mode;
   const selectedTaskIdSet = new Set(config.taskIds);
   const selectedTasks = tasks.filter((task) => selectedTaskIdSet.has(task.id));
@@ -279,7 +313,6 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, check
   if (!String(fileContent || '').trim()) {
     throw new Error('请先上传招标文件，再开始解析');
   }
-  const storedPlanForHint = workspaceStore.loadTechnicalPlan() || {};
   if (storedPlanForHint.bidSectionMode === 'multiple') {
     if (storedPlanForHint.bidSectionExtractionStatus !== 'success' || !Array.isArray(storedPlanForHint.bidSections) || storedPlanForHint.bidSections.length < 2) {
       throw new Error('请先完成多标段识别，再开始解析招标文件');
@@ -317,7 +350,7 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, check
   }
 
   function getMissingRequiredTasks(nextTasks) {
-    return tasks.filter((task) => task.required && !(nextTasks[task.id]?.status === 'success' && String(nextTasks[task.id]?.content || '').trim()));
+    return tasks.filter((task) => isRequiredBidAnalysisTask(task, outlineMode) && !(nextTasks[task.id]?.status === 'success' && String(nextTasks[task.id]?.content || '').trim()));
   }
 
   const initialMessage = requestedTaskIds
@@ -454,10 +487,12 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, check
 }
 
 module.exports = {
+  MARKDOWN_MISSING_RESULT,
   buildInvalidBidAndRejectionItemsPrompt,
   buildTenderContextMessages,
   getBidAnalysisTaskById,
   getBidAnalysisTasks,
+  isRequiredBidAnalysisTask,
   runInvalidBidAndRejectionItemsExtraction,
   runBidAnalysisTask,
   runBidAnalysisPromptTask,

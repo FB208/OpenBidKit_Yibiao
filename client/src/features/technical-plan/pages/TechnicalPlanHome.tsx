@@ -8,19 +8,16 @@ import GlobalFactsPage from './GlobalFactsPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { generationSettingsTabs, type GenerationSettingsTab } from '../generationSettingsTabs';
-import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getRequiredBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
-import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
+import type { BackgroundTaskState, BidAnalysisTasks, BidTemplateInspection, BusinessFillReviewSubmission, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
+import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
-import type { SectionId } from '../../../shared/types/navigation';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
 
 interface TechnicalPlanHomeProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
-  /** 导出 Word 后一键进入暗标合规检查。 */
-  onNavigate?: (section: SectionId) => void;
 }
 
 interface OutlineSortGuard {
@@ -28,6 +25,8 @@ interface OutlineSortGuard {
   saveSort: () => Promise<void>;
   discardSort: () => void;
 }
+
+type BidTemplateMismatchChoice = 'extract' | 'continue' | 'cancel';
 
 interface WordControlWarningMetric {
   label: string;
@@ -68,6 +67,12 @@ function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
 }
 
+// 全局事实只服务 AI 正文的统一口径；目录已生成但没有 AI 小节时跳过该步骤。
+function shouldSkipGlobalFacts(outlineData: OutlineData | null | undefined) {
+  return Boolean(outlineData?.outline?.length)
+    && !collectLeafItems(outlineData?.outline || []).some((item) => item.content_mode === 'ai-generate');
+}
+
 function isOutlineLeafCountOutsideRange(outlineData: OutlineData, options: OutlineWordControlOptions) {
   if (options.minimumWords === 0 && options.maximumWords === 0) return false;
   const effectiveSectionWords = options.sectionWords > 0 ? options.sectionWords : 3000;
@@ -98,7 +103,6 @@ const initialExportProgress: ExportProgressState = {
 };
 
 const MAX_UI_TASK_LOGS = 80;
-const requiredBidAnalysisTasks = getBidAnalysisTasks('key');
 
 function hasOwnField<T extends object>(value: T, field: PropertyKey) {
   return Object.prototype.hasOwnProperty.call(value, field);
@@ -154,8 +158,8 @@ function buildWordControlWarningDialog(task: BackgroundTaskState): WordControlWa
   return null;
 }
 
-function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks) {
-  return requiredBidAnalysisTasks.every((task) => {
+function areRequiredBidAnalysisTasksReady(tasks: BidAnalysisTasks, outlineMode: OutlineMode) {
+  return getRequiredBidAnalysisTasks(outlineMode).every((task) => {
     const state = tasks[task.id];
     return state?.status === 'success' && state.content.trim();
   });
@@ -173,7 +177,7 @@ function updateOutlineItemContent(items: OutlineItem[], itemId: string, content:
   });
 }
 
-function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHomeProps) {
+function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { hydrated, state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
@@ -184,6 +188,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
   const [exportTemplateEditorOpen, setExportTemplateEditorOpen] = useState(false);
   const [sortLeaveDialogOpen, setSortLeaveDialogOpen] = useState(false);
   const [outlineWordControlLeaveDialogOpen, setOutlineWordControlLeaveDialogOpen] = useState(false);
+  const [bidTemplateMismatch, setBidTemplateMismatch] = useState<BidTemplateInspection | null>(null);
   const [wordControlWarningDialog, setWordControlWarningDialog] = useState<WordControlWarningDialogState | null>(null);
   const [pendingWordControlWarningTaskId, setPendingWordControlWarningTaskId] = useState<string | null>(null);
   const [savingSortBeforeLeave, setSavingSortBeforeLeave] = useState(false);
@@ -196,11 +201,13 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
   const sortGuardRef = useRef<OutlineSortGuard | null>(null);
   const sortLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const outlineWordControlLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const bidTemplateMismatchResolverRef = useRef<((choice: BidTemplateMismatchChoice) => void) | null>(null);
   const shownWordControlWarningTaskIdsRef = useRef(new Set<string>());
-  const steps = technicalPlanSteps;
+  const skipGlobalFacts = shouldSkipGlobalFacts(state.outlineData);
+  const steps = skipGlobalFacts ? technicalPlanSteps.filter((step) => step !== 'global-facts') : technicalPlanSteps;
   const activeIndex = Math.max(0, steps.indexOf(state.step));
   const activeStepNumber = String(activeIndex + 1).padStart(2, '0');
-  const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks);
+  const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks, state.outlineMode);
   const isBidSectionExtractionRunning = state.bidSectionExtractionTask?.status === 'running' || state.bidSectionExtractionTask?.status === 'pausing';
   const isBidAnalysisTaskRunning = state.bidAnalysisTask?.status === 'running' || state.bidAnalysisTask?.status === 'pausing';
   const selectedBidSectionValid = state.bidSectionMode !== 'multiple'
@@ -210,8 +217,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
   const technicalScoreMissing = state.bidAnalysisTasks.techRequirements?.status === 'success'
     && isMissingTechnicalScoreItems(state.bidAnalysisTasks.techRequirements.content);
+  // 技术评分项缺失另有无技术评分项模式；商务评分要求整项缺失（如最低价法）按没有商务评分处理，都不拦截下一步。
   const firstMissingBidAnalysisTask = bidAnalysisTasks.find((task) => (
     task.id !== 'techRequirements'
+    && task.id !== 'businessScoring'
     && state.bidAnalysisSelectedTaskIds.includes(task.id)
     && isMissingBidAnalysisResult(task, state.bidAnalysisTasks[task.id]?.content)
   ));
@@ -220,6 +229,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
   const globalFactsHasPlaceholder = Boolean(firstGlobalFactWithPlaceholder);
   const isGlobalFactsAdjusting = state.globalFactsAdjustmentTask?.status === 'running' || state.globalFactsAdjustmentTask?.status === 'pausing';
   const contentTaskStatus = state.contentGenerationTask?.status;
+  const isBidTemplateExtracting = state.bidTemplateExtractionTask?.status === 'running' || state.bidTemplateExtractionTask?.status === 'pausing';
   // AI 正文在会话 HTML 中；已完成记录及生成中保存的进度都需要清空确认。
   const hasGeneratedBody = Boolean(state.contentGenerationTask?.stats?.content?.generation_completed)
     || collectLeafItems(state.outlineData?.outline || []).some(item => item.content_mode === 'ai-generate' && (
@@ -233,6 +243,8 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
     ['招标文件解析', state.bidAnalysisTask],
     ['目录生成', state.outlineGenerationTask],
     ['目录AI调整', state.outlineAdjustmentTask],
+    ['投标模版提取', state.bidTemplateExtractionTask],
+    ['规则和页码编制', state.rulePageCompileTask],
     ['全局事实设定', state.globalFactsTask],
     ['全局事实AI调整', state.globalFactsAdjustmentTask],
     ['正文生成', state.contentGenerationTask],
@@ -245,7 +257,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.tenderFile)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
-    || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot))
+    || (state.step === 'outline-generation' && (!state.outlineData || !state.outlineWordControlSnapshot || isBidTemplateExtracting))
     || (state.step === 'global-facts' && (!globalFactsReady || isGlobalFactsAdjusting));
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
@@ -265,6 +277,8 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
                     ? '目录生成完成后才能进入全局事实设定'
                     : state.step === 'outline-generation' && !state.outlineWordControlSnapshot
                       ? '当前目录缺少字数控制生效配置，请重新生成目录'
+                    : state.step === 'outline-generation' && isBidTemplateExtracting
+                      ? '投标模版正在重新提取，请等待结束后再进入下一步'
                     : state.step === 'global-facts' && isGlobalFactsAdjusting
                       ? '全局事实正在 AI 调整，请等待结束后再进入正文生成'
                     : state.step === 'global-facts' && !globalFactsReady
@@ -292,6 +306,29 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
     return new Promise<boolean>((resolve) => {
       outlineWordControlLeaveResolverRef.current = resolve;
     });
+  };
+
+  const resolveBidTemplateMismatch = (choice: BidTemplateMismatchChoice) => {
+    bidTemplateMismatchResolverRef.current?.(choice);
+    bidTemplateMismatchResolverRef.current = null;
+    setBidTemplateMismatch(null);
+  };
+
+  // 目录中的商务节点与投标模版不一致时，由用户决定重新提取、照常继续或留在目录页。
+  const confirmBidTemplateMismatch = (inspection: BidTemplateInspection) => {
+    setBidTemplateMismatch(inspection);
+    return new Promise<BidTemplateMismatchChoice>((resolve) => {
+      bidTemplateMismatchResolverRef.current = resolve;
+    });
+  };
+
+  const startBidTemplateExtraction = async () => {
+    try {
+      await window.yibiao!.tasks.startBidTemplateExtraction();
+      showToast('投标模版提取已在后台启动', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启动投标模版提取失败', 'error');
+    }
   };
 
   const confirmSortLeaveOnly = useCallback(async () => {
@@ -343,6 +380,15 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
     void window.yibiao?.ui?.setCurrentView({ section: 'technical-plan', step: state.step });
   }, [hydrated, state.originalPlanFile, state.step]);
 
+  // 停在已跳过的全局事实步骤时退回目录生成，避免步骤序号和上一步、下一步错位。
+  useEffect(() => {
+    if (!hydrated || !skipGlobalFacts || state.step !== 'global-facts') return;
+    setState((prev) => ({ ...prev, step: 'outline-generation' }));
+    window.yibiao?.technicalPlan.updateStep('outline-generation').catch((error) => {
+      showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
+    });
+  }, [hydrated, setState, showToast, skipGlobalFacts, state.step]);
+
   useEffect(() => {
     if (!hydrated || wordControlWarningDialog) return;
     const currentStepTask = state.step === 'outline-generation'
@@ -387,7 +433,9 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
       return;
     }
 
-    if (state.step === 'outline-generation' && step === 'global-facts') {
+    let targetStep = step;
+    // 从目录生成进入下一步前核对最新目录，并按其是否有 AI 小节决定进入全局事实还是生成正文。
+    if (state.step === 'outline-generation' && (step === 'global-facts' || step === 'content-edit')) {
       const latestState = await window.yibiao!.technicalPlan.loadState();
       setState((prev) => ({ ...prev, ...latestState }));
       const finalOutlineData = latestState.outlineData;
@@ -396,10 +444,26 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
         showToast('当前目录缺少字数控制生效配置，请重新生成目录后再进入下一步', 'info');
         return;
       }
+      // 整本导出只在一个“目录生成”小节处生成目录。
+      const tocItems = collectLeafItems(finalOutlineData?.outline || []).filter((item) => item.content_mode === 'directory-generate');
+      if (tocItems.length > 1) {
+        showToast(`目录中有 ${tocItems.length} 个“目录生成”小节（${tocItems.map((item) => `${item.number} ${item.title}`).join('、')}），整本导出只能生成一个目录，请删除多余的小节或改为其他处理方式`, 'error');
+        return;
+      }
       if (finalOutlineData && snapshot && isOutlineLeafCountOutsideRange(finalOutlineData, snapshot)) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;
       }
+      const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
+      if (inspection.added.length || inspection.changed.length) {
+        const choice = await confirmBidTemplateMismatch(inspection);
+        if (choice === 'cancel') return;
+        if (choice === 'extract') {
+          await startBidTemplateExtraction();
+          return;
+        }
+      }
+      targetStep = shouldSkipGlobalFacts(finalOutlineData) ? 'content-edit' : 'global-facts';
     }
 
     // 进入生成设置时决定落在哪个页签：默认第一项，从后一步退回时落在最后一项。
@@ -407,8 +471,8 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
       setGenerationSettingsTab(options?.generationSettingsTab ?? 'content');
     }
 
-    setState((prev) => ({ ...prev, step }));
-    window.yibiao?.technicalPlan.updateStep(step).catch((error) => {
+    setState((prev) => ({ ...prev, step: targetStep }));
+    window.yibiao?.technicalPlan.updateStep(targetStep).catch((error) => {
       showToast(error instanceof Error ? error.message : '保存技术方案步骤失败', 'error');
     });
   };
@@ -528,6 +592,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : (outlineDataChanged ? {} : prev.contentGenerationPlans),
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : (outlineDataChanged ? undefined : prev.contentGenerationRuntime),
             bidTemplateExists: hasOwnField(technicalPlan, 'bidTemplateExists') ? Boolean(technicalPlan.bidTemplateExists) : prev.bidTemplateExists,
+            bidTemplateChapterIds: hasOwnField(technicalPlan, 'bidTemplateChapterIds') ? technicalPlan.bidTemplateChapterIds : prev.bidTemplateChapterIds,
           };
         }
 
@@ -540,6 +605,23 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
             contentGenerationTask: hasOwnField(technicalPlan, 'contentGenerationTask') ? trimTaskLogs(technicalPlan.contentGenerationTask) : prev.contentGenerationTask,
             contentGenerationSections: hasOwnField(technicalPlan, 'contentGenerationSections') ? (technicalPlan.contentGenerationSections || {}) : prev.contentGenerationSections,
             contentGenerationPlans: hasOwnField(technicalPlan, 'contentGenerationPlans') ? (technicalPlan.contentGenerationPlans || {}) : prev.contentGenerationPlans,
+            contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
+          };
+        }
+
+        if (taskType === 'bid-template-extraction') {
+          return {
+            ...prev,
+            bidTemplateExtractionTask: trimTaskLogs(technicalPlan.bidTemplateExtractionTask) || latestTask,
+            bidTemplateExists: hasOwnField(technicalPlan, 'bidTemplateExists') ? Boolean(technicalPlan.bidTemplateExists) : prev.bidTemplateExists,
+            bidTemplateChapterIds: hasOwnField(technicalPlan, 'bidTemplateChapterIds') ? technicalPlan.bidTemplateChapterIds : prev.bidTemplateChapterIds,
+          };
+        }
+
+        if (taskType === 'rule-page-compile') {
+          return {
+            ...prev,
+            rulePageCompileTask: trimTaskLogs(technicalPlan.rulePageCompileTask) || latestTask,
             contentGenerationRuntime: hasOwnField(technicalPlan, 'contentGenerationRuntime') ? technicalPlan.contentGenerationRuntime : prev.contentGenerationRuntime,
           };
         }
@@ -734,19 +816,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
     }
   };
 
-  // 整本导出后一键暗标检查：把导出的 Word 交给暗标合规检查，进入检查结果后按当前预设自动检查。
-  const checkExportedFileForBlindBid = async () => {
-    if (!exportProgress.filePath || !onNavigate) return;
-    try {
-      await window.yibiao.blindCheck.importFile(exportProgress.filePath);
-      await window.yibiao.blindCheck.saveUiState({ step: 'results' });
-      setExportProgress(initialExportProgress);
-      onNavigate('blind-check');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '导入暗标合规检查失败', 'error');
-    }
-  };
-
   // 使用“长嘛样”保存的模板直接导出，不再临时改选。
   const exportWordWithConfiguredTemplate = async () => {
     const templateId = state.exportTemplateId.trim();
@@ -761,34 +830,9 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
     setExportTemplateEditorOpen(true);
   };
 
-  const saveChapterContent = async (item: OutlineItem, content: string) => {
-    if (!state.outlineData?.outline?.length) {
-      throw new Error('当前没有可保存的目录');
-    }
-
-    const updatedOutlineData = {
-      ...state.outlineData,
-      outline: updateOutlineItemContent(state.outlineData.outline, item.id, content),
-    };
-    const updatedSections = {
-      ...state.contentGenerationSections,
-      [item.id]: {
-        id: item.id,
-        number: item.number,
-        title: item.title || '未命名章节',
-        status: content.trim() ? 'success' as const : 'idle' as const,
-        content,
-        updated_at: new Date().toISOString(),
-      },
-    };
-
-    setState((prev) => ({
-      ...prev,
-      outlineData: updatedOutlineData,
-      contentGenerationSections: updatedSections,
-    }));
-    const saved = await window.yibiao?.technicalPlan.saveChapterContent({ nodeId: item.id, content });
-    if (saved) setState((prev) => ({ ...prev, ...saved }));
+  const saveBusinessFillReview = async (submission: BusinessFillReviewSubmission) => {
+    const saved = await window.yibiao!.technicalPlan.saveBusinessFillReview(submission);
+    setState((prev) => ({ ...prev, ...saved }));
   };
 
   // 无论操作成功或失败，都读取后台完整快照，让正文及 Word 缓存跟随实际状态。
@@ -924,7 +968,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
   const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
   const aiAdjustDisabled = isFactsAiStep
     ? !state.globalFacts.length || isGlobalFactsGenerating || isGlobalFactsAdjusting
-    : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting;
+    : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting || isBidTemplateExtracting;
   const aiAdjustTooltip = isFactsAiStep
     ? (isGlobalFactsAdjusting
       ? 'AI 正在按要求调整全局事实，请稍候'
@@ -933,6 +977,8 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
         : '通过桌宠 AI 对话调整当前全局事实')
     : (isOutlineAdjusting
       ? 'AI 正在按要求调整目录，请稍候'
+      : isBidTemplateExtracting
+        ? '投标模版正在重新提取，请等待结束后再调整目录'
       : isOutlineGenerating || !state.outlineData
         ? '目录生成结束后才能使用 AI 调整'
         : !state.outlineWordControlSnapshot
@@ -1087,6 +1133,19 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
         },
       ],
     }] : []),
+    ...((state.step === 'outline-generation' || state.step === 'content-edit') && state.bidTemplateExists ? [{
+      id: 'technical-plan-template',
+      actions: [
+        {
+          id: 'view-bid-template',
+          label: '查看投标模版',
+          icon: <ToolbarDocumentIcon />,
+          variant: 'secondary' as const,
+          tooltip: '在 Word 中查看投标模版；在 Word 中的手工修改会在回填时被覆盖',
+          onClick: () => { void openBidTemplate(); },
+        },
+      ],
+    }] : []),
     {
       id: 'technical-plan-navigation',
       actions: navigationActions,
@@ -1155,6 +1214,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
           stepNumber={activeStepNumber}
           hasTenderFile={Boolean(state.tenderFile)}
           mode={state.bidAnalysisMode}
+          outlineMode={state.outlineMode}
           selectedTaskIds={state.bidAnalysisSelectedTaskIds}
           bidSectionMode={state.bidSectionMode}
           bidSections={state.bidSections}
@@ -1186,10 +1246,10 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
           task={state.outlineGenerationTask}
           contentTaskStatus={state.contentGenerationTask?.status}
           aiAdjustmentRunning={isOutlineAdjusting}
+          templateExtractionTask={state.bidTemplateExtractionTask}
+          rulePageCompileTask={state.rulePageCompileTask}
           onOutlineSaved={saveOutline}
           onOutlineSelectionSaved={saveOutlineSelection}
-          bidTemplateExists={Boolean(state.bidTemplateExists)}
-          onOpenBidTemplate={openBidTemplate}
           onSortGuardChange={(guard) => {
             sortGuardRef.current = guard;
           }}
@@ -1204,6 +1264,7 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
           task={state.globalFactsTask}
           aiAdjustmentRunning={isGlobalFactsAdjusting}
           contentTaskStatus={contentTaskStatus}
+          rulePageCompileStatus={state.rulePageCompileTask?.status}
           hasGeneratedBody={hasGeneratedBody}
           focusGroupRequest={globalFactsFocusRequest}
           onGlobalFactsSaved={saveGlobalFacts}
@@ -1217,16 +1278,19 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
           outlineWordControlSnapshot={state.outlineWordControlSnapshot}
           outlineData={state.outlineData}
           task={state.contentGenerationTask}
+          rulePageCompileTask={state.rulePageCompileTask}
           contentGenerationRuntime={state.contentGenerationRuntime}
           contentGenerationOptions={state.contentGenerationOptions}
           exportTemplateId={state.exportTemplateId}
           sections={state.contentGenerationSections}
+          bidTemplateExists={Boolean(state.bidTemplateExists)}
+          bidTemplateChapterIds={state.bidTemplateChapterIds}
           onOpenGenerationSettingsAppearance={() => {
             void switchStep('generation-settings', { generationSettingsTab: 'appearance' });
           }}
           onContentGenerationOptionsChange={saveContentGenerationOptions}
           onContentGenerationReset={resetContentGeneration}
-          onContentSaved={saveChapterContent}
+          onBusinessFillReviewSave={saveBusinessFillReview}
         />
       )}
       {state.step === 'expand' && (
@@ -1319,6 +1383,42 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
         )}
       />
 
+      <AppDialog
+        open={Boolean(bidTemplateMismatch)}
+        onOpenChange={(open) => !open && resolveBidTemplateMismatch('cancel')}
+        kicker="投标模版"
+        title="目录与投标模版不一致"
+        description="当前投标模版中没有这些章节或填写方式不符，是否重新提取投标模版？重新提取会替换现有模版，耗时数分钟。"
+        cardClassName="bid-template-mismatch-card"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => resolveBidTemplateMismatch('continue')}>暂不提取，继续</button>
+            <button type="button" className="primary-action" onClick={() => resolveBidTemplateMismatch('extract')}>重新提取</button>
+          </>
+        )}
+      >
+        <div className="bid-template-mismatch-body">
+          {Boolean(bidTemplateMismatch?.added.length) && (
+            <section className="bid-template-mismatch-group">
+              <strong>{`新增 ${bidTemplateMismatch?.added.length} 个商务节点`}</strong>
+              <ul>
+                {bidTemplateMismatch?.added.map((item) => <li key={item.id}>{`${item.number} ${item.title}`}</li>)}
+              </ul>
+            </section>
+          )}
+          {Boolean(bidTemplateMismatch?.changed.length) && (
+            <section className="bid-template-mismatch-group">
+              <strong>{`${bidTemplateMismatch?.changed.length} 个节点的填写方式已变化`}</strong>
+              <ul>
+                {bidTemplateMismatch?.changed.map((item) => (
+                  <li key={item.id}>{`${item.number} ${item.title}（改为${item.rule_page ? '规则和页码' : item.auto_fill ? '自动填写' : '人工填写'}）`}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      </AppDialog>
+
 
       <Dialog.Root
         open={exportProgress.open}
@@ -1330,17 +1430,15 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
       >
         <Dialog.Portal>
           <Dialog.Overlay className="content-regenerate-modal" />
-          <Dialog.Content className="export-progress-card">
+          <Dialog.Content className="export-progress-card" aria-describedby={undefined}>
             <div className="content-regenerate-card-head">
               <span className="section-kicker">Word 导出</span>
               <Dialog.Title>{exportProgress.running ? '正在导出 Word' : exportProgress.error ? '导出失败' : exportProgress.filePath ? '导出完成' : '本次未导出'}</Dialog.Title>
-              <Dialog.Description>
-                正在按当前模板将正文、表格和图片写入整本 Word 文档。
-              </Dialog.Description>
             </div>
             <div className="export-progress-body">
               <ProgressBar value={exportProgress.progress} label={`Word 导出进度 ${exportProgress.progress}%`} />
-              <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
+              {/* 导出完成且有提示时，汇总消息与“需要核对”重复，只保留后者。 */}
+              {(exportProgress.running || exportProgress.error || !exportProgress.warnings.length) && <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>}
               {exportProgress.warnings.length > 0 && (
                 <div className="export-warning-list">
                   <strong>需要核对</strong>
@@ -1351,7 +1449,6 @@ function TechnicalPlanHome({ registerLeaveGuard, onNavigate }: TechnicalPlanHome
             </div>
             {!exportProgress.running && (
               <div className="content-regenerate-actions">
-                {!exportProgress.error && exportProgress.filePath && onNavigate && <button className="secondary-action" type="button" onClick={() => { void checkExportedFileForBlindBid(); }}>暗标合规检查</button>}
                 {!exportProgress.error && exportProgress.filePath && <button className="primary-action" type="button" onClick={() => { void handleOpenExportedFile(); }}>打开文件</button>}
                 <Dialog.Close className={exportProgress.filePath && !exportProgress.error ? 'secondary-action' : 'primary-action'} type="button">知道了</Dialog.Close>
               </div>

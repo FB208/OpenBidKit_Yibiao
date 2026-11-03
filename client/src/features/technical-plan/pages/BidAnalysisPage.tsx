@@ -1,15 +1,18 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
-import { bidAnalysisTasks, getBidAnalysisTasks, isMissingBidAnalysisResult } from '../services/bidAnalysisWorkflow';
+import { bidAnalysisTasks, getRequiredBidAnalysisTasks, isMissingBidAnalysisResult } from '../services/bidAnalysisWorkflow';
 import { MarkdownFullscreenViewer, MarkdownRenderer, ProgressBar, useToast } from '../../../shared/ui';
 import BidSectionSelectorDialog from '../components/BidSectionSelectorDialog';
 import type { BackgroundTaskState, BidAnalysisMode, BidAnalysisTasks, BidAnalysisTaskState, BidSectionExtractionStatus, BidSectionMode, DetectedBidSection, TechnicalPlanState } from '../types';
+import type { OutlineMode } from '../../../shared/types';
 
 interface BidAnalysisPageProps {
   stepNumber: string;
   hasTenderFile: boolean;
   mode: BidAnalysisMode;
+  /** 生成类型决定技术评分要求、商务评分要求是否必选。 */
+  outlineMode: OutlineMode;
   selectedTaskIds: string[];
   bidSectionMode: BidSectionMode;
   bidSections: DetectedBidSection[];
@@ -39,30 +42,29 @@ const modeOptions: Array<{ id: 'key' | 'full'; title: string; badge: string }> =
 ];
 
 const allBidAnalysisTaskIds = bidAnalysisTasks.map((task) => task.id);
-const requiredBidAnalysisTaskIds = getBidAnalysisTasks('key').map((task) => task.id);
-const requiredBidAnalysisTaskIdSet = new Set(requiredBidAnalysisTaskIds);
 
-function normalizeSelectedTaskIds(taskIds: string[]) {
-  const requestedIds = new Set(taskIds);
-  return allBidAnalysisTaskIds.filter((taskId) => requiredBidAnalysisTaskIdSet.has(taskId) || requestedIds.has(taskId));
+// 必选项随生成类型变化，由组件按 outlineMode 计算后传入。
+function normalizeSelectedTaskIds(taskIds: string[], requiredTaskIds: string[]) {
+  const requestedIds = new Set([...requiredTaskIds, ...taskIds]);
+  return allBidAnalysisTaskIds.filter((taskId) => requestedIds.has(taskId));
 }
 
-function getSelectedTaskIdsForMode(mode: BidAnalysisMode, taskIds: string[]) {
+function getSelectedTaskIdsForMode(mode: BidAnalysisMode, taskIds: string[], requiredTaskIds: string[]) {
   if (mode === 'full') {
     return allBidAnalysisTaskIds;
   }
   if (mode === 'custom') {
-    return normalizeSelectedTaskIds(taskIds);
+    return normalizeSelectedTaskIds(taskIds, requiredTaskIds);
   }
-  return requiredBidAnalysisTaskIds;
+  return requiredTaskIds;
 }
 
-function getModeForSelection(taskIds: string[]): BidAnalysisMode {
-  const selectedIds = normalizeSelectedTaskIds(taskIds);
+function getModeForSelection(taskIds: string[], requiredTaskIds: string[]): BidAnalysisMode {
+  const selectedIds = normalizeSelectedTaskIds(taskIds, requiredTaskIds);
   if (selectedIds.length === allBidAnalysisTaskIds.length) {
     return 'full';
   }
-  if (selectedIds.some((taskId) => !requiredBidAnalysisTaskIdSet.has(taskId))) {
+  if (selectedIds.some((taskId) => !requiredTaskIds.includes(taskId))) {
     return 'custom';
   }
   return 'key';
@@ -74,13 +76,20 @@ function getModeLabel(mode: BidAnalysisMode) {
   return '只解析关键项';
 }
 
-const taskGroups = [
-  { title: '关键项', ids: ['projectOverview', 'techRequirements', 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements', 'responseFileRequirements'] },
-  { title: '采购项', ids: ['procurementList'] },
-  { title: '投标流程', ids: ['keyInfo', 'marginInfo', 'openBid'] },
-  { title: '评审要求', ids: ['qualificationReview', 'complianceCheck', 'evaluationBid', 'businessScoring'] },
-  { title: '主体与合同', ids: ['agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
-];
+const scoringTaskIds = ['techRequirements', 'businessScoring'];
+
+// 评分要求在当前生成类型下必选时归入关键项，否则归入评审要求。
+function buildTaskGroups(requiredTaskIds: string[]) {
+  const keyScoringIds = scoringTaskIds.filter((taskId) => requiredTaskIds.includes(taskId));
+  const otherScoringIds = scoringTaskIds.filter((taskId) => !requiredTaskIds.includes(taskId));
+  return [
+    { title: '关键项', ids: ['projectOverview', ...keyScoringIds, 'projectInfo', 'partAInfo', 'deliveryAndServiceRequirements', 'responseFileRequirements'] },
+    { title: '采购项', ids: ['procurementList'] },
+    { title: '投标流程', ids: ['keyInfo', 'marginInfo', 'openBid'] },
+    { title: '评审要求', ids: ['qualificationReview', 'complianceCheck', 'evaluationBid', ...otherScoringIds] },
+    { title: '主体与合同', ids: ['agentInfo', 'discardedBids', 'signingProcess', 'terminationCondition'] },
+  ];
+}
 
 const statusLabel: Record<BidAnalysisTaskState['status'], string> = {
   idle: '待解析',
@@ -202,6 +211,7 @@ function BidAnalysisPage({
   stepNumber,
   hasTenderFile,
   mode,
+  outlineMode,
   selectedTaskIds,
   bidSectionMode,
   bidSections,
@@ -216,12 +226,15 @@ function BidAnalysisPage({
   onProgressChange,
   onConfigSaved,
 }: BidAnalysisPageProps) {
+  const requiredTasks = useMemo(() => getRequiredBidAnalysisTasks(outlineMode), [outlineMode]);
+  const requiredTaskIds = useMemo(() => requiredTasks.map((item) => item.id), [requiredTasks]);
+  const taskGroups = useMemo(() => buildTaskGroups(requiredTaskIds), [requiredTaskIds]);
   const [running, setRunning] = useState(false);
   const [fullRerunLocked, setFullRerunLocked] = useState(false);
   const [fullRerunSeenRunning, setFullRerunSeenRunning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState('projectOverview');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [draftSelectedTaskIds, setDraftSelectedTaskIds] = useState<string[]>(() => getSelectedTaskIdsForMode(mode, selectedTaskIds));
+  const [draftSelectedTaskIds, setDraftSelectedTaskIds] = useState<string[]>(() => getSelectedTaskIdsForMode(mode, selectedTaskIds, requiredTaskIds));
   const [draftBidSectionMode, setDraftBidSectionMode] = useState<BidSectionMode>(bidSectionMode);
   const [sectionSelectorOpen, setSectionSelectorOpen] = useState(false);
   const [selectingSection, setSelectingSection] = useState(false);
@@ -233,12 +246,11 @@ function BidAnalysisPage({
   } | null>(null);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const { showToast } = useToast();
-  const effectiveSelectedTaskIds = useMemo(() => getSelectedTaskIdsForMode(mode, selectedTaskIds), [mode, selectedTaskIds]);
+  const effectiveSelectedTaskIds = useMemo(() => getSelectedTaskIdsForMode(mode, selectedTaskIds, requiredTaskIds), [mode, selectedTaskIds, requiredTaskIds]);
   const selectedTasks = useMemo(() => {
     const selectedIdSet = new Set(effectiveSelectedTaskIds);
     return bidAnalysisTasks.filter((task) => selectedIdSet.has(task.id));
   }, [effectiveSelectedTaskIds]);
-  const requiredTasks = useMemo(() => getBidAnalysisTasks('key'), []);
   const visibleSelectedTaskId = selectedTasks.some((task) => task.id === selectedTaskId)
     ? selectedTaskId
     : selectedTasks[0]?.id || 'projectOverview';
@@ -276,7 +288,7 @@ function BidAnalysisPage({
   const configLabel = `${bidSectionConfigLabel} · ${getModeLabel(mode)}`;
 
   const syncProgressForSelection = (nextTaskIds: string[]) => {
-    const selectedIdSet = new Set(normalizeSelectedTaskIds(nextTaskIds));
+    const selectedIdSet = new Set(normalizeSelectedTaskIds(nextTaskIds, requiredTaskIds));
     const nextTasks = bidAnalysisTasks.filter((task) => selectedIdSet.has(task.id));
     const nextDoneCount = nextTasks.filter((task) => {
       const status = tasks[task.id]?.status;
@@ -344,8 +356,8 @@ function BidAnalysisPage({
   };
 
   const saveConfig = async (nextTaskIds = draftSelectedTaskIds, closeDialog = true, nextBidSectionMode = draftBidSectionMode) => {
-    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
-    const nextMode = getModeForSelection(normalizedTaskIds);
+    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds, requiredTaskIds);
+    const nextMode = getModeForSelection(normalizedTaskIds, requiredTaskIds);
     await window.yibiao?.technicalPlan.saveBidAnalysisConfig({ mode: nextMode, selectedTaskIds: normalizedTaskIds, bidSectionMode: nextBidSectionMode });
     const saved = await window.yibiao?.technicalPlan.loadState();
     if (saved) onConfigSaved(saved);
@@ -363,7 +375,7 @@ function BidAnalysisPage({
       return;
     }
 
-    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
+    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds, requiredTaskIds);
     const nextSelectedIdSet = new Set(normalizedTaskIds);
     const nextSelectedTasks = bidAnalysisTasks.filter((task) => nextSelectedIdSet.has(task.id));
     const retryTask = taskIds?.length === 1 ? nextSelectedTasks.find((task) => task.id === taskIds[0]) : undefined;
@@ -404,7 +416,7 @@ function BidAnalysisPage({
     }
 
     const nextBidSectionMode = options.overrideMode || draftBidSectionMode;
-    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds);
+    const normalizedTaskIds = normalizeSelectedTaskIds(nextTaskIds, requiredTaskIds);
 
     if (!options.skipCheck) {
       try {
@@ -511,12 +523,12 @@ function BidAnalysisPage({
   };
 
   const toggleDraftTask = (taskId: string) => {
-    if (requiredBidAnalysisTaskIdSet.has(taskId) || taskRunning) {
+    if (requiredTaskIds.includes(taskId) || taskRunning) {
       return;
     }
 
     setDraftSelectedTaskIds((prev) => {
-      const selectedSet = new Set(normalizeSelectedTaskIds(prev));
+      const selectedSet = new Set(normalizeSelectedTaskIds(prev, requiredTaskIds));
       if (selectedSet.has(taskId)) {
         selectedSet.delete(taskId);
       } else {
@@ -527,7 +539,7 @@ function BidAnalysisPage({
   };
 
   const selectPreset = (preset: 'key' | 'full') => {
-    setDraftSelectedTaskIds(preset === 'full' ? allBidAnalysisTaskIds : requiredBidAnalysisTaskIds);
+    setDraftSelectedTaskIds(preset === 'full' ? allBidAnalysisTaskIds : requiredTaskIds);
   };
 
   const openSectionSelectorFromConfig = async () => {
@@ -551,8 +563,8 @@ function BidAnalysisPage({
   };
 
   const renderConfigTask = (definition: typeof bidAnalysisTasks[number]) => {
-    const selected = normalizeSelectedTaskIds(draftSelectedTaskIds).includes(definition.id);
-    const required = definition.required;
+    const selected = normalizeSelectedTaskIds(draftSelectedTaskIds, requiredTaskIds).includes(definition.id);
+    const required = requiredTaskIds.includes(definition.id);
 
     return (
       <label className={`bid-analysis-config-item${selected ? ' is-selected' : ''}${required ? ' is-required' : ''}`} key={definition.id}>
@@ -570,8 +582,8 @@ function BidAnalysisPage({
     );
   };
 
-  const draftMode = getModeForSelection(draftSelectedTaskIds);
-  const draftSelectedCount = normalizeSelectedTaskIds(draftSelectedTaskIds).length;
+  const draftMode = getModeForSelection(draftSelectedTaskIds, requiredTaskIds);
+  const draftSelectedCount = normalizeSelectedTaskIds(draftSelectedTaskIds, requiredTaskIds).length;
   const hasExtractedBidSections = bidSectionExtractionStatus === 'success' && bidSections.length >= 2;
   const bidSectionActionLabel = sectionTaskRunning
     ? '识别中...'
@@ -789,10 +801,10 @@ function BidAnalysisPage({
               <section className="bid-analysis-config-section">
                 <div className="bid-analysis-config-section-head">
                   <strong>关键项</strong>
-                  <span>{requiredBidAnalysisTaskIds.length} 项必选</span>
+                  <span>{requiredTaskIds.length} 项必选</span>
                 </div>
                 <div className="bid-analysis-config-grid">
-                  {bidAnalysisTasks.filter((definition) => definition.required).map(renderConfigTask)}
+                  {bidAnalysisTasks.filter((definition) => requiredTaskIds.includes(definition.id)).map(renderConfigTask)}
                 </div>
               </section>
 
@@ -802,7 +814,7 @@ function BidAnalysisPage({
                   <span>当前共选择 {draftSelectedCount} 项</span>
                 </div>
                 <div className="bid-analysis-config-grid">
-                  {bidAnalysisTasks.filter((definition) => !definition.required).map(renderConfigTask)}
+                  {bidAnalysisTasks.filter((definition) => !requiredTaskIds.includes(definition.id)).map(renderConfigTask)}
                 </div>
               </section>
             </div>

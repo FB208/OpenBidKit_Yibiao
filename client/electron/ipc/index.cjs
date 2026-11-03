@@ -153,6 +153,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:read-tender-markdown',
   'technical-plan:read-content-word',
   'technical-plan:preview-content-word',
+  'technical-plan:preview-business-chapter-word',
   'technical-plan:read-tender-source-markdown',
   'technical-plan:update-step',
   'technical-plan:save-bid-analysis-config',
@@ -160,10 +161,12 @@ const workspaceDatabaseChannels = [
   'technical-plan:save-outline',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
-  'technical-plan:save-chapter-content',
   'technical-plan:reset-content-generation',
   'technical-plan:clear',
+  'technical-plan:inspect-bid-template',
   'technical-plan:open-bid-template',
+  'technical-plan:get-business-fill-review',
+  'technical-plan:save-business-fill-review',
   'feasibility-report:load-state',
   'feasibility-report:import-source-documents',
   'feasibility-report:remove-source-document',
@@ -223,6 +226,10 @@ const workspaceDatabaseChannels = [
   'tasks:start-outline-generation',
   'tasks:confirm-outline-selection',
   'tasks:suppress-outline-selection-auto-confirmation',
+  'tasks:confirm-business-fill-review',
+  'tasks:suppress-business-fill-review-auto-confirmation',
+  'tasks:start-bid-template-extraction',
+  'tasks:start-rule-page-compile',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
   'tasks:pause-content-generation',
@@ -333,7 +340,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     duplicateCheckStore,
     blindCheckStore,
   });
-  const taskService = createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService });
+  const taskService = createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService });
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore });
   agentWorkspaceServiceRef = agentWorkspaceService;
   technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
@@ -373,7 +380,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     console.error('[plugin-service] 启用插件失败:', error);
   });
   
-  return { sqliteDatabase, technicalPlanExport: createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService,
+  return { sqliteDatabase, technicalPlanExport: createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService,
     startContentGeneration: payload => taskService.startContentGeneration(payload),
   }) };
 }

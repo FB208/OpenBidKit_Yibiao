@@ -3,7 +3,7 @@ import type { CSSProperties, DragEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, MarkdownEditor, ProgressBar, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, OutlineSelectionItem, SaveOutlineRequest, SaveOutlineSelectionRequest } from '../types';
-import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
+import { OUTLINE_CONTENT_MODE_LABELS, OUTLINE_RULE_BASIS_LABELS } from '../../../shared/types';
 import type { TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
@@ -25,10 +25,11 @@ interface OutlineEditPageProps {
   task?: BackgroundTaskState;
   contentTaskStatus?: BackgroundTaskState['status'];
   aiAdjustmentRunning?: boolean;
+  templateExtractionTask?: BackgroundTaskState;
+  /** 正文页单独“重新编制”规则和页码的任务；运行时锁定目录，避免清掉正在编制的结果。 */
+  rulePageCompileTask?: BackgroundTaskState;
   onOutlineSaved: (request: SaveOutlineRequest) => Promise<void>;
   onOutlineSelectionSaved: (request: SaveOutlineSelectionRequest) => Promise<void>;
-  onOpenBidTemplate?: () => Promise<void>;
-  bidTemplateExists?: boolean;
   onSortGuardChange?: (guard: OutlineSortGuard | null) => void;
 }
 
@@ -81,6 +82,12 @@ function formatDuration(milliseconds: number) {
   return `${minutes}:${seconds}`;
 }
 
+// 叶子的处理模式标签；规则和页码另标应答依据。
+function contentModeLabel(item: OutlineItem) {
+  const label = item.content_mode ? OUTLINE_CONTENT_MODE_LABELS[item.content_mode] : '';
+  return item.content_mode === 'rule-page' && item.rule_basis ? `${label}·${OUTLINE_RULE_BASIS_LABELS[item.rule_basis]}` : label;
+}
+
 // 父节点不保存处理模式，叶子保留已经明确选择的处理模式。
 function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
   return items.map((item) => {
@@ -88,6 +95,7 @@ function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
       const branch = { ...item };
       delete branch.content_mode;
       delete branch.content_mode_note;
+      delete branch.rule_basis;
       return { ...branch, children: normalizeOutlineContentModes(item.children) };
     }
     const leaf = { ...item };
@@ -99,6 +107,7 @@ function normalizeOutlineContentModes(items: OutlineItem[]): OutlineItem[] {
       ...(contentMode === 'other' && item.content_mode_note?.trim()
         ? { content_mode_note: item.content_mode_note.trim() }
         : { content_mode_note: undefined }),
+      ...(contentMode === 'rule-page' ? {} : { rule_basis: undefined }),
     };
   });
 }
@@ -216,10 +225,10 @@ function OutlineEditPage({
   task,
   contentTaskStatus,
   aiAdjustmentRunning = false,
+  templateExtractionTask,
+  rulePageCompileTask,
   onOutlineSaved,
   onOutlineSelectionSaved,
-  onOpenBidTemplate,
-  bidTemplateExists = false,
   onSortGuardChange,
 }: OutlineEditPageProps) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -243,6 +252,7 @@ function OutlineEditPage({
   const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
   const logListRef = useRef<HTMLDivElement | null>(null);
   const shownTaskErrorIdRef = useRef<string | null>(null);
+  const runningExtractionIdRef = useRef<string | null>(null);
   const { showToast } = useToast();
   const activeOutlineData = sorting ? draftOutlineData : outlineData;
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
@@ -252,12 +262,17 @@ function OutlineEditPage({
   const hasOutlineSelection = Boolean(outlineSelection?.items?.length);
   const awaitingOutlineSelection = Boolean(taskRunning && hasOutlineSelection && !outlineSelection?.confirmed);
   const generating = startingOutline || taskRunning;
+  // 重新提取投标模版运行时锁定目录，生成过程面板改为展示该任务。
+  const templateExtracting = templateExtractionTask?.status === 'running' || templateExtractionTask?.status === 'pausing';
+  const progressTask = templateExtracting ? templateExtractionTask : task;
+  const panelBusy = generating || templateExtracting;
   const contentMutationLocked = contentTaskStatus === 'running' || contentTaskStatus === 'pausing' || contentTaskStatus === 'paused';
-  const outlineMutationLocked = generating || contentMutationLocked || savingSort || aiAdjustmentRunning;
-  const progressLogs = task?.logs || [];
+  const rulePageCompiling = ['running', 'pausing', 'paused'].includes(rulePageCompileTask?.status || '');
+  const outlineMutationLocked = generating || templateExtracting || contentMutationLocked || rulePageCompiling || savingSort || aiAdjustmentRunning;
+  const progressLogs = progressTask?.logs || [];
   const latestLog = progressLogs[progressLogs.length - 1];
-  const progress = generating
-    ? Math.max(5, Math.min(99, task?.progress || 5))
+  const progress = panelBusy
+    ? Math.max(5, Math.min(99, progressTask?.progress || 5))
     : taskFailed
       ? Math.max(0, Math.min(99, task?.progress || 0))
       : outlineData || task?.status === 'success'
@@ -265,7 +280,7 @@ function OutlineEditPage({
         : 0;
   const statusText = awaitingOutlineSelection
     ? '待确认'
-    : generating
+    : panelBusy
       ? '运行中'
     : taskFailed
       ? '失败'
@@ -275,12 +290,14 @@ function OutlineEditPage({
           ? outlineSelection?.confirmed ? '已确认' : '待确认'
           : '未开始';
   const aiStatusTitle = awaitingOutlineSelection ? '等待确认一级目录' : generating ? 'AI 正在工作' : taskFailed ? '生成失败' : outlineData ? '目录已生成' : '等待生成';
-  const statusMessage = taskFailed ? task?.error || latestLog || '目录生成失败，请查看开发者日志。' : latestLog || '点击生成目录后，这里会显示目录生成、审核和修正过程。';
-  const startedAt = task?.started_at ? Date.parse(task.started_at) : NaN;
-  const updatedAt = task?.updated_at ? Date.parse(task.updated_at) : NaN;
+  const statusMessage = templateExtracting
+    ? latestLog || '正在重新提取投标模版'
+    : taskFailed ? task?.error || latestLog || '目录生成失败，请查看开发者日志。' : latestLog || '点击生成目录后，这里会显示目录生成、审核和修正过程。';
+  const startedAt = progressTask?.started_at ? Date.parse(progressTask.started_at) : NaN;
+  const updatedAt = progressTask?.updated_at ? Date.parse(progressTask.updated_at) : NaN;
   const effectiveStartedAt = Number.isFinite(startedAt) ? startedAt : localStartAt;
-  const elapsedText = generating && effectiveStartedAt ? `已运行 ${formatDuration(nowTick - effectiveStartedAt)}` : '';
-  const staleText = generating && Number.isFinite(updatedAt) ? `最近更新 ${Math.floor(Math.max(0, nowTick - updatedAt) / 1000)} 秒前` : '';
+  const elapsedText = panelBusy && effectiveStartedAt ? `已运行 ${formatDuration(nowTick - effectiveStartedAt)}` : '';
+  const staleText = panelBusy && Number.isFinite(updatedAt) ? `最近更新 ${Math.floor(Math.max(0, nowTick - updatedAt) / 1000)} 秒前` : '';
   useEffect(() => {
     let cancelled = false;
     window.yibiao?.config.load().then((cfg) => {
@@ -322,6 +339,23 @@ function OutlineEditPage({
     showToast(task.error || '目录生成失败，请调整设置后重新生成目录', 'error');
   }, [showToast, task?.error, task?.status, task?.task_id]);
 
+  // 只提示本页面看到运行过的提取任务结果，重新进入页面不重复提示。
+  useEffect(() => {
+    const taskId = templateExtractionTask?.task_id;
+    if (!taskId) return;
+    if (templateExtracting) {
+      runningExtractionIdRef.current = taskId;
+      return;
+    }
+    if (runningExtractionIdRef.current !== taskId) return;
+    runningExtractionIdRef.current = null;
+    if (templateExtractionTask?.status === 'success') {
+      showToast('投标模版已重新提取', 'success');
+    } else if (templateExtractionTask?.status === 'error') {
+      showToast(templateExtractionTask.error || '投标模版提取失败，请点击“下一步”重新提取', 'error');
+    }
+  }, [showToast, templateExtracting, templateExtractionTask?.error, templateExtractionTask?.status, templateExtractionTask?.task_id]);
+
   useEffect(() => {
     if (!awaitingOutlineSelection) {
       setSelectionDialogOpen(false);
@@ -331,13 +365,13 @@ function OutlineEditPage({
   }, [awaitingOutlineSelection, task?.task_id]);
 
   useEffect(() => {
-    if (!generating) {
+    if (!panelBusy) {
       return;
     }
 
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [generating]);
+  }, [panelBusy]);
 
   useEffect(() => {
     if (logListRef.current) {
@@ -358,7 +392,7 @@ function OutlineEditPage({
       showToast('请先完成必填招标文件解析项', 'info');
       return;
     }
-    if (technicalScoreMissing && !noTechnicalScoreMode) {
+    if (technicalScoreMissing && !noTechnicalScoreMode && outlineMode !== 'standalone-business') {
       setNoScoreConfirmationOpen(true);
       return;
     }
@@ -398,7 +432,7 @@ function OutlineEditPage({
       setSavingOutlineSelection(true);
       await onOutlineSelectionSaved({ taskId: task.task_id, items, selectedIds });
       setSelectionDialogOpen(false);
-      showToast(`已确认 ${selectedIds.length} 个一级目录`, 'success');
+      showToast('已确认目录选择', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存一级目录选择失败', 'error');
     } finally {
@@ -414,7 +448,9 @@ function OutlineEditPage({
 
   const getMutationLockMessage = () => {
     if (generating) return '目录生成任务正在运行，当前目录暂不可编辑';
+    if (templateExtracting) return '投标模版正在重新提取，当前目录暂不可编辑';
     if (contentMutationLocked) return '正文生成任务正在运行或暂停中，请结束后再调整目录';
+    if (rulePageCompiling) return '规则和页码正在编制，请结束后再调整目录';
     return '';
   };
 
@@ -736,7 +772,7 @@ function OutlineEditPage({
           >
             <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
             {!hasChildren && item.content_mode && (
-              <span className={`outline-content-mode-badge is-${item.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[item.content_mode]}</span>
+              <span className={`outline-content-mode-badge is-${item.content_mode}`}>{contentModeLabel(item)}</span>
             )}
           </button>
         </div>
@@ -760,12 +796,7 @@ function OutlineEditPage({
               确认一级目录
             </button>
           )}
-          {bidTemplateExists && (
-            <button type="button" className="secondary-action" onClick={() => void onOpenBidTemplate?.()}>
-              打开投标模版
-            </button>
-          )}
-          <button type="button" className="primary-action" onClick={() => void generateOutline()} disabled={generating || sorting || contentMutationLocked || !projectOverview || !bidAnalysisReady}>
+          <button type="button" className="primary-action" onClick={() => void generateOutline()} disabled={generating || templateExtracting || sorting || contentMutationLocked || rulePageCompiling || !projectOverview || !bidAnalysisReady}>
             {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
           </button>
         </div>
@@ -857,12 +888,16 @@ function OutlineEditPage({
           </div>
           {selectedItem ? (
             <div className="outline-detail-body">
-              {(generating || contentMutationLocked || sorting) && (
+              {(generating || templateExtracting || contentMutationLocked || rulePageCompiling || sorting) && (
                 <div className="outline-detail-lock">
                   {sorting
                     ? '目录排序中，当前目录暂不可编辑。'
+                    : templateExtracting
+                      ? '投标模版正在重新提取，当前目录暂不可编辑。'
                     : contentMutationLocked
                       ? '正文生成任务正在运行或暂停中，当前目录暂不可编辑。'
+                    : rulePageCompiling
+                      ? '规则和页码正在编制，当前目录暂不可编辑。'
                       : '目录生成任务正在运行，当前目录暂不可编辑，避免覆盖后台生成结果。'}
                 </div>
               )}
@@ -893,7 +928,7 @@ function OutlineEditPage({
                   <h3>{selectedItem.title}</h3>
                   <p>{selectedItem.description || '无描述'}</p>
                   {!selectedItem.children?.length && selectedItem.content_mode && (
-                    <span className={`outline-content-mode-badge is-${selectedItem.content_mode}`}>{OUTLINE_CONTENT_MODE_LABELS[selectedItem.content_mode]}</span>
+                    <span className={`outline-content-mode-badge is-${selectedItem.content_mode}`}>{contentModeLabel(selectedItem)}</span>
                   )}
                   {!selectedItem.children?.length && selectedItem.content_mode === 'other' && selectedItem.content_mode_note && (
                     <small>{selectedItem.content_mode_note}</small>

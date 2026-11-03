@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
-import { AppDialog, AppSwitch, githubStarNotice, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useNoticeToast, useToast } from '../../../shared/ui';
+import { AppDialog, AppSwitch, isLibreOfficeRequiredMessage, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { ImageModelStatus, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
@@ -53,13 +53,11 @@ interface WordControlDraft {
 
 const emptyKnowledgeIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
 
-// locked 表示功能尚未开发完成，只提示开发中，不允许选择。
-const documentOptions: Array<{ value: OutlineMode; title: string; description: string; locked?: boolean }> = [
+const documentOptions: Array<{ value: OutlineMode; title: string; description: string }> = [
   {
     value: 'response-file',
     title: '完整投标文件',
     description: '按照招标文件响应要求完整生成',
-    locked: true,
   },
   {
     value: 'standalone-technical',
@@ -70,7 +68,6 @@ const documentOptions: Array<{ value: OutlineMode; title: string; description: s
     value: 'standalone-business',
     title: '商务标独立成册',
     description: '按照招标文件响应要求仅生成商务部分',
-    locked: true,
   },
 ];
 const outlineExpansionModeLabels: Record<OutlineExpansionMode, string> = {
@@ -290,7 +287,6 @@ function GenerationSettingsPage({
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const { showToast } = useToast();
-  const showNotice = useNoticeToast();
   const { showDocumentParseNotice } = useDocumentParseNotice();
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || '';
   const parsedDraftMinimumWords = parseWordCountDraft(draftMinimumWords) ?? 0;
@@ -846,9 +842,8 @@ function GenerationSettingsPage({
               <legend className="sr-only">选择投标文件生成范围</legend>
               {documentOptions.map((option, index) => (
                 <label
-                  className={`generation-settings-option${outlineMode === option.value ? ' is-selected' : ''}${option.locked ? ' is-locked' : ''}`}
+                  className={`generation-settings-option${outlineMode === option.value ? ' is-selected' : ''}`}
                   key={option.value}
-                  onClick={option.locked ? () => showNotice(githubStarNotice) : undefined}
                 >
                   <span>{String(index + 1).padStart(2, '0')}</span>
                   <input
@@ -856,7 +851,6 @@ function GenerationSettingsPage({
                     name="technical-plan-outline-mode"
                     value={option.value}
                     checked={outlineMode === option.value}
-                    disabled={option.locked}
                     onChange={() => void saveOutlineMode(option.value)}
                   />
                   <strong>{option.title}</strong>
@@ -1203,7 +1197,7 @@ function GenerationSettingsPage({
               <section className="generation-settings-export-template-section">
                 <div className="generation-settings-appearance-head">
                   <strong id="generation-settings-export-template-scope-label">模板样式范围</strong>
-                  <span id="generation-settings-export-template-scope-description">纸张、方向、双栏和页边距始终应用于整个文件；其余样式（包括页眉页脚、页码和首页不同）遵循所选范围。选择仅技术方案时，AI 与非 AI 范围交界处另起页。</span>
+                  <span id="generation-settings-export-template-scope-description">纸张、方向、双栏、页边距、一级标题另起页和各级标题样式（首行缩进除外）始终应用于整个文件；其余样式（包括页眉页脚、页码和首页不同）遵循所选范围。选择仅技术方案时，AI 与非 AI 范围交界处另起页。</span>
                 </div>
                 <div className="generation-settings-export-template-control">
                   <select

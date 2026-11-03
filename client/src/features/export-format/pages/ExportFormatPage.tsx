@@ -1100,7 +1100,7 @@ function ExportFormatPage({
     <>
       <div className="settings-list">
         <label className="settings-row">
-          <div className="settings-row-copy"><strong>一级标题另起页</strong></div>
+          <div className="settings-row-copy"><strong>一级标题另起页</strong><span>始终作用于整个文件，商务模版章节同样另起页</span></div>
           <AppSwitch checked={config.heading_level1_page_break_before} onCheckedChange={(checked) => updateTemplate({ heading_level1_page_break_before: checked })} />
         </label>
         <label className="settings-row">
@@ -1138,6 +1138,7 @@ function ExportFormatPage({
           </>
         )}
       </div>
+      <p className="export-format-preset-hint export-format-heading-scope">各级标题的编号、字体、字号、对齐、加粗、颜色、段前段后和行距始终作用于整个文件，包括商务模版章节标题；首行缩进按模板样式范围生效。</p>
       <details className="export-format-heading-note">
         <summary className="export-format-heading-note-summary">
           <span className="export-format-heading-note-title">

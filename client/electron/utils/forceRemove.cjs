@@ -73,6 +73,19 @@ function rmWithRetrySync(targetPath) {
   throw lastError;
 }
 
+/**
+ * 删除用完即弃的临时目录，失败只交给 onError，不抛出，不影响已经得到的结果。
+ * 外部程序（杀毒、索引等）以共享删除方式打开其中文件时，rmSync 会报 ENOTEMPTY 且自带重试不等待；
+ * 异步 rm 可以直接删除，遇到强占用时按 retryDelay 递增等待后重试。
+ */
+async function removeTemporaryDir(targetPath, onError) {
+  try {
+    await fs.promises.rm(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (error) {
+    onError?.(error);
+  }
+}
+
 function collectFiles(targetPath, limit) {
   const files = [];
   const walk = (current) => {
@@ -391,4 +404,5 @@ module.exports = {
   cleanupTrashDirSync,
   forceRemoveSync,
   isFileLockError,
+  removeTemporaryDir,
 };

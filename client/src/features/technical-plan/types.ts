@@ -1,14 +1,14 @@
-import type { ExportTemplateScope, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, OutlineMode, OutlineWordControlOptions } from '../../shared/types';
+import type { ExportTemplateScope, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, OutlineExpansionMode, OutlineMode, OutlineRuleBasis, OutlineWordControlOptions } from '../../shared/types';
 
 export type TechnicalPlanStep = 'document-analysis' | 'generation-settings' | 'bid-analysis' | 'outline-generation' | 'global-facts' | 'content-edit' | 'expand';
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
+export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'rule-page-compile' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
-export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'export-repair' | 'done';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'business-filling' | 'export-repair' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
 export type OutlineAttribute = '通用' | '商务/资信' | '技术' | '其他' | '目录' | '报价' | '业绩';
@@ -20,21 +20,37 @@ export interface SaveOutlineRequest {
   affectedNodeIds?: string[];
 }
 
+// 一级目录候选在招标原文中的位置，由 Main 核对后原样回传，Renderer 不使用。
+export interface OutlineSourceRange {
+  source?: string;
+  start: number;
+  end: number;
+}
+
+// 一级目录候选树：attr 只在一级目录上，content_mode 只在叶子上。
 export interface OutlineSelectionItem {
   id: string;
   number: string;
   title: string;
   description: string;
-  attr: OutlineAttribute;
-  content_mode: OutlineContentMode;
+  attr?: OutlineAttribute;
+  content_mode?: OutlineContentMode;
   content_mode_note?: string;
+  rule_basis?: OutlineRuleBasis;
+  post_award?: boolean;
+  source?: OutlineSourceRange;
+  children?: OutlineSelectionItem[];
 }
+
+// 完整投标文件和商务标独立成册的目录依据：招标文件格式章节，或响应文件要求。
+export type OutlineSelectionBasis = 'format-template' | 'response-requirements';
 
 export interface OutlineSelectionState {
   items: OutlineSelectionItem[];
   selected_ids: string[];
   confirmed: boolean;
   auto_answer_at?: string;
+  basis?: OutlineSelectionBasis;
 }
 
 export interface SaveOutlineSelectionRequest {
@@ -94,7 +110,7 @@ export interface ContentGenerationWorkflowProgress {
 }
 
 export interface ContentGenerationProgressDetail {
-  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction';
+  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction' | 'business';
   phase: ContentGenerationPhase;
   phase_label: string;
   phase_progress: number;
@@ -194,6 +210,8 @@ export interface BackgroundTaskState {
       layout_total?: number;
       layout_completed?: number;
       developer_stage_gate?: ContentGenerationPhase;
+      business_fill?: BusinessTemplateFillState;
+      rule_page?: RulePageState;
     };
   };
 }
@@ -262,6 +280,158 @@ export interface ContentGenerationPlanState {
 
 export type ContentGenerationPlans = Record<string, ContentGenerationPlanState>;
 
+/** 规则和页码编制状态：正文生成时与商务模版填写并行，或在正文页“重新编制”时单独运行。 */
+export interface RulePageState {
+  phase: 'compiling' | 'rendering' | 'completed';
+  status: 'running' | 'paused' | 'interrupted' | 'error' | 'success';
+  table_count: number;
+  row_count: number;
+  unresolved: Array<{ label: string; reason: string }>;
+  error?: string | null;
+  updated_at?: string;
+}
+
+/** 商务模版填写副流程状态，统计以填写项为单位（同名字段或表格单元格）。 */
+export interface BusinessTemplateFillState {
+  phase: 'filling' | 'reviewing' | 'rendering' | 'completed';
+  status: 'running' | 'paused' | 'interrupted' | 'error' | 'success';
+  field_count: number;
+  filled_count: number;
+  manual_count: number;
+  unresolved: Array<{ label: string; reason: string }>;
+  /** 逐行清单表中未使用、已留空的行数。 */
+  blank_row_count?: number;
+  /** 连续修复无改善后按原样放行的质量问题。 */
+  accepted_issues?: string[];
+  error?: string | null;
+  /** 等待确认字段值时自动确认的截止时间。 */
+  auto_answer_at?: string;
+  /** 字段值由用户确认还是自动确认。 */
+  confirmed_by?: 'user' | 'auto';
+  updated_at?: string;
+}
+
+/** 商务模版确认弹窗中的一个填写项：同名字段合并，逐行清单表按表格和行号区分。 */
+export interface BusinessFillReviewUnit {
+  key: string;
+  name: string;
+  /** choice 为勾选项（可多选），select 为择一（只选一项，填写后原文换成选中项）。 */
+  kind: 'text' | 'choice' | 'select' | 'attachment';
+  fill_by: 'ai' | 'manual';
+  /** 该填写项展开到的模版字段，同名字段在版式中的多处位置共用一个值。 */
+  field_ids: string[];
+  /** 签字、签章、手印、盖章位置，只能线下处理。 */
+  signature?: boolean;
+  /** 字段描述的对象。 */
+  subject?: string;
+  /** 所在章节与表格标题。 */
+  section?: string;
+  instruction?: string;
+  options?: string[];
+  table_id?: string;
+  row?: number;
+  /** 可重复条目中的填写项：table_id 为条目清单 id，row 为第几条。 */
+  entry?: boolean;
+  /** 填写 Agent 声明的联动：随来源填写项同值（same）或为其金额大写（uppercase），弹窗中只读。 */
+  link?: { key: string; form: 'same' | 'uppercase'; source_name: string };
+  value?: string;
+  selected?: string[];
+  image_id?: string;
+  blank?: boolean;
+  unresolved_reason?: string;
+}
+
+/** 资信库图片选项，group 为所属记录。 */
+export interface BusinessFillReviewImage {
+  image_id: string;
+  group: string;
+  label: string;
+  name: string;
+  asset_url: string;
+}
+
+/** 商务模版版式片段：文字（可带加粗、下划线）、行内字段、换行或制表位。 */
+export interface BusinessFillLayoutSegment {
+  text?: string;
+  bold?: boolean;
+  underline?: boolean;
+  field_id?: string;
+  break?: boolean;
+  tab?: boolean;
+}
+
+export interface BusinessFillLayoutCell {
+  col_span?: number;
+  row_span?: number;
+  /** 只在单元格显式去掉四边边框时为 false。 */
+  borders?: boolean;
+  blocks: BusinessFillLayoutBlock[];
+}
+
+/** 商务模版版式块：段落、表格或块级字段控件；缩进以 em 计，size 为磅值。 */
+export interface BusinessFillLayoutBlock {
+  type: 'paragraph' | 'table' | 'field';
+  index?: number;
+  align?: 'center' | 'right' | 'justify';
+  indent?: { first_line?: number; left?: number };
+  heading?: boolean;
+  label?: string;
+  size?: number;
+  segments?: BusinessFillLayoutSegment[];
+  columns?: number[];
+  borders?: boolean;
+  rows?: Array<{ cells: BusinessFillLayoutCell[] }>;
+  field_id?: string;
+  blocks?: BusinessFillLayoutBlock[];
+}
+
+/** 商务模版章节；auto_fill 为 false 时章节字段由用户人工填写；attached_to 为附在其他小节后的商务生成模板所挂小节的“编号 标题”。 */
+export interface BusinessFillReviewChapter {
+  id?: string;
+  title: string;
+  auto_fill: boolean;
+  attached_to?: string;
+  blocks: BusinessFillLayoutBlock[];
+}
+
+export interface BusinessFillReview {
+  units: BusinessFillReviewUnit[];
+  /** 规则和页码编制的字段，只读显示。 */
+  rule_field_ids?: string[];
+  images: BusinessFillReviewImage[];
+  /** 正文默认字号（磅）。 */
+  base_size: number;
+  chapters: BusinessFillReviewChapter[];
+}
+
+/** 投标模版与当前目录不一致的非 AI 叶子；auto_fill 为当前处理方式对应的字段是否自动填写，rule_page 为是否规则和页码。 */
+export interface BidTemplateInspectionItem {
+  id: string;
+  number: string;
+  title: string;
+  auto_fill: boolean;
+  rule_page: boolean;
+}
+
+/** “下一步”前的投标模版核对：added 为模版缺少的章节，changed 为填写方式已变化的章节。 */
+export interface BidTemplateInspection {
+  added: BidTemplateInspectionItem[];
+  changed: BidTemplateInspectionItem[];
+}
+
+/** 用户确认的填写项值，空值不提交。 */
+export interface BusinessFillReviewValue {
+  key: string;
+  value?: string;
+  selected?: string[];
+  image_id?: string;
+}
+
+/** 确认弹窗提交的字段值（含商务生成模板的字段）。 */
+export interface BusinessFillReviewSubmission {
+  values: BusinessFillReviewValue[];
+}
+
 export interface ContentGenerationRuntimeState {
   /** 已确认的 HTML 实际字数，按稳定小节 ID 保存，不保存 HTML 正文。 */
   section_words?: Record<string, number>;
@@ -280,6 +450,8 @@ export interface ContentGenerationRuntimeState {
   developer_stage_gate?: ContentGenerationPhase | '';
   target_item_id?: string;
   regenerate_requirement?: string;
+  business_fill?: BusinessTemplateFillState;
+  rule_page?: RulePageState;
   updated_at?: string;
 }
 
@@ -361,6 +533,8 @@ export interface TechnicalPlanState {
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
   outlineAdjustmentTask?: BackgroundTaskState;
+  bidTemplateExtractionTask?: BackgroundTaskState;
+  rulePageCompileTask?: BackgroundTaskState;
   globalFactsMode: GlobalFactsMode;
   globalFactsTask?: BackgroundTaskState;
   globalFactsAdjustmentTask?: BackgroundTaskState;
@@ -373,5 +547,6 @@ export interface TechnicalPlanState {
   contentGenerationPlans: ContentGenerationPlans;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   bidTemplateExists?: boolean;
+  bidTemplateChapterIds?: string[];
   outlineData: OutlineData | null;
 }

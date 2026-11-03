@@ -11,6 +11,8 @@ interface GlobalFactsPageProps {
   task?: BackgroundTaskState;
   aiAdjustmentRunning?: boolean;
   contentTaskStatus?: BackgroundTaskState['status'];
+  /** 正文页单独“重新编制”规则和页码的任务状态；运行时不能保存，避免清掉正在编制的结果。 */
+  rulePageCompileStatus?: BackgroundTaskState['status'];
   hasGeneratedBody: boolean;
   focusGroupRequest?: { groupId: string } | null;
   onGlobalFactsSaved: (globalFacts: GlobalFactGroupState[]) => Promise<void> | void;
@@ -49,6 +51,7 @@ function GlobalFactsPage({
   task,
   aiAdjustmentRunning = false,
   contentTaskStatus,
+  rulePageCompileStatus,
   hasGeneratedBody,
   focusGroupRequest,
   onGlobalFactsSaved,
@@ -63,7 +66,8 @@ function GlobalFactsPage({
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const hasOutline = Boolean(outlineData?.outline?.length);
   const running = starting || task?.status === 'running';
-  const mutationLocked = running || aiAdjustmentRunning || ['running', 'pausing', 'paused'].includes(contentTaskStatus || '');
+  const rulePageCompiling = ['running', 'pausing', 'paused'].includes(rulePageCompileStatus || '');
+  const mutationLocked = running || aiAdjustmentRunning || rulePageCompiling || ['running', 'pausing', 'paused'].includes(contentTaskStatus || '');
   const hasContent = (items: OutlineData['outline']): boolean => items.some(item => Boolean(item.content?.trim()) || hasContent(item.children || []));
   const needsClearConfirmation = hasGeneratedBody || hasContent(outlineData?.outline || []);
   const taskFailed = task?.status === 'error';
@@ -78,7 +82,9 @@ function GlobalFactsPage({
     if (mutationLocked) {
       showToast(aiAdjustmentRunning
         ? '全局事实正在 AI 调整，请等待结束后再重新解析'
-        : '全局事实设定任务正在运行，请等待任务结束后再操作', 'info');
+        : rulePageCompiling
+          ? '规则和页码正在编制，请结束后再操作'
+          : '全局事实设定任务正在运行，请等待任务结束后再操作', 'info');
       return;
     }
     if (!hasOutline) {
@@ -131,7 +137,9 @@ function GlobalFactsPage({
     if (mutationLocked) {
       showToast(aiAdjustmentRunning
         ? '全局事实正在 AI 调整，请等待结束后再修改'
-        : '全局事实设定任务正在运行，请等待任务结束后再修改', 'info');
+        : rulePageCompiling
+          ? '规则和页码正在编制，请结束后再修改'
+          : '全局事实设定任务正在运行，请等待任务结束后再修改', 'info');
       return;
     }
     if (needsClearConfirmation && !confirmed) {

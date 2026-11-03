@@ -66,6 +66,40 @@ static class WordWorkspace
         return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>文件被占用或无读写权限时返回可直接告知用户的环境错误。</summary>
+    public static JobResult FileAccessFailure(string workspace, IEnumerable<string?> paths)
+    {
+        var names = paths
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => ToRelativePath(workspace, Path.IsPathRooted(item!) ? item! : Path.Combine(workspace, item!)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var target = names.Count > 0 ? $"“{string.Join("”、“", names)}”" : "投标模版相关文件";
+        return JobResult.Fail(
+            $"无法读写文件{target}：文件可能正被 Word、WPS 等程序打开，或当前用户没有读写权限。请关闭占用该文件的程序后重试。",
+            JobResult.EnvironmentErrorKind);
+    }
+
+    public static JobResult FileAccessFailure(string workspace, string? path) => FileAccessFailure(workspace, [path]);
+
+    /// <summary>复制出可写副本；File.Copy 会带上源文件的只读属性，导致覆盖或随后写入被拒绝。</summary>
+    public static void CopyToWritable(string sourcePath, string destPath)
+    {
+        ClearReadOnly(destPath);
+        File.Copy(sourcePath, destPath, overwrite: true);
+        ClearReadOnly(destPath);
+    }
+
+    static void ClearReadOnly(string path)
+    {
+        if (!File.Exists(path)) return;
+        var attributes = File.GetAttributes(path);
+        if (attributes.HasFlag(FileAttributes.ReadOnly))
+        {
+            File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
+        }
+    }
+
     public static List<string> ResolveSources(string workspace, IEnumerable<string>? sources)
     {
         return (sources ?? [])
@@ -159,7 +193,7 @@ static class WordWorkspace
     }
 
     /** 段落直接层级优先，否则使用段落样式继承得到的层级。 */
-    static int ReadOutlineLevel(Wp.Paragraph? paragraph, IReadOnlyDictionary<string, int>? styleOutlineLevels)
+    public static int ReadOutlineLevel(Wp.Paragraph? paragraph, IReadOnlyDictionary<string, int>? styleOutlineLevels)
     {
         var directLevel = paragraph?.ParagraphProperties?.OutlineLevel?.Val?.Value;
         if (directLevel is not null) return directLevel.Value;
@@ -171,7 +205,7 @@ static class WordWorkspace
     }
 
     /** 解析 styles.xml 中每个样式通过 basedOn 继承后的真实大纲层级。 */
-    static Dictionary<string, int> ReadStyleOutlineLevels(MainDocumentPart part)
+    public static Dictionary<string, int> ReadStyleOutlineLevels(MainDocumentPart part)
     {
         var styles = part.StyleDefinitionsPart?.Styles?.Elements<Wp.Style>()
             .Where(style => !string.IsNullOrWhiteSpace(style.StyleId?.Value))
@@ -209,7 +243,7 @@ static class WordWorkspace
         }
     }
 
-    static bool HasHeadingStyle(Wp.Paragraph? paragraph)
+    public static bool HasHeadingStyle(Wp.Paragraph? paragraph)
     {
         var style = paragraph?.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? "";
         return style.StartsWith("Heading", StringComparison.OrdinalIgnoreCase)

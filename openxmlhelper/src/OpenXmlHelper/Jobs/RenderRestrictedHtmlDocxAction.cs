@@ -28,12 +28,28 @@ sealed class RenderRestrictedHtmlDocxRequest
     /// <summary>页眉页脚装饰图与文字层描述，由渲染进程的共享 SVG 生成器产出。</summary>
     [JsonPropertyName("chrome_assets")]
     public JsonElement ChromeAssets { get; set; }
+
+    /// <summary>整本导出并入的商务模版；仅 whole_document 时使用。</summary>
+    [JsonPropertyName("business_template")]
+    public BusinessTemplateRequest? BusinessTemplate { get; set; }
+
+    /// <summary>整本导出有目录时另存只含目录页的小文档，供 Main 复测目录页数。</summary>
+    [JsonPropertyName("toc_measure")]
+    public bool TocMeasure { get; set; }
+}
+
+/// <summary>已填写的商务模版副本，以及字段清单中各章节在模版正文中的顶层块范围。</summary>
+sealed class BusinessTemplateRequest
+{
+    public string Input { get; set; } = "";
+    public List<TemplateChapterRange> Chapters { get; set; } = [];
 }
 
 /// <summary>把受限 HTML 按导出模板配置生成一份新的 Word 文档。</summary>
 static class RenderRestrictedHtmlDocxAction
 {
     public const string Name = "render-restricted-html-docx";
+    public const string TocOnlyFileName = "toc-only.docx";
 
     /// <summary>读取任务参数，在当前任务目录中生成 docx。</summary>
     public static JobResult Execute(string workspace, string jobId)
@@ -72,6 +88,14 @@ static class RenderRestrictedHtmlDocxAction
             var chrome = ChromeAssets.From(workspace, request.ChromeAssets);
 
             var outputPath = Path.Combine(jobDirectory, outputName);
+            var businessTemplatePath = request.WholeDocument && request.BusinessTemplate is { } business
+                ? WordWorkspace.ResolveWorkspacePath(workspace, business.Input)
+                : null;
+            if (businessTemplatePath is not null && !File.Exists(businessTemplatePath))
+            {
+                return JobResult.Fail($"商务模版不存在：{request.BusinessTemplate!.Input}");
+            }
+
             var rendered = RestrictedHtmlDocumentRenderer.Render(
                 assetRoot,
                 outputPath,
@@ -79,10 +103,30 @@ static class RenderRestrictedHtmlDocxAction
                 request.ExportFormat,
                 chrome,
                 request.WholeDocument,
-                request.AssetTypes);
+                request.AssetTypes,
+                businessTemplatePath is null ? null : new BusinessTemplateSource(businessTemplatePath, request.BusinessTemplate!.Chapters));
             var result = JobResult.Success(Name, outputName, rendered.BlockCount);
             result.ParagraphRoles = rendered.ParagraphRoles;
             result.ImageWarnings = rendered.ImageWarnings;
+            if (request.WholeDocument) result.PendingMarkCount = rendered.PendingMarkCount;
+            if (businessTemplatePath is not null)
+            {
+                result.BusinessFieldIds = rendered.BusinessFieldIds;
+                result.BusinessWarnings = rendered.BusinessWarnings;
+            }
+            if (rendered.PageRefs is { } pageRefs)
+            {
+                result.PageRefs = new PageRefJobResult { Count = pageRefs.Count, MissingCount = pageRefs.MissingCount, Anchors = pageRefs.Anchors };
+            }
+            if (rendered.Toc is { } toc)
+            {
+                result.Toc = new TocJobResult { Entries = toc.Entries, StartBlock = toc.StartBlock, EndBlock = toc.EndBlock };
+                if (request.TocMeasure)
+                {
+                    TableOfContentsBuilder.WriteTocOnly(outputPath, Path.Combine(jobDirectory, TocOnlyFileName), toc.StartBlock, toc.EndBlock);
+                    result.Toc.TocOnly = TocOnlyFileName;
+                }
+            }
             return result;
         }
         catch (Exception exception)
