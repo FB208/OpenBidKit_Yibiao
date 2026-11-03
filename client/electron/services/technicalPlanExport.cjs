@@ -8,48 +8,6 @@ const { collectOutlineExportEntries, formatPendingMark, getPendingContentModeMes
 const { findHtmlStructureIssues } = require('../utils/htmlStructure.cjs');
 const { fillTableOfContents } = require('./technicalPlanToc.cjs');
 
-/**
- * 证明材料和承诺书的 HTML：每项一个比所附小节低一级的标题（前置分页标记，进目录，不写编号），材料按顺序附资信库图片，
- * 缺少或图片已删除时写待填写；承诺书逐段写正文，末尾加投标人名称和日期落款。refs 为用到的资信库图片（助手工作区相对路径）。
- */
-function renderMaterialsHtml(items, { level, images, companyName }) {
-  const headingLevel = Math.min(level + 1, 6);
-  const refs = new Set();
-  let pendingCount = 0;
-  const pending = (note) => {
-    pendingCount += 1;
-    return `<p><em>${escapeHtml(formatPendingMark(note))}</em></p>`;
-  };
-  const html = items.map((item) => {
-    // 分页标记由转换器换成标题的段前分页，每项材料另起一页。
-    const heading = `<p>YIBIAOPAGEBREAK</p>
-<h${headingLevel}>${escapeHtml(item.title)}</h${headingLevel}>`;
-    if (item.paragraphs) {
-      return [
-        heading,
-        ...item.paragraphs.map(text => text.trim()).filter(Boolean).map(text => `<p>${escapeHtml(text)}</p>`),
-        `<p>投标人名称（公章）：${companyName ? escapeHtml(companyName) : escapeHtml(formatPendingMark('投标人名称'))}</p>`,
-        `<p>日期：${escapeHtml(formatPendingMark('日期'))}</p>`,
-      ].join('\n');
-    }
-    const found = item.image_ids.map(id => images.get(id)).filter(Boolean);
-    const figures = found.map((image) => {
-      const ref = `credential-library/${image.relativePath}`;
-      refs.add(ref);
-      return `<figure data-yb-size="page" data-yb-fit="contain"><img data-yb-asset-ref="${escapeHtml(ref)}" alt="${escapeHtml(image.customName || image.originalName || item.title)}"></figure>`;
-    });
-    return [
-      heading,
-      ...figures,
-      ...(item.missing ? [pending(`${item.title}：${item.missing}`)] : []),
-      // 一张图都没有、也没有缺少说明（用户在确认弹窗移除了全部图片）时同样标为待填写，不当作齐全的材料导出。
-      ...(!item.image_ids.length && !item.missing ? [pending(`${item.title}（${item.basis}）`)] : []),
-      ...(found.length < item.image_ids.length ? [pending(`${item.title}：所选资信库图片已删除`)] : []),
-    ].join('\n');
-  }).join('\n');
-  return { html, refs, pendingCount };
-}
-
 /** 转义程序插入的项目名、目录标题和占位提示。 */
 function escapeHtml(text) {
   return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -142,8 +100,20 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         .filter(chapter => chapter.id)
         .map(chapter => [chapter.id, chapter]));
       const businessIds = new Set(entries
-        .filter(({ item }) => !item.children?.length && !['ai-generate', 'directory-generate'].includes(item.content_mode) && templateChapters.has(item.id))
+        .filter(({ item }) => !item.children?.length && !['ai-generate', 'directory-generate'].includes(item.content_mode) && templateChapters.has(item.id) && !templateChapters.get(item.id).generated)
         .map(({ item }) => item.id));
+      // 商务生成模板按所挂目录叶子归组：body 是只有标题的提取章节的正文，紧接该章；attach 带标题，放在该叶子内容之后。
+      const generatedByNode = new Map();
+      for (const chapter of templateChapters.values()) {
+        if (!chapter.generated) continue;
+        const after = chapter.generated.after;
+        if (chapter.generated.mode === 'body' && !businessIds.has(after)) continue;
+        generatedByNode.set(after, [...(generatedByNode.get(after) || []), chapter]);
+      }
+      for (const [after, chapters] of generatedByNode) {
+        generatedByNode.set(after, [...chapters.filter(chapter => chapter.generated.mode === 'body'), ...chapters.filter(chapter => chapter.generated.mode === 'attach')]);
+      }
+      const usedGenerated = [];
       // 目录在第一个目录生成小节处按实际页码生成；目录页只允许一个，老项目多出的保留待填写提示。
       const tocItems = entries.filter(({ item }) => !item.children?.length && item.content_mode === 'directory-generate').map(({ item }) => item);
       const tocId = tocItems[0]?.id;
@@ -184,24 +154,25 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       }
       const anchorMarkers = (ids = [], kind) => ids.map(id => `<p>YIBIAOANCHOR:${kind}:${id}</p>\n`).join('');
       const unRuledChapters = !rulePageTables && entries.some(({ item }) => businessIds.has(item.id) && templateChapters.get(item.id)?.rule_page);
-      // 证明材料和承诺书按放置的目录节点归组，插在该节点内容之后、终点锚点之前，页码引用的范围覆盖附后的材料。
-      const materialsByNode = new Map();
-      if (technicalPlanStore.hasBidTemplate()) {
-        const { materials, commitments } = technicalPlanStore.readBusinessMaterials();
-        for (const item of [...materials, ...commitments]) materialsByNode.set(item.after, [...(materialsByNode.get(item.after) || []), item]);
-      }
-      const credential = materialsByNode.size ? credentialLibraryService.load() : {};
-      const credentialImages = new Map((credential.images || []).map(image => [image.imageId, image]));
-      const materialRefs = new Set();
-      let materialPendingCount = 0;
-      const renderNodeMaterials = (item, level, label) => {
-        if (!materialsByNode.has(item.id)) return '';
-        const rendered = renderMaterialsHtml(materialsByNode.get(item.id), { level, images: credentialImages, companyName: credential.profile?.companyName });
-        for (const ref of rendered.refs) materialRefs.add(ref);
-        recordImages(label, rendered.refs);
-        materialPendingCount += rendered.pendingCount;
-        return rendered.html;
-      };
+      // 商务生成模板作为商务章节范围插在所挂叶子之后，页面组跟随该叶子；该叶子及祖先的终点锚点移到最后一个生成章节上，页码引用覆盖附后的内容。
+      // attach 的标题比所挂叶子低一级、不编号；前置页（目录之前）的章节标题保持模版原样。
+      const pushGenerated = (chapters, { index, level, useTemplate, pageKind }) => chapters.forEach((chapter, order) => {
+        usedGenerated.push(chapter);
+        ranges.push({
+          business: {
+            id: chapter.id,
+            title: chapter.title,
+            level: chapter.generated.mode === 'body' ? level : Math.min(level + 1, 6),
+            number: '',
+            anchorStart: [],
+            anchorEnd: order === chapters.length - 1 ? anchorEnds.get(index) || [] : [],
+            generated: chapter.generated.mode,
+            front: index <= tocTopIndex,
+          },
+          useTemplate,
+          pageKind,
+        });
+      });
       const ranges = [];
       const layoutSources = [];
       const warnings = [];
@@ -225,7 +196,7 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       // 合并相邻同样式范围，完整章节只排版一次；混合父标题跟随首个子节点的页面。
       const append = (html, useTemplate, pageKind) => {
         const previous = ranges.at(-1);
-        if (previous && !previous.business && !previous.materials && previous.useTemplate === useTemplate && previous.pageKind === pageKind) previous.html += `\n${html}`;
+        if (previous && !previous.business && previous.useTemplate === useTemplate && previous.pageKind === pageKind) previous.html += `\n${html}`;
         else ranges.push({ html, useTemplate, pageKind });
       };
       const reportEntry = (index, label) => onProgress?.({ phase: 'running', progress: 10 + Math.round((index + 1) / entries.length * 40), message: `正在读取正文 ${index + 1}/${entries.length}：${label}`, warnings: [], ...stats });
@@ -234,10 +205,10 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         if (level > 6) throw new Error('当前转换器最多支持六级章节标题');
         const label = `${item.number} ${item.title}`;
         if (businessIds.has(item.id)) {
-          // 模版章节使用自带的标题段，不另写程序标题；有证明材料时终点锚点移到材料之后，材料单独成范围，其后的章节保留开头分页。
-          const materialsHtml = renderNodeMaterials(item, level, label);
-          ranges.push({ business: { id: item.id, title: item.title, level, number: exportNumbers[index], anchorStart: anchorStarts.get(index) || [], anchorEnd: materialsHtml ? [] : anchorEnds.get(index) || [] }, useTemplate, pageKind: 'business' });
-          if (materialsHtml) ranges.push({ html: `${materialsHtml}${anchorEnds.has(index) ? `\n${anchorMarkers(anchorEnds.get(index), 'E')}` : ''}`, useTemplate, pageKind: 'business', materials: true });
+          // 模版章节使用自带的标题段，不另写程序标题；有商务生成模板时终点锚点移到最后一个生成章节上。
+          const generated = generatedByNode.get(item.id) || [];
+          ranges.push({ business: { id: item.id, title: item.title, level, number: exportNumbers[index], anchorStart: anchorStarts.get(index) || [], anchorEnd: generated.length ? [] : anchorEnds.get(index) || [], front: index <= tocTopIndex }, useTemplate, pageKind: 'business' });
+          pushGenerated(generated, { index, level, useTemplate, pageKind: 'business' });
           reportEntry(index, label);
           continue;
         }
@@ -281,16 +252,17 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         }
         // 显式记录导出编号，正文内部标题不能改变后续目录编号；前置页不写编号。
         const heading = `<h${level}${numberAttribute(exportNumbers[index])}>${escapeHtml(item.title)}</h${level}>`;
-        const materialsHtml = renderNodeMaterials(item, level, label);
-        append(`${anchorMarkers(anchorStarts.get(index), 'S')}${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}${materialsHtml ? `\n${materialsHtml}` : ''}${anchorEnds.has(index) ? `\n${anchorMarkers(anchorEnds.get(index), 'E')}` : ''}`, useTemplate, pageKinds[index]);
+        const generated = (generatedByNode.get(item.id) || []).filter(chapter => chapter.generated.mode === 'attach');
+        append(`${anchorMarkers(anchorStarts.get(index), 'S')}${layoutCheck ? mark(heading, { section_id: item.id, heading: level }) : heading}\n${body}${!generated.length && anchorEnds.has(index) ? `\n${anchorMarkers(anchorEnds.get(index), 'E')}` : ''}`, useTemplate, pageKinds[index]);
+        pushGenerated(generated, { index, level, useTemplate, pageKind: pageKinds[index] });
         reportEntry(index, label);
       }
       const html = ranges.map(range => (range.business
-        ? `<section data-yb-business-chapter="${escapeHtml(range.business.id)}" data-yb-business-level="${range.business.level}" data-yb-business-title="${escapeHtml(range.business.title)}"${numberAttribute(range.business.number)} data-yb-anchor-start="${range.business.anchorStart.join(' ')}" data-yb-anchor-end="${range.business.anchorEnd.join(' ')}" data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="business"></section>`
-        : `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.pageKind}"${range.materials ? ' data-yb-materials="true"' : ''}>${range.html}</section>`)).join('\n');
+        ? `<section data-yb-business-chapter="${escapeHtml(range.business.id)}" data-yb-business-level="${range.business.level}" data-yb-business-title="${escapeHtml(range.business.title)}"${numberAttribute(range.business.number)} data-yb-anchor-start="${range.business.anchorStart.join(' ')}" data-yb-anchor-end="${range.business.anchorEnd.join(' ')}"${range.business.generated ? ` data-yb-generated="${range.business.generated}"` : ''}${range.business.front ? ' data-yb-front-page="true"' : ''} data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.pageKind}"></section>`
+        : `<section data-yb-export-template="${range.useTemplate}" data-yb-export-page-template="${range.pageKind}">${range.html}</section>`)).join('\n');
       developerLogger?.write('export.technical_plan.html.assembled', { section_count: entries.length, skipped_section_count: warnings.length, business_chapter_count: businessIds.size, html_chars: html.length, image_count: cheerio.load(html)('img').length });
       let business = null;
-      if (businessIds.size) {
+      if (businessIds.size || usedGenerated.length) {
         onProgress?.({ phase: 'running', progress: 52, message: '正在按已确认的字段值生成商务模版。', warnings: [], ...stats });
         business = await renderBusinessTemplateForExport({ workspaceStore: technicalPlanStore, credentialLibraryService, openXmlHelperService });
       }
@@ -298,8 +270,8 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
       let result;
       try {
         result = await openXmlHelperService.createRestrictedHtmlDocx(html, snapshot.export_format, {
-          assetRoot: snapshot.workspaceDir, copyAssets: true, wholeDocument: true, tocMeasure: !layoutCheck, workspaceAssets: materialRefs,
-          ...(business ? { businessTemplate: { input: business.input, chapters: [...businessIds].map(id => templateChapters.get(id)) } } : {}),
+          assetRoot: snapshot.workspaceDir, copyAssets: true, wholeDocument: true, tocMeasure: !layoutCheck,
+          ...(business ? { businessTemplate: { input: business.input, chapters: [...[...businessIds].map(id => templateChapters.get(id)), ...usedGenerated] } } : {}),
         });
       } finally {
         business?.cleanup();
@@ -333,7 +305,6 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
         ...(business.missingImages.size ? [`商务模版 ${business.missingImages.size} 项所选图片已从资信库删除，已保留占位`] : []),
         ...result.businessWarnings,
       ] : [];
-      if (materialPendingCount) businessNotes.push(`证明材料和承诺书有 ${materialPendingCount} 处缺少内容，已标为待填写`);
       warnings.push(...businessNotes);
       // 正文、商务占位和程序提示中需要用户补充的位置统一为“【待填写】”，提示总数和搜索关键词。
       const pendingNote = result.pendingMarkCount ? `共 ${result.pendingMarkCount} 处“待填写”：在 Word 中搜索“待填写”逐项补充` : '';
@@ -353,4 +324,4 @@ function createTechnicalPlanExport({ technicalPlanStore, templateStore, agentSer
   };
 }
 
-module.exports = { createTechnicalPlanExport, renderMaterialsHtml };
+module.exports = { createTechnicalPlanExport };

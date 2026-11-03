@@ -3,12 +3,9 @@ import { InfoCircledIcon } from '@radix-ui/react-icons';
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { AppSwitch, useAutoAnswer } from '../../../shared/ui';
-import type { BusinessFillReview, BusinessFillReviewImage, BusinessFillReviewSubmission, BusinessFillReviewUnit, BusinessFillReviewValue, BusinessMaterials } from '../types';
+import type { BusinessFillReview, BusinessFillReviewImage, BusinessFillReviewSubmission, BusinessFillReviewUnit, BusinessFillReviewValue } from '../types';
 import { toChineseAmount } from '../services/amountUppercase';
 import BusinessFillDocument, { collectFieldIds, createDraft, describeUnitState, findIdleListUnitKeys, isFilled, isPending, type UnitDraft } from './BusinessFillDocument';
-import BusinessMaterialsPanel from './BusinessMaterialsPanel';
-
-const EMPTY_MATERIALS: BusinessMaterials = { materials: [], commitments: [] };
 
 interface BusinessFillReviewDialogProps {
   open: boolean;
@@ -34,9 +31,6 @@ function BusinessFillReviewDialog({
   onConfirm,
 }: BusinessFillReviewDialogProps) {
   const [drafts, setDrafts] = useState<Record<string, UnitDraft>>({});
-  const [materials, setMaterials] = useState<BusinessMaterials>(EMPTY_MATERIALS);
-  // fields 显示按版式排列的字段，materials 显示证明材料和承诺书。
-  const [view, setView] = useState<'fields' | 'materials'>('fields');
   const [countdownSeconds, setCountdownSeconds] = useState(0);
   const [activeChapter, setActiveChapter] = useState(0);
   const interactionReportedRef = useRef(false);
@@ -50,8 +44,6 @@ function BusinessFillReviewDialog({
   useEffect(() => {
     if (!open || !review) return;
     setDrafts(Object.fromEntries(review.units.map((unit) => [unit.key, createDraft(unit)])));
-    setMaterials(review.materials || EMPTY_MATERIALS);
-    setView('fields');
     setActiveChapter(0);
     interactionReportedRef.current = false;
     lastFocusedKeyRef.current = '';
@@ -170,19 +162,9 @@ function BusinessFillReviewDialog({
     if (unit) lastFocusedKeyRef.current = unit.key;
   };
 
-  // 从证明材料切回字段时，等纸面显示后再滚动到章节。
   const scrollToChapter = (index: number) => {
-    setView('fields');
-    window.requestAnimationFrame(() => {
-      paperRef.current?.querySelector(`[data-chapter-index="${index}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    });
+    paperRef.current?.querySelector(`[data-chapter-index="${index}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
-
-  const updateMaterials = (next: BusinessMaterials) => {
-    reportInteraction();
-    setMaterials(next);
-  };
-  const missingMaterialCount = materials.materials.filter((item) => item.missing).length;
 
   // 以纸面顶部为准高亮当前所在章节。
   const trackChapter = () => {
@@ -226,36 +208,18 @@ function BusinessFillReviewDialog({
                   <button
                     key={chapter.id || index}
                     type="button"
-                    className={view === 'fields' && index === activeChapter ? 'is-active' : undefined}
+                    className={index === activeChapter ? 'is-active' : undefined}
                     onClick={() => scrollToChapter(index)}
                   >
                     <strong>{chapter.title}</strong>
                     <span>{chapterUnits.length ? `已填 ${filled} · 待处理 ${pending}` : '无需填写'}</span>
+                    {chapter.attached_to && <small>附于 {chapter.attached_to}</small>}
                     {!chapter.auto_fill && <em>人工填写</em>}
                   </button>
                 );
               })}
-              <button type="button" className={view === 'materials' ? 'is-active' : undefined} onClick={() => setView('materials')}>
-                <strong>证明材料</strong>
-                <span>
-                  {`材料 ${materials.materials.length}${missingMaterialCount ? ` · 缺少 ${missingMaterialCount}` : ''}`}
-                  {materials.commitments.length ? ` · 承诺书 ${materials.commitments.length}` : ''}
-                </span>
-              </button>
             </nav>
-            {view === 'materials' && review && (
-              <div className="business-fill-paper">
-                <BusinessMaterialsPanel
-                  materials={materials}
-                  placements={review.placements || {}}
-                  imageGroups={imageGroups}
-                  imagesById={imagesById}
-                  saving={saving}
-                  onChange={updateMaterials}
-                />
-              </div>
-            )}
-            <div className="business-fill-paper" ref={paperRef} onScroll={trackChapter} onFocus={trackFocus} hidden={view === 'materials'}>
+            <div className="business-fill-paper" ref={paperRef} onScroll={trackChapter} onFocus={trackFocus}>
               {review ? (
                 <BusinessFillDocument
                   chapters={chapters}
@@ -331,7 +295,7 @@ function BusinessFillReviewDialog({
               <button
                 type="button"
                 className="primary-action"
-                onClick={() => onConfirm({ values: buildValues(), materials })}
+                onClick={() => onConfirm({ values: buildValues() })}
                 disabled={saving || !review}
               >
                 {saving ? '正在保存...' : editing ? '保存并回填' : '确认填写'}

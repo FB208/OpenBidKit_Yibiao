@@ -187,38 +187,48 @@ static class RestrictedHtmlDocumentRenderer
                 section.AddChild(new Wp.PageNumberType { Start = Math.Max(1, format.Integer(format.Section("page"), "page_number_start", 1)) }, true);
             var pageElements = new List<OpenXmlElement>();
             var afterChapter = false;
-            var afterMaterials = false;
+            var afterGenerated = false;
             do
             {
                 var range = ranges[index++];
                 var chapterId = range.GetAttribute("data-yb-business-chapter");
                 if (!string.IsNullOrEmpty(chapterId))
                 {
-                    if (!businessPage) throw new InvalidOperationException("商务模版章节必须位于 business 页面范围");
+                    // 商务生成模板（attach 附在叶子后、body 作为只有标题章节的正文）随所挂叶子的页面组，可以位于技术方案中间。
+                    var generated = range.GetAttribute("data-yb-generated");
+                    if (!businessPage && generated is null) throw new InvalidOperationException("商务模版章节必须位于 business 页面范围");
                     // 组首或父目录标题之后的章节去掉开头分页；相邻章节之间保留模版自带的分页。
-                    // 证明材料之后的章节，以及开启一级标题另起页时的一级章节，章首另起一页。
-                    // 标题段按导出模板的标题样式排版；封面等前置页没有导出编号，保持模版原样。
+                    // attach 另起一页，body 紧接所挂章节；商务生成模板之后的章节，以及开启一级标题另起页时的一级章节，章首另起一页。
+                    // 下一个范围是商务生成模板时去掉章末空段，避免空白页、正文不接在标题后。
+                    // 标题段按导出模板的标题样式排版；封面等前置页保持模版原样。
                     var level = int.TryParse(range.GetAttribute("data-yb-business-level"), out var parsedLevel) ? parsedLevel : 1;
-                    var outlineNumber = range.GetAttribute("data-yb-outline-number");
+                    var front = range.GetAttribute("data-yb-front-page") == "true";
+                    var startOnNewPage = generated switch
+                    {
+                        "attach" => pageElements.Count > 0,
+                        "body" => false,
+                        _ => afterChapter && (afterGenerated || (level == 1 && level1PageBreak)),
+                    };
                     pageElements.AddRange(merger!.ImportChapter(
                         chapterId,
                         range.GetAttribute("data-yb-business-title") ?? "",
                         level,
-                        stripLeadingPageBreak: !afterChapter,
-                        startOnNewPage: afterChapter && (afterMaterials || (level == 1 && level1PageBreak)),
+                        stripLeadingPageBreak: generated is null && !afterChapter,
+                        startOnNewPage: startOnNewPage,
                         new PageAnchorRequest(
                             SplitAnchorIds(range.GetAttribute("data-yb-anchor-start")),
                             SplitAnchorIds(range.GetAttribute("data-yb-anchor-end")),
                             NextAnchorId),
-                        OutlineNumberText(outlineNumber, format, level),
-                        string.IsNullOrWhiteSpace(outlineNumber) ? null : title => ApplyHeadingLook(title, format, level, firstLineTwips: -1)));
+                        OutlineNumberText(range.GetAttribute("data-yb-outline-number"), format, level),
+                        front || generated == "body" ? null : title => ApplyHeadingLook(title, format, level, firstLineTwips: -1),
+                        withTitle: generated != "body",
+                        trimTrailingBlank: index < ranges.Count && ranges[index].GetAttribute("data-yb-generated") is not null));
                     afterChapter = true;
-                    afterMaterials = false;
+                    afterGenerated = generated is not null;
                     continue;
                 }
-                // 证明材料范围之后的章节另起一页，不接在材料图片后面。
-                afterMaterials = range.GetAttribute("data-yb-materials") == "true";
-                afterChapter = afterMaterials;
+                afterChapter = false;
+                afterGenerated = false;
                 var rangeFormat = range.GetAttribute("data-yb-export-template") == "true" ? format : basic;
                 body.RemoveAllChildren();
                 body.AppendChild(section.CloneNode(true));
@@ -234,7 +244,6 @@ static class RestrictedHtmlDocumentRenderer
                     toc = new TocState(tocSdt, tocSdt.PreviousSibling() as Wp.Paragraph ?? throw new InvalidOperationException("目录缺少标题"), rangeFormat);
                 }
                 ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
-                ApplyPageBreakMarkers(body);
                 foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
                 {
                     element.Remove();
@@ -373,20 +382,6 @@ static class RestrictedHtmlDocumentRenderer
     /// <summary>商务章节上的锚点属性：空格分隔的目录节点 ID。</summary>
     static IReadOnlyList<string> SplitAnchorIds(string? value) =>
         (value ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    /// <summary>
-    /// 分页标记段落（证明材料标题前）换成下一段的段前分页。在排版之后处理，排版会清掉非一级标题的段前分页。
-    /// </summary>
-    static void ApplyPageBreakMarkers(Wp.Body body)
-    {
-        foreach (var marker in body.Elements<Wp.Paragraph>().Where(p => p.InnerText.Trim() == PageBreakMarker).ToList())
-        {
-            if (marker.NextSibling() is Wp.Paragraph next) EnsureParagraphProperties(next).PageBreakBefore = new Wp.PageBreakBefore();
-            marker.Remove();
-        }
-    }
-
-    const string PageBreakMarker = "YIBIAOPAGEBREAK";
 
     static void ApplyLayoutBookmarks(Wp.Body body, int bookmarkId)
     {

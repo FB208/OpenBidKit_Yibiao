@@ -385,11 +385,12 @@ export interface BusinessFillLayoutBlock {
   blocks?: BusinessFillLayoutBlock[];
 }
 
-/** 商务模版章节；auto_fill 为 false 时章节字段由用户人工填写。 */
+/** 商务模版章节；auto_fill 为 false 时章节字段由用户人工填写；attached_to 为附在其他小节后的商务生成模板所挂小节的“编号 标题”。 */
 export interface BusinessFillReviewChapter {
   id?: string;
   title: string;
   auto_fill: boolean;
+  attached_to?: string;
   blocks: BusinessFillLayoutBlock[];
 }
 
@@ -401,9 +402,6 @@ export interface BusinessFillReview {
   /** 正文默认字号（磅）。 */
   base_size: number;
   chapters: BusinessFillReviewChapter[];
-  materials: BusinessMaterials;
-  /** 目录叶子 ID 对应的“编号 标题”，供证明材料显示放置位置。 */
-  placements: Record<string, string>;
 }
 
 /** 投标模版与当前目录不一致的非 AI 叶子；auto_fill 为当前处理方式对应的字段是否自动填写，rule_page 为是否规则和页码。 */
@@ -429,32 +427,9 @@ export interface BusinessFillReviewValue {
   image_id?: string;
 }
 
-/** 商务填写 Agent 列出的证明材料：整本导出时插在目录节点 after 之后，按顺序附资信库图片，missing 说明缺少的内容。 */
-export interface BusinessMaterial {
-  after: string;
-  title: string;
-  basis: string;
-  image_ids: string[];
-  missing?: string;
-}
-
-/** 招标文件要求书面承诺但没有格式的条款生成的承诺书，落款由导出时加上。 */
-export interface BusinessCommitment {
-  after: string;
-  title: string;
-  basis: string;
-  paragraphs: string[];
-}
-
-export interface BusinessMaterials {
-  materials: BusinessMaterial[];
-  commitments: BusinessCommitment[];
-}
-
-/** 确认弹窗提交的字段值和证明材料。 */
+/** 确认弹窗提交的字段值（含商务生成模板的字段）。 */
 export interface BusinessFillReviewSubmission {
   values: BusinessFillReviewValue[];
-  materials: BusinessMaterials;
 }
 
 export interface ContentGenerationRuntimeState {

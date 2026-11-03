@@ -77,8 +77,8 @@ export function collectFieldIds(blocks: BusinessFillLayoutBlock[], output: strin
   return output;
 }
 
-/** 资信库图片选择弹层内容，按所属记录分组；clearLabel 存在时提供“不选择”。附件字段和证明材料共用。 */
-export function BusinessImagePickerContent({ imageGroups, selectedId, clearLabel, onSelect }: {
+/** 附件字段的资信库图片选择弹层内容，按所属记录分组；clearLabel 存在时提供“不选择”。 */
+function BusinessImagePickerContent({ imageGroups, selectedId, clearLabel, onSelect }: {
   imageGroups: Array<[string, BusinessFillReviewImage[]]>;
   selectedId?: string;
   clearLabel?: string;

@@ -5,7 +5,7 @@ const Ajv = require('ajv');
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
 const { CREDENTIAL_IMAGE_FIELD_LABELS } = require('./credentialLibraryService.cjs');
-const { readTemplateLayout } = require('./pi/piOpenXmlTool.cjs');
+const { appendGeneratedChapters, readTemplateLayout } = require('./pi/piOpenXmlTool.cjs');
 const { buildRuleTableFills, convertAgentPageRefs, createPageRefDisplay, isRuleField, numberedNodes, toAgentPageRefs } = require('./rulePageTables.cjs');
 const { buildOutlineInput, collectOutlineLeaves, numberOutline } = require('./technicalPlanOutline.cjs');
 
@@ -44,29 +44,41 @@ const FILL_REF_SCHEMA = {
     row: { type: 'integer', minimum: 1 },
   },
 };
-// 证明材料：放在目录叶子 after 之后，按顺序附资信库图片，没有或不全时写 missing。
-const MATERIAL_SCHEMA = {
+// 商务生成模板：招标文件要求、但商务模版中没有格式或位置的内容（证明材料、承诺或声明、只有标题章节的正文），
+// 与提取模板同属商务模版。attach 附在目录叶子 after 之后、带标题；body 作为只有标题的商务章节 after 的正文。
+// blocks 每项一段：text 中 {{字段名}} 为填写位置，attachment 为只放一张图片的附件位置；fields 列出新名称的字段。
+const GENERATED_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['after', 'title', 'basis', 'image_ids'],
+  required: ['mode', 'after', 'basis', 'blocks'],
   properties: {
+    mode: { enum: ['attach', 'body'] },
     after: nonEmptyString,
     title: nonEmptyString,
     basis: nonEmptyString,
-    image_ids: { type: 'array', items: nonEmptyString },
-    missing: nonEmptyString,
-  },
-};
-// 承诺书：招标文件要求书面承诺但没给格式的条款，放在目录叶子 after 之后。
-const COMMITMENT_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['after', 'title', 'basis', 'paragraphs'],
-  properties: {
-    after: nonEmptyString,
-    title: nonEmptyString,
-    basis: nonEmptyString,
-    paragraphs: { type: 'array', minItems: 1, items: nonEmptyString },
+    blocks: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { text: nonEmptyString, attachment: nonEmptyString },
+      },
+    },
+    fields: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'subject', 'kind', 'fill_by'],
+        properties: {
+          name: nonEmptyString,
+          subject: nonEmptyString,
+          kind: { enum: ['text', 'attachment'] },
+          fill_by: { enum: ['ai', 'manual'] },
+        },
+      },
+    },
   },
 };
 // value、selected、image_id 的互斥及字段类型在 validateOutput 中按填写项检查。
@@ -117,8 +129,7 @@ const BUSINESS_TEMPLATE_FILL_JSON_SCHEMA = {
         },
       },
     },
-    materials: { type: 'array', items: MATERIAL_SCHEMA },
-    commitments: { type: 'array', items: COMMITMENT_SCHEMA },
+    generated: { type: 'array', items: GENERATED_SCHEMA },
   },
 };
 const ajv = new Ajv({ allErrors: true, strict: true });
@@ -248,8 +259,10 @@ function groupTableUnits(units) {
   return tables;
 }
 
-function buildFieldsInput(units) {
+// chapters 按目录顺序列出范围内的商务模版章节，title_only 表示除标题外没有内容，由填写 Agent 写商务生成模板作为正文。
+function buildFieldsInput(units, chapters = []) {
   return {
+    ...(chapters.length ? { chapters } : {}),
     fields: units.filter(unit => !unit.table_id).map(unit => ({ ...describeUnit(unit), ...(unit.section ? { section: unit.section } : {}), count: unit.field_ids.length })),
     tables: [...groupTableUnits(units).values()].map(table => ({
       table_id: table.table_id,
@@ -363,9 +376,9 @@ function buildCredentialLibraryInput(snapshot = {}) {
   };
 }
 
-function buildBusinessTemplateFillFiles({ units, credentialLibrary, tenderMarkdown, bidKeyInfoText, globalFactsText, outline }) {
+function buildBusinessTemplateFillFiles({ units, chapters, credentialLibrary, tenderMarkdown, bidKeyInfoText, globalFactsText, outline }) {
   return [
-    { path: FIELDS_INPUT_FILE, content: `${JSON.stringify(buildFieldsInput(units), null, 2)}\n` },
+    { path: FIELDS_INPUT_FILE, content: `${JSON.stringify(buildFieldsInput(units, chapters), null, 2)}\n` },
     { path: CREDENTIAL_INPUT_FILE, content: `${JSON.stringify(buildCredentialLibraryInput(credentialLibrary), null, 2)}\n` },
     { path: OUTLINE_INPUT_FILE, content: `${buildOutlineInput(outline)}\n` },
     { path: TENDER_INPUT_FILE, content: `${textOf(tenderMarkdown) || '未提供'}\n` },
@@ -378,14 +391,14 @@ function buildBusinessTemplateFillFiles({ units, credentialLibrary, tenderMarkdo
 function createBusinessTemplateFillPrompt({ resume = false, hasGlobalFacts = false } = {}) {
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。${resume ? '这是之前中断任务的继续：先检查已有的结果文件，保留有效内容，只补齐或修正未完成部分。' : ''}
 
-任务：为投标文件商务模版的待填字段取值，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
+任务：为投标文件商务模版的待填字段取值，并为招标文件要求、但模版中没有格式的内容写出商务生成模板，结果写入 ${FILL_OUTPUT_FILE}。程序会校验结果并写入 Word，你不读写任何 Word 文件，也不修改输入文件。
 
 输入文件：
-- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满；entries=true 的是模版中按条目重复的段落（如多个标的时依次写的各条），每条为一行，rows 为可用的条序号，用法与表格相同。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=select 为择一并给出 options，kind=attachment 为附件图片。subject 是该字段所描述的对象（要填写谁或什么的信息），section 是字段或表格所在的章节和表格标题，context 是字段在模版中的原句（【▢…】为填写处，表格为同行内容）。
+- ${FIELDS_INPUT_FILE}：fields 为普通字段，同名字段填同一个值，count 为该字段在模版中出现的次数；tables 为逐行填写的清单表，每个表格给出列（columns）和可用行号（rows），每一行代表一条记录，不要求填满；entries=true 的是模版中按条目重复的段落（如多个标的时依次写的各条），每条为一行，rows 为可用的条序号，用法与表格相同。kind=text 为文字字段，kind=choice 为勾选项并给出 options，kind=select 为择一并给出 options，kind=attachment 为附件图片。subject 是该字段所描述的对象（要填写谁或什么的信息），section 是字段或表格所在的章节和表格标题，context 是字段在模版中的原句（【▢…】为填写处，表格为同行内容）。chapters 按目录顺序列出商务模版章节的目录编号和标题，title_only=true 表示该章除标题外没有内容。
 - ${CREDENTIAL_INPUT_FILE}：投标人的资信库，包括基本信息、资质、员工、业绩、财务信息和其他资料；企业图片和各条记录下的“图片”列出可用图片的 id、栏目和名称。
 - ${TENDER_INPUT_FILE}：当前标段的招标文件全文。
 - ${BID_INFO_INPUT_FILE}：项目概述和招标关键信息。
-- ${OUTLINE_INPUT_FILE}：本投标文件的完整目录，带编号、处理方式和说明，供 materials 和 commitments 指定放置位置。${hasGlobalFacts ? `
+- ${OUTLINE_INPUT_FILE}：本投标文件的完整目录，带编号、处理方式和说明，供 generated 指定放置位置。${hasGlobalFacts ? `
 - ${GLOBAL_FACTS_INPUT_FILE}：本次投标已确定的全局事实。` : ''}
 
 取值规则（先按 subject 确定应填写哪个对象的信息，名称不足以判断时结合 section 和招标文件中该位置的上下文判断）：
@@ -395,17 +408,21 @@ function createBusinessTemplateFillPrompt({ resume = false, hasGlobalFacts = fal
 4. 项目信息（项目名称、项目编号、招标人、工期或服务期、质量标准、投标有效期等）${hasGlobalFacts ? '以全局事实为准，全局事实未提及时取招标文件原文。' : `取招标文件原文和${BID_INFO_INPUT_FILE}。`}
 5. 勾选项只能从 options 中原样选择，可以多选；择一只能从 options 中原样选一项；没有依据时列入 unresolved。
 6. 附件用 image_id 从资信库图片中选择一张：按栏目和所属记录匹配材料，人员、证书、业绩相关附件必须属于已选用的同一人员、证书或业绩记录；同一张图片可用于多处；没有匹配的图片时列入 unresolved。
-7. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。
+7. 报价、金额、日期以及任何找不到明确依据的内容一律列入 unresolved 并写明原因，不编造、不估算。需要投标人补充的内容只能这样交给程序：列入 unresolved 的位置，程序会在 Word 中统一标成【待填写：…】，投标人靠全文搜索这个标记逐项补齐。取值和商务生成模板的文字中，不写“暂缺”“待补充”“后附”“另行提供”一类说明，也不要自己写“【待填写】”。
 8. 每个值为一段纯文本，需要多行时用换行符；有 instruction 时按其格式要求填写。有 context 时，取值要能直接放进原句的填写处：原句在填写处前后已有的文字（如“项目”“公司”、单位）不要在取值中重复。
-9. 同一项内容（如投标总价）在多处出现但字段不同时，选其中一处正常填写或列入 unresolved，其余位置用 links 声明为 same（同值）；某处是另一处金额的大写时声明为 uppercase。确认时投标人只需填写来源一处，程序同步其他位置并换算大写。声明了 links 的位置（target）不再写入 values、rows 的值或 unresolved。各份文件落款处的签署日期（含封面的投标日期）通常是同一天，同样选其中一处按第 7 条列入 unresolved，其余声明为 same；招标文件或资料明确要求不同日期的除外。
-10. materials 列出需要附在投标文件中的证明材料：依据资格要求、评分标准、投标须知中的资格证明文件条款和各格式的备注（如“证明材料按顺序附后”）确定附哪些材料。每项写 after（放在哪个目录叶子之后，写 ${OUTLINE_INPUT_FILE} 中的编号：对应的格式文件、“其他资料”或“资格证明”类章节，或相关正文小节）、title（材料标题，会进入投标文件目录）、basis（依据的条款或评分项）和 image_ids（资信库图片 id，按顺序列出该项需要的全部图片）。清单表中逐行列出的业绩、人员等，按行的顺序每条记录一项，附该记录中招标文件要求的各类图片。模版中已有附件位置的材料不重复列。资信库没有或不全时写 missing 说明缺少什么，不得用不相关的图片充数。
-11. commitments 只用于招标文件要求投标人书面承诺、但没有给出格式的条款：每份写 after、title、basis 和 paragraphs（承诺书正文各段，可含致函对象）。只照录招标文件要求承诺的内容，改为承诺语气，不新增承诺；已在其他格式文件中承诺过的不重复。落款（投标人名称和日期）由程序加上，不要写在 paragraphs 中。
-12. 需要写本投标文件中某部分所在页码的字段（如“该声明函见投标文件第__页”），写页码引用，不写页码数字：{{页码:目录编号}} 写成数字（3 或 3-7），原句已有“第…页”时用；{{页码文字:目录编号}} 写成“第3页”或“第3页至第7页”。编号取自 ${OUTLINE_INPUT_FILE}，指向该内容所在的小节，程序导出时换成实际页码。
-13. 人员的性别、出生日期、年龄，资料没有直接给出时按其身份证号推算，年龄按招标关键信息中的开标日期计算周岁；没有身份证号时列入 unresolved。企业规模（中型企业、小型企业、微型企业）按招标文件明确的所属行业和资信库中的上年度从业人员、营业收入、资产总额，依《中小企业划型标准规定》判断；指标缺少、无法判断时列入 unresolved。
+9. 同一项内容（如投标总价）在多处出现但字段不同时，选其中一处正常填写或列入 unresolved，其余位置用 links 声明为 same（同值）；某处是另一处金额的大写时声明为 uppercase。确认时投标人只需填写来源一处，程序同步其他位置并换算大写。声明了 links 的位置（target）不再写入 values、rows 的值或 unresolved。same 只用于整项内容相同的位置；只填其中一部分的位置（如模版把年、月、日分开填写）不声明 links，按第 7 条各自列入 unresolved。各份文件落款处的签署日期（含封面的投标日期）通常是同一天，同样选其中一处按第 7 条列入 unresolved，其余声明为 same；招标文件或资料明确要求不同日期的除外。
+10. generated 写商务生成模板：招标文件要求、但商务模版中没有对应格式或位置的内容，由你按招标文件写成模板，程序把它写进商务模版并照常填写。只在以下情况写，招标文件没有要求的不写：
+   - 资格要求、评分标准、投标须知中的资格证明文件条款或各格式的备注（如“证明材料按顺序附后”）要求附上的证明材料，且模版中没有对应的附件位置；清单表中逐行列出的业绩、人员等，按行的顺序每条记录一项，附该记录中招标文件要求的各类图片。招标文件要求附上的每项材料都至少写一个附件位置，资信库中有没有都要写；资信库没有、不全或不符合招标要求（如年度、有效期不符）时，把该附件列入 unresolved 并写明原因，不要省略附件位置、改在文字中说明；
+   - 招标文件明确要求投标人出具承诺或声明、但没有给出格式的条款；只是叙述要求、并未要求出具承诺或声明的条款不写，已在其他格式文件中承诺或声明过的不重复；
+   - ${FIELDS_INPUT_FILE} 的 chapters 中 title_only=true 的章节，按招标文件对该章的要求写出正文。
+   每项写 mode、after、basis（依据的条款或评分项）、blocks，以及需要时的 fields。mode=attach 放在 after 指定的目录叶子之后（写 ${OUTLINE_INPUT_FILE} 中的编号：对应的格式文件、“其他资料”或“资格证明”类章节，或相关正文小节），写 title（会进入投标文件目录）；mode=body 作为 after 指定的 title_only 章节的正文，不写 title。blocks 每项一段：{"text":"…"} 为文字段，其中 {{字段名}} 为填写位置；{"attachment":"字段名"} 为一个附件位置，只放一张图片，材料有多张图片时按顺序写多个附件位置，名称各不相同。承诺和声明的正文照录招标文件要求的内容，改为承诺语气，不新增内容；落款按招标文件要求写（投标人名称、日期，需要签字或盖章时写签字或盖章位置）。
+   填写位置的名称：与 ${FIELDS_INPUT_FILE} 中已有字段是同一项信息时用相同名称（如投标人名称、投标日期），程序会把它们合为同一个填写项，不必列入 fields；其余新名称在 fields 中写 name、subject、kind（text 或 attachment）和 fill_by（签字、签名、盖章位置为 manual，其余为 ai）。新名称的 ai 字段同样按以上规则在 values 中取值或列入 unresolved：附件用 image_id 从资信库图片中选择，资信库没有或不全时列入 unresolved 并写明缺少什么，不得用不相关的图片充数。文字中需要写本投标文件页码时按第 11 条写页码引用。
+11. 需要写本投标文件中某部分所在页码的字段（如“该声明函见投标文件第__页”），写页码引用，不写页码数字：{{页码:目录编号}} 写成数字（3 或 3-7），原句已有“第…页”时用；{{页码文字:目录编号}} 写成“第3页”或“第3页至第7页”。编号取自 ${OUTLINE_INPUT_FILE}，指向该内容所在的小节，程序导出时换成实际页码。
+12. 人员的性别、出生日期、年龄，资料没有直接给出时按其身份证号推算，年龄按招标关键信息中的开标日期计算周岁；没有身份证号时列入 unresolved。企业规模（中型企业、小型企业、微型企业）按招标文件明确的所属行业和资信库中的上年度从业人员、营业收入、资产总额，依《中小企业划型标准规定》判断；指标缺少、无法判断时列入 unresolved。
 
 结果格式（${FILL_OUTPUT_FILE}）：
-{"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]},{"name":"附件","image_id":"图片 id"}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"table_id":"表格ID","row":2,"name":"列名","reason":"该列无依据的原因"}],"links":[{"target":{"table_id":"表格ID","row":2,"name":"列名"},"source":{"name":"普通字段"},"form":"same"},{"target":{"name":"大写字段"},"source":{"name":"普通字段"},"form":"uppercase"}]}
-- materials 每项示例：{"after":"7","title":"某项目合同及验收证明","basis":"评分标准“供应商实施能力”","image_ids":["图片 id"]}，缺少时 image_ids 写已有的部分（可为空数组）并加 "missing":"缺少的内容"；commitments 每项示例：{"after":"17","title":"技术要求承诺书","basis":"技术要求（二）","paragraphs":["致：…","我公司承诺：…"]}。没有时都可省略。
+{"values":[{"name":"普通文字字段","value":"取值"},{"name":"普通勾选项","selected":["选项"]},{"name":"附件","image_id":"图片 id"}],"rows":[{"table_id":"表格ID","row":2,"values":[{"name":"列名","value":"取值"}]}],"unresolved":[{"name":"普通字段","reason":"原因"},{"name":"某证明材料","reason":"资信库中没有符合招标要求的该项材料"},{"table_id":"表格ID","row":2,"name":"列名","reason":"该列无依据的原因"}],"links":[{"target":{"table_id":"表格ID","row":2,"name":"列名"},"source":{"name":"普通字段"},"form":"same"},{"target":{"name":"大写字段"},"source":{"name":"普通字段"},"form":"uppercase"}]}
+- generated 每项示例：{"mode":"attach","after":"7","title":"某项目合同及验收证明","basis":"评分标准“供应商实施能力”","blocks":[{"attachment":"某项目合同（第1页）"},{"attachment":"某项目验收报告"}],"fields":[{"name":"某项目合同（第1页）","subject":"某项目","kind":"attachment","fill_by":"ai"},{"name":"某项目验收报告","subject":"某项目","kind":"attachment","fill_by":"ai"}]}；{"mode":"attach","after":"6","title":"某某承诺书","basis":"技术要求（二）","blocks":[{"text":"致：{{采购人名称}}"},{"text":"我公司承诺：…"},{"text":"投标人名称（公章）：{{投标人名称}}"},{"text":"日期：{{投标日期}}"}]}。没有时可省略。
 - links 可省略；target、source 引用普通字段时只写 name，引用表格格子时同时写 table_id、row 和 name，都只能是文字字段，source 不能是另一条 links 的 target。
 - 每个普通字段（links 的 target 除外）必须且只能出现在 values 或 unresolved 中一次；写入 rows 的行，每一列都必须给出取值或按单元格列入 unresolved；未使用的行不要写。
 - 文字字段用 value，勾选项和择一用 selected（择一只写一项），附件用 image_id；没有表格时 rows 写空数组。
@@ -449,11 +466,110 @@ function parseFillResult(content) {
   return { payload, issues: [] };
 }
 
+// 文字段中的填写位置 {{字段名}}；以“页码”开头的是页码引用，按页码规则换算。
+const GENERATED_FIELD_PATTERN = /\{\{\s*(?!页码)([^{}]+?)\s*\}\}/g;
+
+/**
+ * 商务生成模板只核对能否执行：放置位置存在，引用的名称已有或已定义、同名类型一致，页码引用可换算。
+ * 每个填写位置生成一个字段（id 为 g0001 起），与已有字段同名时沿用其 subject 和 fill_by，由 groupFieldUnits 合为同一填写项。
+ * scope 为范围内的提取字段（含人工字段，供同名合并）和提取章节（body 只能挂在其中）。
+ */
+function readGeneratedTemplates(items = [], scope, outline, pageNodes, issues) {
+  const leaves = new Map(collectOutlineLeaves(numberOutline(outline)).map(({ item }) => [item.number, item]));
+  const scopeChapters = new Map((scope.chapters || []).map(chapter => [chapter.id, chapter]));
+  const existing = new Map();
+  for (const field of scope.fields || []) {
+    if (!field.table_id && !isRuleField(field) && !existing.has(field.name)) existing.set(field.name, field);
+  }
+  const defined = new Map();
+  for (const item of items) {
+    for (const field of item.fields || []) {
+      const name = field.name.trim();
+      const same = existing.get(name);
+      if (same && same.kind !== field.kind) issues.push(blockingIssue(`generated 的字段“${name}”与模版中的同名字段类型不同（模版为 ${same.kind}），同名字段类型必须一致`));
+      if (!defined.has(name)) defined.set(name, { name, subject: field.subject.trim(), kind: field.kind, fill_by: field.fill_by });
+    }
+  }
+  const definitionOf = (name) => {
+    const field = existing.get(name);
+    return field ? { name, subject: field.subject, kind: field.kind, fill_by: field.fill_by } : defined.get(name);
+  };
+  const chapters = [];
+  const fields = [];
+  items.forEach((item, index) => {
+    const label = `generated 第 ${index + 1} 项${item.title ? `“${item.title.trim()}”` : ''}`;
+    const node = leaves.get(item.after.trim());
+    let section = item.title?.trim() || '';
+    if (!node) {
+      issues.push(blockingIssue(`${label} 的 after“${item.after}”不是 ${OUTLINE_INPUT_FILE} 中的目录叶子编号`));
+    } else if (item.mode === 'body') {
+      const chapter = scopeChapters.get(node.id);
+      if (!chapter) issues.push(blockingIssue(`${label} 是 body，after“${item.after}”须是商务模版章节（见 ${FIELDS_INPUT_FILE} 的 chapters）`));
+      else section = chapter.title;
+    }
+    if (item.mode === 'attach' && !item.title) issues.push(blockingIssue(`${label} 是 attach，必须写 title`));
+    const addField = (name, kind) => {
+      const definition = definitionOf(name);
+      if (!definition) {
+        issues.push(blockingIssue(`${label} 的“${name}”既不是模版中已有的字段，也没有在 fields 中定义`));
+        return null;
+      }
+      if (definition.kind !== kind) {
+        issues.push(blockingIssue(`${label} 的“${name}”是${definition.kind === 'attachment' ? '附件' : definition.kind === 'text' ? '文字字段' : '勾选项或择一'}，${kind === 'attachment' ? 'attachment 只能引用附件字段' : '文字段中只能引用文字字段'}`));
+        return null;
+      }
+      const id = `g${String(fields.length + 1).padStart(4, '0')}`;
+      fields.push({ id, name, subject: definition.subject, section, fill_by: definition.fill_by, kind, generated: true });
+      return id;
+    };
+    const blocks = item.blocks.map((block, blockIndex) => {
+      if (Object.hasOwn(block, 'text') === Object.hasOwn(block, 'attachment')) {
+        issues.push(blockingIssue(`${label} 的 blocks 第 ${blockIndex + 1} 项必须且只能写 text 或 attachment 之一`));
+        return { segments: [] };
+      }
+      if (block.attachment) {
+        const id = addField(block.attachment.trim(), 'attachment');
+        return { segments: id ? [{ field_id: id }] : [] };
+      }
+      const segments = [];
+      const pushText = (text) => {
+        if (!text) return;
+        const converted = convertAgentPageRefs(text, pageNodes, OUTLINE_INPUT_FILE);
+        for (const problem of converted.problems) issues.push(blockingIssue(`${label}：${problem}`));
+        segments.push({ text: converted.value });
+      };
+      let last = 0;
+      const text = block.text.replace(/\r\n?/g, '\n');
+      for (const match of text.matchAll(GENERATED_FIELD_PATTERN)) {
+        pushText(text.slice(last, match.index));
+        const id = addField(match[1].trim(), 'text');
+        if (id) segments.push({ field_id: id });
+        last = match.index + match[0].length;
+      }
+      pushText(text.slice(last));
+      return { segments };
+    });
+    chapters.push({
+      id: crypto.randomUUID(),
+      mode: item.mode,
+      after: node?.id,
+      basis: item.basis.trim(),
+      ...(item.mode === 'attach' && item.title ? { title: item.title.trim() } : {}),
+      section,
+      blocks,
+    });
+  });
+  return { chapters, fields };
+}
+
 // 逐项核对覆盖范围、字段类型、选项和图片，返回统一提交报告；未使用的表格行展开为留空。
-function validateBusinessTemplateFillResult(payload, units, imageIds = new Set(), outline = []) {
+// scope 给出范围内的提取字段和章节时，先读商务生成模板，合并其字段后再按填写项核对取值。
+function validateBusinessTemplateFillResult(payload, units, imageIds = new Set(), outline = [], scope = null) {
   const issues = [];
   // 页码引用的目录编号换成节点 ID，整本导出时换成页码域。
   const pageNodes = numberedNodes(outline);
+  const generated = readGeneratedTemplates(payload.generated, scope || { fields: [], chapters: [] }, outline, pageNodes, issues);
+  if (scope && generated.fields.length) units = buildFillUnits([...scope.fields, ...generated.fields]);
   const scalars = new Map(units.filter(unit => !unit.table_id).map(unit => [unit.name, unit]));
   const tables = groupTableUnits(units);
   const decided = new Map();
@@ -701,46 +817,23 @@ function validateBusinessTemplateFillResult(payload, units, imageIds = new Set()
     }
   }
 
-  // 证明材料和承诺书只核对放置位置和图片能否找到，after 编号换成目录节点 ID 保存。
-  const leaves = new Map(collectOutlineLeaves(numberOutline(outline)).map(({ item }) => [item.number, item]));
-  const placeOf = (after, label) => {
-    const node = leaves.get(after.trim());
-    if (!node) issues.push(blockingIssue(`${label} 的 after“${after}”不是 ${OUTLINE_INPUT_FILE} 中的目录叶子编号`));
-    return node?.id;
-  };
-  const materials = (payload.materials || []).map((item, index) => {
-    const label = `materials 第 ${index + 1} 项“${item.title}”`;
-    const after = placeOf(item.after, label);
-    const unknown = item.image_ids.filter(id => !imageIds.has(id));
-    if (unknown.length) issues.push(blockingIssue(`${label} 的图片不在资信库中：${unknown.join('、')}`));
-    if (!item.image_ids.length && !item.missing) issues.push(blockingIssue(`${label} 没有图片，请选择资信库图片或写 missing 说明缺少什么`));
-    return { after, title: item.title.trim(), basis: item.basis.trim(), image_ids: [...new Set(item.image_ids)], ...(item.missing ? { missing: item.missing.trim() } : {}) };
-  });
-  const commitments = (payload.commitments || []).map((item, index) => ({
-    after: placeOf(item.after, `commitments 第 ${index + 1} 项“${item.title}”`),
-    title: item.title.trim(),
-    basis: item.basis.trim(),
-    paragraphs: item.paragraphs.map(paragraph => paragraph.trim()),
-  }));
-
   const blocked = issues.some(issue => issue.severity === 'blocking');
   return {
     value: blocked ? null : {
       entries,
-      materials,
-      commitments,
+      generated,
       stats: { field_count: units.length, filled_count: filledCount, unresolved, blank_row_count: blankRowCount },
     },
     issues,
-    minimumGoal: '结果文件是完整有效 JSON；每个普通字段和已写入 rows 的表格行都有取值或列入 unresolved；文字、勾选项和附件的写法、选项及图片合法；证明材料和承诺书的放置位置与图片有效。',
+    minimumGoal: '结果文件是完整有效 JSON；每个普通字段（含商务生成模板中的新字段）和已写入 rows 的表格行都有取值或列入 unresolved；文字、勾选项和附件的写法、选项及图片合法；商务生成模板的放置位置和引用的字段有效。',
   };
 }
 
 // 统一入口：先解析结构，再逐项核对，返回 Runtime 的提交报告。
-function checkBusinessTemplateFillResult(content, units, imageIds, outline) {
+function checkBusinessTemplateFillResult(content, units, imageIds, outline, scope = null) {
   const parsed = parseFillResult(content);
   if (!parsed.payload) return { value: null, issues: parsed.issues, minimumGoal: '结果文件是完整有效 JSON，结构符合 Schema。' };
-  return validateBusinessTemplateFillResult(parsed.payload, units, imageIds, outline);
+  return validateBusinessTemplateFillResult(parsed.payload, units, imageIds, outline, scope);
 }
 
 // 执行失败续写原文件；提交退回只补充文件信息，问题清单和修复模式由公共层拼接。
@@ -806,20 +899,94 @@ function collectLayoutFieldIds(blocks = [], output = new Set()) {
   return output;
 }
 
-// 商务部分跟随当前目录：只取仍为非 AI 叶子的模版章节，字段按空白底稿版式的块号归属章节。
-// 目录生成叶子由整本导出生成目录，老项目已抽进模版的目录章节也不填写。
+// 商务部分跟随当前目录：提取章节只取仍为非 AI 叶子的模版章节；商务生成模板随所挂目录叶子（attach）或所挂提取章节（body）进入范围。
+// 字段按底稿版式的块号归属章节，有商务生成模板时读 base 底稿。目录生成叶子由整本导出生成目录，老项目已抽进模版的目录章节也不填写。
 async function loadBusinessFillScope({ workspaceStore, openXmlHelperService, signal }) {
   const template = workspaceStore.readBidTemplateFields();
-  const leafIds = new Set(collectOutlineLeaves(workspaceStore.loadTechnicalPlan().outlineData?.outline)
+  const leaves = collectOutlineLeaves(workspaceStore.loadTechnicalPlan().outlineData?.outline);
+  const allLeafIds = new Set(leaves.map(({ item }) => item.id));
+  const leafIds = new Set(leaves
     .filter(({ item }) => !['ai-generate', 'directory-generate'].includes(item.content_mode))
     .map(({ item }) => item.id));
-  const layout = await readTemplateLayout({ openXmlHelperService, input: workspaceStore.getBidTemplateBlankRelativePath(), signal });
-  const chapters = (template.chapters || [])
-    .filter(chapter => leafIds.has(chapter.id))
+  const layout = await readTemplateLayout({ openXmlHelperService, input: workspaceStore.getBidTemplateBaseRelativePath(), signal });
+  const extracted = (template.chapters || []).filter(chapter => !chapter.generated && leafIds.has(chapter.id));
+  const extractedIds = new Set(extracted.map(chapter => chapter.id));
+  const generated = (template.chapters || []).filter(chapter => chapter.generated
+    && (chapter.generated.mode === 'body' ? extractedIds.has(chapter.generated.after) : allLeafIds.has(chapter.generated.after)));
+  const chapters = [...extracted, ...generated]
     .map(chapter => ({ ...chapter, blocks: layout.blocks.filter(block => block.index >= chapter.start_block && block.index < chapter.end_block) }));
   const fieldIds = new Set();
   for (const chapter of chapters) collectLayoutFieldIds(chapter.blocks, fieldIds);
   return { template, layout, chapters, fields: (template.fields || []).filter(field => fieldIds.has(field.id)) };
+}
+
+// 除标题外没有内容：没有字段和表格，有文字的段落不超过一段（标题段）。只看版式结构，不判断语义。
+function isTitleOnlyChapter(blocks = []) {
+  if (collectLayoutFieldIds(blocks).size || blocks.some(block => block.type === 'table')) return false;
+  return blocks.filter(block => (block.segments || []).some(segment => textOf(segment.text))).length <= 1;
+}
+
+// 填写 Agent 的章节输入：范围内的提取章节按目录编号列出，标出只有标题的章节。
+function buildChapterInputs(chapters, outline) {
+  const numbers = new Map(collectOutlineLeaves(numberOutline(outline)).map(({ item }) => [item.id, item.number]));
+  return chapters
+    .filter(chapter => !chapter.generated && numbers.has(chapter.id))
+    .map(chapter => ({ number: numbers.get(chapter.id), title: chapter.title, ...(isTitleOnlyChapter(chapter.blocks) ? { title_only: true } : {}) }));
+}
+
+// 商务生成模板写入 base 底稿（提取底稿末尾追加），再把章节和字段定义并入字段清单；没有生成模板时删除 base 底稿。
+async function saveGeneratedTemplates({ workspaceStore, openXmlHelperService, generated, signal }) {
+  if (!generated?.chapters.length) {
+    workspaceStore.saveGeneratedTemplates(null);
+    return;
+  }
+  const appended = await appendGeneratedChapters({
+    openXmlHelperService,
+    input: workspaceStore.getBidTemplateBlankRelativePath(),
+    output: workspaceStore.getBidTemplateGeneratedBaseRelativePath(),
+    chapters: generated.chapters.map(({ id, title, blocks }) => ({ id, ...(title ? { title } : {}), blocks })),
+    fields: generated.fields.map(({ generated: _generated, ...field }) => field),
+    signal,
+  });
+  const ranges = new Map(appended.chapters.map(item => [item.id, item]));
+  const details = new Map(appended.fields.map(field => [field.id, field]));
+  workspaceStore.saveGeneratedTemplates({
+    chapters: generated.chapters.map(chapter => ({
+      id: chapter.id,
+      title: chapter.title || chapter.section,
+      auto_fill: true,
+      ...(chapter.title ? { heading: true } : {}),
+      generated: { mode: chapter.mode, after: chapter.after, basis: chapter.basis },
+      start_block: ranges.get(chapter.id).start_block,
+      end_block: ranges.get(chapter.id).end_block,
+    })),
+    fields: generated.fields.map(field => ({
+      ...field,
+      ...(details.get(field.id)?.signature ? { signature: true } : {}),
+      context: details.get(field.id)?.context,
+    })),
+  });
+}
+
+// 确认弹窗的章节顺序：提取章节按目录顺序；body 并入所挂章节；attach 排在所挂目录叶子之后（挂在非商务叶子时排在其后的商务章节之前），注明附于哪个小节。
+function arrangeReviewChapters(chapters, outline) {
+  const leaves = collectOutlineLeaves(numberOutline(outline));
+  const order = new Map(leaves.map(({ item }, index) => [item.id, index]));
+  const labels = new Map(leaves.map(({ item }) => [item.id, `${item.number} ${item.title}`]));
+  const bodies = new Map();
+  for (const chapter of chapters.filter(item => item.generated?.mode === 'body')) {
+    bodies.set(chapter.generated.after, [...(bodies.get(chapter.generated.after) || []), ...chapter.blocks]);
+  }
+  return chapters
+    .filter(chapter => chapter.generated?.mode !== 'body')
+    .map((chapter, index) => ({
+      chapter: chapter.generated
+        ? { ...chapter, attached_to: labels.get(chapter.generated.after) }
+        : { ...chapter, blocks: [...chapter.blocks, ...(bodies.get(chapter.id) || [])] },
+      key: [order.get(chapter.generated?.after ?? chapter.id) ?? Number.MAX_SAFE_INTEGER, chapter.generated ? 1 : 0, index],
+    }))
+    .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.key[2] - b.key[2])
+    .map(item => item.chapter);
 }
 
 // 图片所属记录的展示名，供确认弹窗分组。
@@ -867,15 +1034,12 @@ async function loadBusinessFillReview({ workspaceStore, credentialLibraryService
       };
     }),
     rule_field_ids: fields.filter(isRuleField).map(field => field.id),
-    // 证明材料按目录节点放置，弹窗显示节点的“编号 标题”。
-    materials: workspaceStore.readBusinessMaterials(),
-    placements: Object.fromEntries(collectOutlineLeaves(numberOutline(outline))
-      .map(({ item }) => [item.id, `${item.number} ${item.title}`])),
     base_size: layout.base_size,
-    chapters: chapters.map(chapter => ({
+    chapters: arrangeReviewChapters(chapters, outline).map(chapter => ({
       id: chapter.id,
       title: chapter.title,
       auto_fill: chapter.auto_fill !== false,
+      ...(chapter.attached_to ? { attached_to: chapter.attached_to } : {}),
       blocks: chapter.blocks,
     })),
     images: (snapshot.images || []).map(image => ({
@@ -923,13 +1087,14 @@ async function runBusinessTemplateFill({
     return current;
   };
   // 填写和统计只处理当前目录中的商务章节；回填 Word 仍按全部字段，范围外字段保留占位。
+  // 商务生成模板写入后字段增加，置空 scopeFieldIds 重新读取范围。
   let scopeFieldIds = null;
-  let scopeChapterCount = 0;
+  let scopeChapters = [];
   const readScopeFields = async () => {
     if (!scopeFieldIds) {
       const scope = await loadBusinessFillScope({ workspaceStore, openXmlHelperService, signal });
       scopeFieldIds = new Set(scope.fields.map(field => field.id));
-      scopeChapterCount = scope.chapters.length;
+      scopeChapters = scope.chapters;
     }
     return (workspaceStore.readBidTemplateFields().fields || []).filter(field => scopeFieldIds.has(field.id) && !isRuleField(field));
   };
@@ -938,10 +1103,10 @@ async function runBusinessTemplateFill({
     const fields = await readScopeFields();
     const manualCount = new Set(fields.filter(field => field.fill_by === 'manual').map(field => field.name)).size;
     const units = buildFillUnits(fields);
-    // 证明材料和承诺书按招标要求列出，与有没有 AI 填写项无关：有商务章节就运行填写 Agent。
-    if (!units.length && !scopeChapterCount) {
+    // 商务生成模板按招标要求写出，与有没有 AI 填写项无关：有商务章节就运行填写 Agent。
+    if (!units.length && !scopeChapters.length) {
       workspaceStore.saveBidTemplateFieldValues({});
-      workspaceStore.saveBusinessMaterials(null);
+      workspaceStore.saveGeneratedTemplates(null);
       // 没有 AI 填写项也交给用户确认人工字段和附件；完全没有字段时直接回填。
       update({ phase: fields.length ? 'reviewing' : 'rendering', field_count: 0, filled_count: 0, manual_count: manualCount, unresolved: [], blank_row_count: 0, accepted_issues: [] });
     } else {
@@ -970,6 +1135,7 @@ async function runBusinessTemplateFill({
           // 输入只在新会话写入；继续时沿用工作区已有快照。
           files: resumeSession ? [] : buildBusinessTemplateFillFiles({
             units,
+            chapters: buildChapterInputs(scopeChapters, outline),
             credentialLibrary: credentialLibraryService.load(),
             tenderMarkdown: workspaceStore.readTenderMarkdown(),
             bidKeyInfoText: inputs.bidKeyInfoText,
@@ -982,7 +1148,7 @@ async function runBusinessTemplateFill({
           initial_stage: BUSINESS_TEMPLATE_FILL_STAGE,
           json_validation_schemas: { [FILL_OUTPUT_FILE]: BUSINESS_TEMPLATE_FILL_JSON_SCHEMA },
           max_retries: 1,
-          validateOutput: candidate => checkBusinessTemplateFillResult(candidate.output_content, units, imageIds, outline),
+          validateOutput: candidate => checkBusinessTemplateFillResult(candidate.output_content, units, imageIds, outline, { fields, chapters: scopeChapters }),
           buildRetryPrompt,
           onActivity,
         });
@@ -1000,8 +1166,10 @@ async function runBusinessTemplateFill({
       const validated = result.validation_result;
       // 连续修复无改善后按原样放行的质量问题随状态记录，供任务日志说明。
       const acceptedIssues = (result.accepted_submission_issues || []).flatMap(item => item.issues.map(issue => issue.message));
+      // 先把商务生成模板并入商务模版，再按合并后的字段清单保存取值。
+      await saveGeneratedTemplates({ workspaceStore, openXmlHelperService, generated: validated.generated, signal });
       workspaceStore.saveBidTemplateFieldValues(validated.entries);
-      workspaceStore.saveBusinessMaterials({ materials: validated.materials, commitments: validated.commitments });
+      scopeFieldIds = null;
       agentService.updatePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, {
         status: 'success', phase: 'completed', agent_connection: 'idle', error: null, completed_at: new Date().toISOString(),
       });
@@ -1015,7 +1183,6 @@ async function runBusinessTemplateFill({
     const confirmed = await waitForReview(signal);
     if (confirmed) {
       workspaceStore.saveBidTemplateFieldValues(buildConfirmedEntries(workspaceStore.readBidTemplateFields().fields || [], confirmed.values, workspaceStore.loadTechnicalPlan().outlineData?.outline));
-      if (confirmed.materials) workspaceStore.saveBusinessMaterials(confirmed.materials);
     }
     update({ phase: 'rendering', ...summarizeFillStats(await readScopeFields()), confirmed_by: confirmed ? 'user' : 'auto' });
   }
@@ -1035,7 +1202,7 @@ async function runBusinessTemplateFill({
 // 商务填写、规则和页码编制与编辑保存都会回填同一份 bid-template.docx，逐个执行。
 let renderQueue = Promise.resolve();
 
-// 以空白底稿按字段值和规则和页码编制结果重新生成商务模版 Word，返回所选图片已从资信库删除的字段名称。
+// 以底稿（有商务生成模板时为 base 底稿）按字段值和规则和页码编制结果重新生成商务模版 Word，返回所选图片已从资信库删除的字段名称。
 // forExport 时签章位置写入留空、清除“待填写”占位供线下盖章，页码引用保留标记由整本导出换成页码域；否则显示引用的小节标题。
 // removeRowFieldIds 为整本导出要删除的清单表未使用行的字段 ID，助手只删整行字段都在其中的行。
 async function renderBusinessTemplate({
@@ -1072,7 +1239,7 @@ async function renderBusinessTemplate({
   const run = renderQueue.then(() => openXmlHelperService.runJob({
     action: 'fill-template-fields',
     request: {
-      input: workspaceStore.getBidTemplateBlankRelativePath(),
+      input: workspaceStore.getBidTemplateBaseRelativePath(),
       output,
       values,
       rule_tables: ruleTables,
@@ -1096,7 +1263,7 @@ function excludeMissingImages(stats, missingImages) {
 }
 
 // 填写完成后编辑字段值：先按新值回填 Word，成功后再保存清单，Word 被占用等失败时清单保持原值。
-async function editBusinessFillValues({ workspaceStore, credentialLibraryService, openXmlHelperService, state, values, materials }) {
+async function editBusinessFillValues({ workspaceStore, credentialLibraryService, openXmlHelperService, state, values }) {
   const scopeFieldIds = new Set((await loadBusinessFillScope({ workspaceStore, openXmlHelperService })).fields.map(field => field.id));
   const fields = workspaceStore.readBidTemplateFields().fields || [];
   const entries = buildConfirmedEntries(fields, values, workspaceStore.loadTechnicalPlan().outlineData?.outline);
@@ -1106,7 +1273,6 @@ async function editBusinessFillValues({ workspaceStore, credentialLibraryService
   }));
   const missingImages = await renderBusinessTemplate({ workspaceStore, credentialLibraryService, openXmlHelperService, fields: nextFields });
   workspaceStore.saveBidTemplateFieldValues(entries);
-  if (materials) workspaceStore.saveBusinessMaterials(materials);
   const stats = summarizeFillStats(nextFields.filter(field => scopeFieldIds.has(field.id)));
   return { ...state, ...stats, ...excludeMissingImages(stats, missingImages), confirmed_by: 'user', updated_at: new Date().toISOString() };
 }

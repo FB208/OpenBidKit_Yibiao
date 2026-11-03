@@ -65,8 +65,6 @@ static partial class RestrictedHtmlWordInserter
         ["wide"] = new(0.80, 3, 2),
         ["tall"] = new(0.50, 3, 4),
         ["panorama"] = new(0.90, 16, 9),
-        // 整页扫描件（证明材料），配合 contain 不裁切。
-        ["page"] = new(0.85, 3, 4),
     };
 
     /// <summary>在 Word 文件的指定内容控件中插入受限 HTML，成功后原子替换原文件。</summary>

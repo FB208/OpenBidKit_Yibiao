@@ -846,7 +846,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         }
         const waiter = this.releaseBusinessFillReview();
         if (!waiter) throw new Error('当前正文任务不在商务模版确认阶段');
-        waiter.resolve(Array.isArray(request.values) ? { values: request.values, materials: request.materials } : null);
+        waiter.resolve(Array.isArray(request.values) ? { values: request.values } : null);
         return { success: true };
       },
       // 用户修改字段值后停止本次自动确认。
@@ -1956,7 +1956,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         openXmlHelperService,
         state,
         values: payload.values || [],
-        materials: payload.materials,
       });
       activeTaskControls.get('content-generation')?.businessFillEditor?.apply(next);
       return { contentGenerationRuntime: technicalPlanStore.saveBusinessFillRuntime(next) };

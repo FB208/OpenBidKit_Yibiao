@@ -773,6 +773,9 @@ static class TemplateFieldSdtWriter
         new Wp.Tag { Val = $"{TagPrefix}{field.Id}" },
     ];
 
+    /// <summary>商务生成模板的字段控件：与提取字段同一标识和占位写法，文字格式沿用段落默认样式。</summary>
+    internal static Wp.SdtRun CreateFieldControl(TemplateFieldDefinition field, int wordId) => CreateControl(field, wordId, null);
+
     static Wp.SdtRun CreateControl(TemplateFieldDefinition field, int wordId, Wp.Run? sourceRun)
     {
         var content = new Wp.SdtContentRun(CreatePlaceholderRun(field, sourceRun));

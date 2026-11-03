@@ -9,6 +9,7 @@ const SCAN_TEMPLATE_FIELDS_ACTION = 'scan-template-fields';
 const APPLY_TEMPLATE_FIELDS_ACTION = 'apply-template-fields';
 const CONFIRM_TEMPLATE_FIELDS_ACTION = 'confirm-template-fields';
 const READ_TEMPLATE_LAYOUT_ACTION = 'read-template-layout';
+const APPEND_GENERATED_CHAPTERS_ACTION = 'append-generated-chapters';
 const AGENT_BLOCKS_FILE = '招标原文结构.txt';
 const AGENT_TEMPLATE_SOURCE_FILE = '投标模版源文件.docx';
 const AGENT_FIELD_CANDIDATES_FILE = '投标模版字段候选.json';
@@ -632,6 +633,25 @@ function resolveChapterSources(chapters, businessSources, resolveAgentSources) {
   });
 }
 
+// 商务生成模板追加到提取底稿末尾，写出 base 底稿；返回各章块号，以及补齐签章标记和原句的字段定义。
+async function appendGeneratedChapters({ openXmlHelperService, input, output, chapters, fields, signal }) {
+  const result = await openXmlHelperService.runJob({
+    action: APPEND_GENERATED_CHAPTERS_ACTION,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    request: { input, output, chapters, fields },
+    signal,
+  });
+  try {
+    const outputPath = path.join(result.jobDir, 'generated-chapters.json');
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('助手没有写出商务生成模板');
+    }
+    return JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+  } finally {
+    removeJobDir(result);
+  }
+}
+
 module.exports = {
   AGENT_BLOCKS_FILE,
   AGENT_TEMPLATE_PREVIEW_FILE,
@@ -640,5 +660,6 @@ module.exports = {
   TEMPLATE_FIELD_CLASSIFICATION_SCHEMA,
   createPiOpenXmlTool,
   readTenderBlockOutline,
+  appendGeneratedChapters,
   readTemplateLayout,
 };

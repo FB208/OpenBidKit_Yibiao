@@ -301,7 +301,7 @@ test('应答依据：按目录标明的依据只给对应评分要求，缺失�
   assert.match(describeRuleBasis(undefined, references), /未指定应答依据/);
 });
 
-test('规则表：分段表格新增行落在所照行的分段、照分段行新增分组行、空行删除而预印行保留；重建替换原表；新建表含分组行', async () => {
+test('规则表：分段表格新增行落在所照行的分段、照分段行新增分组行、按印好的行定位、空行删除而预印行保留；重建替换原表；新建表含分组行', async () => {
   const name = 'rule-source';
   const { candidates } = await scanFile(name, [
     para('应答表', '<w:pStyle w:val="1"/>'),
@@ -416,6 +416,31 @@ test('规则表：分段表格新增行落在所照行的分段、照分段行�
   assert.match(xml, /<w:gridSpan w:val="2" ?\/>[\s\S]*?一、技术部分/, '新建表的分组行整行合并');
   const plain = xml.replace(/<\/w:p>/g, '\n').replace(/<[^>]+>/g, '');
   assert.ok(plain.indexOf('页码检索表') < plain.indexOf('评分因素'), '新建表格在标题段之后');
+
+  // 印好的分段行和小表头写成不带 values 的 from 行定位，新增的分段排在它们之后；定位行不计入行数。
+  const positioned = { rows: [
+    { from: 2, values: { 投标应答: '响应甲', 页码: '{{页码:3}}' } },
+    { from: 3, values: { 投标应答: '响应乙', 页码: '{{页码:3}}' } },
+    { from: 4 },
+    { from: 5 },
+    { like: 4, values: { 第1格: '（一）第一小节' } },
+    { like: 6, values: { 序号: '1', 招标要求: '丙要求', 投标应答: '响应丙', 备注: '无' } },
+    { like: 4, values: { 第1格: '（二）第二小节' } },
+    { like: 6, values: { 序号: '2', 招标要求: '丁要求', 投标应答: '响应丁', 备注: '无' } },
+  ] };
+  assert.equal(check(positioned).value.stats.row_count, 8, '两张表共 8 行，不含定位行');
+  assert.deepEqual(tableRowsText(await filledRows(positioned)).slice(0, 10), [
+    '序号|招标要求|投标应答|页码',
+    '1|甲要求|响应甲|〔页码：服务方案〕',
+    '2|乙要求|响应乙|〔页码：服务方案〕',
+    '二、第二部分',
+    '序号|招标要求|投标应答|备注',
+    '（一）第一小节',
+    '1|丙要求|响应丙|无',
+    '（二）第二小节',
+    '2|丁要求|响应丁|无',
+    '评分因素|页码',
+  ]);
 
   const rebuilt = await filledRows({ rebuild: true, columns: ['序号', '要求', '应答'], rows: [
     { group: '一、技术' },
@@ -598,74 +623,109 @@ test('金额联动：links 校验能否执行并记下联动，确认时保留�
   assert.equal(toChineseAmount('1.234'), null);
 });
 
-// 证明材料：填写 Agent 列出材料和承诺书，程序只校验放置位置和图片，导出时在小节之后插入标题和图片。
-const { renderMaterialsHtml } = require('../electron/services/technicalPlanExport.cjs');
+// 商务生成模板：填写 Agent 写出招标文件要求但模版没有格式的内容，程序只校验能否执行，助手追加到底稿末尾，导出时插在所挂小节之后。
 const { defaultExportFormat } = require('../electron/services/exportFormatDefaults.cjs');
+const { appendGeneratedChapters } = require('../electron/services/pi/piOpenXmlTool.cjs');
 
-test('证明材料：校验放置位置和图片并换成节点 ID；导出 HTML 逐项另起一页、附图、缺少时待填写；转换后标题带段前分页且进大纲', async () => {
+test('商务生成模板：只校验能否执行，占位与已有字段同名时合为同一填写项、新名称须给值；助手追加到底稿末尾并能回填', async () => {
+  const { buildFillUnits } = require('../electron/services/businessTemplateFillTask.cjs');
   const outline = [
     { id: 'n-perf', title: '业绩一览表', content_mode: 'template-fill' },
-    { id: 'n-parent', title: '其他', children: [{ id: 'n-other', title: '其他资料', content_mode: 'template-fill' }] },
+    { id: 'n-tech', title: '服务方案', content_mode: 'ai-generate' },
+    { id: 'n-other', title: '其他资料', content_mode: 'template-fill' },
   ];
-  const fields = [{ id: 'f1', name: '投标人名称', subject: '投标人', fill_by: 'ai', kind: 'text' }];
-  const check = (patch) => checkBusinessTemplateFillResult(JSON.stringify({
-    values: [{ name: '投标人名称', value: '甲公司' }], rows: [], unresolved: [], ...patch,
-  }), groupFieldUnits(fields), new Set(['img1', 'img2']), outline);
+  const fields = [
+    { id: 'f1', name: '投标人名称', subject: '投标人', fill_by: 'ai', kind: 'text' },
+    { id: 'f2', name: '投标日期', subject: '投标人', fill_by: 'ai', kind: 'text' },
+    { id: 'f3', name: '投标人代表签字', subject: '投标人代表', fill_by: 'manual', kind: 'text' },
+  ];
+  const scope = { fields, chapters: [{ id: 'n-perf', title: '业绩一览表' }, { id: 'n-other', title: '其他资料' }] };
+  const base = { values: [{ name: '投标人名称', value: '甲公司' }], rows: [], unresolved: [{ name: '投标日期', reason: '开标日期未定' }] };
+  const check = (patch) => checkBusinessTemplateFillResult(JSON.stringify({ ...base, ...patch }), buildFillUnits(fields), new Set(['img1']), outline, scope);
   const messages = (patch) => check(patch).issues.map((item) => item.message).join('；');
+  const commitment = {
+    mode: 'attach', after: '2', title: '某某承诺书', basis: '技术要求（二）',
+    blocks: [{ text: '致：采购人' }, { text: '我公司承诺：详见第{{页码:1}}页' }, { text: '投标人名称（公章）：{{投标人名称}}' }, { text: '日期：{{投标日期}}' }, { text: '投标人代表签字：{{投标人代表签字}}' }],
+  };
+  const material = {
+    mode: 'attach', after: '1', title: '某项目合同', basis: '评分标准', blocks: [{ attachment: '某项目合同扫描件' }],
+    fields: [{ name: '某项目合同扫描件', subject: '某项目', kind: 'attachment', fill_by: 'ai' }],
+  };
+  const body = {
+    mode: 'body', after: '3', basis: '投标须知', blocks: [{ text: '我公司提供以下资料：{{其他资料说明}}' }],
+    fields: [{ name: '其他资料说明', subject: '投标人', kind: 'text', fill_by: 'ai' }],
+  };
 
+  // 新名称的字段与普通字段一样必须取值或列入 unresolved。
+  assert.match(messages({ generated: [material] }), /“某项目合同扫描件” 尚未填写或列入 unresolved/);
   const result = check({
-    materials: [
-      { after: '1', title: '某项目合同及验收证明', basis: '评分标准“供应商实施能力”', image_ids: ['img1', 'img2', 'img1'] },
-      { after: '2.1', title: '被授权人社保证明', basis: '资格要求第 5 条', image_ids: [], missing: '资信库没有授权代表的社保证明' },
-    ],
-    commitments: [{ after: '2.1', title: '技术要求承诺书', basis: '技术要求（二）', paragraphs: ['致：招标人', '我公司承诺：……'] }],
+    generated: [commitment, material, body],
+    values: [...base.values, { name: '某项目合同扫描件', image_id: 'img1' }, { name: '其他资料说明', value: '营业执照' }],
   });
   assert.deepEqual(result.issues, []);
-  assert.deepEqual(result.value.materials.map((item) => [item.after, item.image_ids]), [['n-perf', ['img1', 'img2']], ['n-other', []]]);
-  assert.equal(result.value.commitments[0].after, 'n-other');
-  assert.match(messages({ materials: [{ after: '2', title: '甲', basis: '乙', image_ids: ['img1'] }] }), /不是 投标文件目录\.md 中的目录叶子编号/);
-  assert.match(messages({ materials: [{ after: '1', title: '甲', basis: '乙', image_ids: ['img9'] }] }), /图片不在资信库中：img9/);
-  assert.match(messages({ materials: [{ after: '1', title: '甲', basis: '乙', image_ids: [] }] }), /没有图片，请选择资信库图片或写 missing/);
-  assert.match(messages({ commitments: [{ after: '9', title: '甲', basis: '乙', paragraphs: ['丙'] }] }), /after“9”不是/);
+  const { chapters, fields: generatedFields } = result.value.generated;
+  assert.deepEqual(chapters.map((item) => [item.mode, item.after, item.title || null, item.section]), [
+    ['attach', 'n-tech', '某某承诺书', '某某承诺书'],
+    ['attach', 'n-perf', '某项目合同', '某项目合同'],
+    ['body', 'n-other', null, '其他资料'],
+  ]);
+  assert.deepEqual(generatedFields.map((item) => [item.id, item.name, item.kind, item.fill_by]), [
+    ['g0001', '投标人名称', 'text', 'ai'],
+    ['g0002', '投标日期', 'text', 'ai'],
+    ['g0003', '投标人代表签字', 'text', 'manual'],
+    ['g0004', '某项目合同扫描件', 'attachment', 'ai'],
+    ['g0005', '其他资料说明', 'text', 'ai'],
+  ]);
+  // 与模版同名的落款字段并入同一填写项：投标人名称随模版取值，投标日期随模版列入无法确定；人工字段不由 Agent 填写。
+  assert.deepEqual(result.value.entries.g0001, { value: '甲公司' });
+  assert.deepEqual(result.value.entries.g0002, { unresolved_reason: '开标日期未定' });
+  assert.equal(result.value.entries.g0003, undefined);
+  assert.deepEqual(result.value.entries.g0004, { image_id: 'img1' });
+  assert.equal(chapters[0].blocks[1].segments[0].text, '我公司承诺：详见第{{YBPAGE:n-perf}}页');
 
-  const images = new Map([['img1', { relativePath: 'test/a.png', originalName: '合同.png' }]]);
-  const rendered = renderMaterialsHtml([
-    ...result.value.materials,
-    ...result.value.commitments,
-  ], { level: 1, images, companyName: '甲公司' });
-  assert.deepEqual([...rendered.refs], ['credential-library/test/a.png']);
-  assert.equal(rendered.pendingCount, 2, '缺少和图片已删除各一处，承诺书落款日期不算缺少');
-  assert.match(rendered.html, /<p>YIBIAOPAGEBREAK<\/p>\n<h2>某项目合同及验收证明<\/h2>\n<figure data-yb-size="page" data-yb-fit="contain"><img data-yb-asset-ref="credential-library\/test\/a\.png" alt="合同\.png"><\/figure>/);
-  assert.match(rendered.html, /【待填写：某项目合同及验收证明：所选资信库图片已删除】/);
-  // 用户在确认弹窗移除了全部图片、又没有缺少说明的材料，同样标为待填写并计数。
-  const emptied = renderMaterialsHtml([{ after: 'n-perf', title: '某项目合同', basis: '评分标准', image_ids: [] }], { level: 1, images, companyName: '甲公司' });
-  assert.equal(emptied.pendingCount, 1);
-  assert.match(emptied.html, /【待填写：某项目合同（评分标准）】/);
-  assert.match(rendered.html, /【待填写：被授权人社保证明：资信库没有授权代表的社保证明】/);
-  assert.match(rendered.html, /<h2>技术要求承诺书<\/h2>\n<p>致：招标人<\/p>\n<p>我公司承诺：……<\/p>\n<p>投标人名称（公章）：甲公司<\/p>\n<p>日期：【待填写：日期】<\/p>/);
+  assert.match(messages({ generated: [{ ...material, after: '9' }] }), /after“9”不是 投标文件目录\.md 中的目录叶子编号/);
+  assert.match(messages({ generated: [{ ...body, after: '2' }] }), /是 body，after“2”须是商务模版章节/);
+  assert.match(messages({ generated: [{ ...commitment, title: undefined }] }), /是 attach，必须写 title/);
+  assert.match(messages({ generated: [{ ...commitment, blocks: [{ text: '{{未定义}}' }] }] }), /“未定义”既不是模版中已有的字段，也没有在 fields 中定义/);
+  assert.match(messages({ generated: [{ ...material, blocks: [{ attachment: '投标日期' }], fields: [] }] }), /attachment 只能引用附件字段/);
 
-  // 真实助手转换：分页标记换成标题段前分页，标题进大纲，图片按整页尺寸嵌入。
-  const imageDir = path.join(workspace, 'credential-library', 'test');
-  fs.mkdirSync(imageDir, { recursive: true });
-  fs.writeFileSync(path.join(imageDir, 'a.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
-  const html = `<section data-yb-export-template="false" data-yb-export-page-template="false"><h1>业绩一览表</h1><p>正文</p>\n${rendered.html}</section>`;
-  const converted = await service.createRestrictedHtmlDocx(html, defaultExportFormat, { copyAssets: true, wholeDocument: true, workspaceAssets: rendered.refs });
-  const xml = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
-  assert.ok(!xml.includes('YIBIAOPAGEBREAK'), '分页标记已移除');
-  const headings = [...xml.matchAll(/<w:p>(?:(?!<\/w:p>).)*?<w:outlineLvl w:val="1" \/>(?:(?!<\/w:p>).)*?<\/w:p>/gs)].map((match) => match[0]);
-  assert.equal(headings.length, 3, '两项材料和承诺书的标题都进大纲');
-  assert.ok(headings.every((item) => item.includes('<w:pageBreakBefore />')), '每项另起一页');
-  assert.equal(xml.split('<w:drawing>').length - 1, 1, '附上资信库图片');
+  // 助手追加到底稿末尾：提取章节块号不变，标题段带标题书签，签章标记和原句由助手补齐，之后可按字段 ID 回填。
+  samples.buildDocx(planDir, 'generated-blank.docx', [para('业绩一览表'), para('正文'), sectPr()].join(''));
+  const appended = await appendGeneratedChapters({
+    openXmlHelperService: service,
+    input: 'technical-plan/generated-blank.docx',
+    output: 'technical-plan/generated-base.docx',
+    chapters: chapters.map(({ id, title, blocks }) => ({ id, ...(title ? { title } : {}), blocks })),
+    fields: generatedFields.map(({ generated: _generated, ...field }) => field),
+  });
+  assert.deepEqual(appended.chapters.map((item) => [item.start_block, item.end_block]), [[2, 8], [8, 10], [10, 11]]);
+  const appendedFields = new Map(appended.fields.map((field) => [field.id, field]));
+  assert.equal(appendedFields.get('g0003').signature, true);
+  assert.equal(appendedFields.get('g0002').context, '日期：【▢】');
+  const xml = documentXml('technical-plan/generated-base.docx');
+  assert.equal((xml.match(/yibiao:field:g\d{4}/g) || []).length, 5);
+  assert.match(xml, /w:name="_YbHg0"/);
+  await service.runJob({
+    action: 'fill-template-fields',
+    request: { input: 'technical-plan/generated-base.docx', output: 'technical-plan/generated-filled.docx', values: [{ id: 'g0001', value: '甲公司' }] },
+    timeoutMs: 60000,
+  });
+  assert.match(documentXml('technical-plan/generated-filled.docx'), /投标人名称（公章）：[\s\S]*?甲公司/);
 });
 
-test('整本导出分页：证明材料之后的商务章节另起一页；一级标题另起页对商务章节和范围外标题全文生效', async () => {
-  // 投标书章末、资格证明书章首各有一个只承载分页的段落（模版的“附件N”去掉后留下的），声明函章首是表格。
+test('整本导出分页：商务生成模板附在商务章节和技术小节之后另起一页、作为只有标题章节的正文紧接其后，之后的商务章节另起一页；一级标题另起页全文生效', async () => {
+  // 投标书章末、资格证明书章首各有一个只承载分页的段落（模版的“附件N”去掉后留下的），声明函章首是表格；
+  // 其他资料只有标题，章末有预留空段和分页段；末尾三章是商务生成模板。
   const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   samples.buildDocx(planDir, 'page-break-source.docx', [
     para('投标书'), para('投标书正文'), pageBreak,
     para('授权书'), para('授权书正文'),
     pageBreak, para('资格证明书'), para('资格证明书正文'),
     table([[cell(para('声明函内容')), cell(para(''))]]), para('声明函'),
+    para('其他资料'), para(''), para(''), pageBreak,
+    para('投标书附件'), para('附件内容'),
+    para('其他资料正文'),
+    para('项目经理证书'), para('证书扫描件'),
     sectPr(),
   ].join(''));
   const chapters = [
@@ -673,15 +733,22 @@ test('整本导出分页：证明材料之后的商务章节另起一页；一�
     { id: 'b2', title: '授权书', auto_fill: true, start_block: 3, end_block: 5 },
     { id: 'b3', title: '资格证明书', auto_fill: true, start_block: 5, end_block: 8 },
     { id: 'b4', title: '声明函', auto_fill: true, start_block: 8, end_block: 10 },
+    { id: 'b5', title: '其他资料', auto_fill: true, start_block: 10, end_block: 14 },
+    { id: 'g1', title: '投标书附件', auto_fill: true, start_block: 14, end_block: 16, generated: { mode: 'attach', after: 'b1' } },
+    { id: 'g2', title: '其他资料', auto_fill: true, start_block: 16, end_block: 17, generated: { mode: 'body', after: 'b5' } },
+    { id: 'g3', title: '项目经理证书', auto_fill: true, start_block: 17, end_block: 19, generated: { mode: 'attach', after: 'tech' } },
   ];
-  const chapter = (id, title) => `<section data-yb-business-chapter="${id}" data-yb-business-level="1" data-yb-business-title="${title}" data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
-  const materials = renderMaterialsHtml([{ after: 'b1', title: '投标书附件', basis: '资格要求', image_ids: [], missing: '资信库没有该材料' }], { level: 1, images: new Map(), companyName: '甲公司' });
+  const chapter = (id, title, { level = 1, generated, page = 'business' } = {}) => `<section data-yb-business-chapter="${id}" data-yb-business-level="${level}" data-yb-business-title="${title}" data-yb-anchor-start="" data-yb-anchor-end=""${generated ? ` data-yb-generated="${generated}"` : ''} data-yb-export-template="false" data-yb-export-page-template="${page}"></section>`;
   const html = [
     chapter('b1', '投标书'),
-    `<section data-yb-export-template="false" data-yb-export-page-template="business" data-yb-materials="true">${materials.html}</section>`,
+    chapter('g1', '投标书附件', { level: 2, generated: 'attach' }),
     chapter('b2', '授权书'),
     chapter('b3', '资格证明书'),
     chapter('b4', '声明函'),
+    chapter('b5', '其他资料'),
+    chapter('g2', '其他资料', { generated: 'body' }),
+    '<section data-yb-export-template="false" data-yb-export-page-template="false"><h1>服务方案</h1><p>技术正文</p></section>',
+    chapter('g3', '项目经理证书', { level: 2, generated: 'attach', page: 'false' }),
     '<section data-yb-export-template="false" data-yb-export-page-template="false"><h1>附录一</h1><p>正文</p><h1>附录二</h1><p>正文</p></section>',
   ].join('\n');
   const render = async (level1PageBreak) => {
@@ -695,18 +762,27 @@ test('整本导出分页：证明材料之后的商务章节另起一页；一�
     const paragraphs = [...xml.matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)].map((match) => match[0]);
     const text = (paragraph) => [...paragraph.matchAll(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)].map((match) => match[1]).join('');
     const index = (value) => paragraphs.findIndex((paragraph) => text(paragraph) === value);
-    const breakBefore = (value) => paragraphs[index(value)].includes('<w:pageBreakBefore />');
+    const find = (value) => paragraphs[index(value)];
+    const breakBefore = (value) => find(value).includes('<w:pageBreakBefore />');
     // 声明函表格前一段是不是段前分页的空段。
     const tableStart = xml.indexOf('<w:tbl>', xml.indexOf('授权书正文'));
     const beforeTable = xml.slice(xml.lastIndexOf('<w:p', tableStart), tableStart);
-    return { paragraphs, index, breakBefore, tableBreak: beforeTable.includes('<w:pageBreakBefore />') && !/<w:t[ >]/.test(beforeTable) };
+    return { paragraphs, index, find, breakBefore, tableBreak: beforeTable.includes('<w:pageBreakBefore />') && !/<w:t[ >]/.test(beforeTable) };
   };
 
   const off = await render(false);
-  assert.ok(off.breakBefore('授权书'), '证明材料之后的章节另起一页');
+  assert.ok(off.breakBefore('投标书附件'), '附在商务章节后的生成模板另起一页');
+  assert.match(off.find('投标书附件'), /<w:outlineLvl w:val="1" \/>/, '生成模板标题比所挂章节低一级');
+  assert.ok(off.breakBefore('授权书'), '生成模板之后的商务章节另起一页');
   assert.ok(!off.breakBefore('资格证明书'), '开关关闭时不加段前分页');
   assert.match(off.paragraphs[off.index('资格证明书') - 1], /<w:br w:type="page" \/>/, '保留模版自带的分页段');
   assert.ok(!off.tableBreak);
+  assert.equal(off.index('其他资料正文') - 1, off.index('其他资料'), '只有标题的章节去掉章末空段，生成正文紧接标题');
+  assert.ok(!off.breakBefore('其他资料正文'));
+  assert.doesNotMatch(off.find('其他资料'), /<w:br w:type="page" \/>/);
+  assert.match(off.find('其他资料正文'), /<w:outlineLvl w:val="9" \/>/, '作为正文的生成模板不写标题级别');
+  assert.ok(off.breakBefore('项目经理证书'), '附在技术小节后的生成模板另起一页');
+  assert.match(off.find('项目经理证书'), /<w:outlineLvl w:val="1" \/>/);
   assert.ok(!off.breakBefore('附录二'));
 
   const on = await render(true);
@@ -715,7 +791,7 @@ test('整本导出分页：证明材料之后的商务章节另起一页；一�
   assert.ok(on.breakBefore('资格证明书'), '商务一级章节另起一页');
   assert.equal(on.paragraphs[on.index('资格证明书') - 1].includes('<w:br w:type="page" />'), false, '章首的分页段已去掉，不与段前分页叠加');
   assert.ok(on.tableBreak, '章首是表格时前插分页空段');
-  assert.ok(!on.breakBefore('附录一'), '页面组首段不分页');
+  assert.ok(!on.breakBefore('服务方案'), '页面组首段不分页');
   assert.ok(on.breakBefore('附录二'), '样式范围外的一级标题同样另起一页');
 });
 
@@ -729,7 +805,7 @@ test('各级标题样式全文生效：商务章节标题段和样式范围外�
     { id: 'c0', title: '投标文件封面', auto_fill: true, start_block: 0, end_block: 2 },
     { id: 'c1', title: '授权书', auto_fill: true, start_block: 2, end_block: 4 },
   ];
-  const chapter = (id, title, number) => `<section data-yb-business-chapter="${id}" data-yb-business-level="1" data-yb-business-title="${title}"${number ? ` data-yb-outline-number="${number}"` : ''} data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
+  const chapter = (id, title, number) => `<section data-yb-business-chapter="${id}" data-yb-business-level="1" data-yb-business-title="${title}"${number ? ` data-yb-outline-number="${number}"` : ' data-yb-front-page="true"'} data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
   const html = [
     chapter('c0', '投标文件封面'),
     chapter('c1', '授权书', '2'),

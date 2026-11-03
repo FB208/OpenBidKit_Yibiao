@@ -3375,6 +3375,12 @@
   font-size: 12px;
 }
 
+.business-fill-nav small {
+  color: var(--yb-text-soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .business-fill-nav em {
   width: fit-content;
   padding: 1px 6px;
@@ -3677,164 +3683,6 @@
   height: 40px;
   object-fit: cover;
   border-radius: 4px;
-}
-
-/* 证明材料：按放置小节分组的材料卡片，图片可移除、可从资信库添加。 */
-.business-materials {
-  display: grid;
-  gap: 18px;
-}
-
-.business-materials section {
-  display: grid;
-  gap: 10px;
-}
-
-.business-materials h3 {
-  margin: 0;
-  color: var(--yb-text-soft);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.business-material {
-  display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  background: #fff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-md);
-}
-
-.business-material.is-missing {
-  border-color: rgba(230, 126, 34, 0.45);
-}
-
-.business-material header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.business-material strong {
-  color: var(--yb-text);
-  font-size: 14px;
-}
-
-.business-material small {
-  color: var(--yb-text-muted);
-  font-size: 12px;
-}
-
-.business-material em {
-  color: var(--yb-warning-deep);
-  font-size: 12px;
-  font-style: normal;
-}
-
-.business-material-missing {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-}
-
-.business-material textarea {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-sm);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
-}
-
-.business-material-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  color: var(--yb-text-muted);
-  background: transparent;
-  border: 0;
-  border-radius: var(--yb-radius-sm);
-  cursor: pointer;
-}
-
-.business-material-icon:hover {
-  color: var(--yb-danger);
-  background: rgba(231, 76, 60, 0.08);
-}
-
-.business-material-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.business-material-images figure {
-  position: relative;
-  display: grid;
-  gap: 4px;
-  width: 112px;
-  margin: 0;
-}
-
-.business-material-images img,
-.business-material-images figure > span {
-  width: 112px;
-  height: 140px;
-  object-fit: contain;
-  background: #f5f7fa;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: 4px;
-}
-
-.business-material-images figure > span {
-  display: grid;
-  place-items: center;
-  color: var(--yb-text-muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.business-material-images figcaption {
-  overflow: hidden;
-  color: var(--yb-text-muted);
-  font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.business-material-images figure .business-material-icon {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  background: rgba(255, 255, 255, 0.92);
-}
-
-.business-material-add {
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 4px;
-  width: 112px;
-  height: 140px;
-  color: var(--yb-text-muted);
-  background: transparent;
-  border: 1px dashed var(--yb-border);
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.business-material-add:hover {
-  color: var(--yb-primary-deep);
-  border-color: var(--yb-primary);
 }
 
 .business-fill-tooltip {

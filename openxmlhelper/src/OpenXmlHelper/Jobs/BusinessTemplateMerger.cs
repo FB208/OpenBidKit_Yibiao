@@ -13,7 +13,7 @@ sealed record BusinessTemplateSource(string Path, IReadOnlyList<TemplateChapterR
 /// 把已填写商务模版的章节按原样并入整本导出文档。
 /// 模版样式以新 ID 复制进来，不映射到导出文档的同名样式，表单的字体、行距和表格保持模版原样；
 /// 字段内容控件只保留内容，签章与未填占位由回填阶段决定。
-/// 例外是分页和标题段：证明材料之后、开启一级标题另起页时的一级章节，章首加段前分页；
+/// 例外是分页和标题段：附在小节后的商务生成模板、生成模板之后的章节、开启一级标题另起页时的一级章节，章首加段前分页；
 /// 章节标题段（大纲标题）按导出模板对应级别的标题样式排版，不改缩进和段落样式。
 /// </summary>
 sealed class BusinessTemplateMerger : IDisposable
@@ -94,8 +94,9 @@ sealed class BusinessTemplateMerger : IDisposable
 
     /// <summary>
     /// 复制一章的正文块。章节紧跟分节符或父目录标题时去掉开头的分页，避免空白页和孤立标题页；
-    /// startOnNewPage（证明材料之后、开启一级标题另起页时的一级章节）时章首统一成段前分页。
-    /// 与目录标题匹配的段落写入大纲级别，供导航窗格和 Word 自动目录使用。
+    /// startOnNewPage（附在叶子后的商务生成模板、生成模板之后的章节、开启一级标题另起页时的一级章节）时章首统一成段前分页。
+    /// 与目录标题匹配的段落写入大纲级别，供导航窗格和 Word 自动目录使用；withTitle 为 false（作为只有标题章节正文的商务生成模板）时全部写正文级别。
+    /// trimTrailingBlank（后面紧接商务生成模板）时去掉章末的空段和末段末尾的分页，生成内容紧接或另起一页由其自身决定。
     /// 被页码引用的小节在标题段加起点锚点、在本章末段加终点锚点（anchors 为空时不加）。
     /// 先去掉 Agent 选定的格式文字，标题段和锚点都按去掉后的内容确定；numberText 为整本统一的章节编号，空时不加；
     /// styleTitle 由整本导出按导出模板的标题样式排版标题段（含编号），为空时标题段保持模版原样。
@@ -108,7 +109,9 @@ sealed class BusinessTemplateMerger : IDisposable
         bool startOnNewPage,
         PageAnchorRequest? anchors = null,
         string numberText = "",
-        Action<Wp.Paragraph>? styleTitle = null)
+        Action<Wp.Paragraph>? styleTitle = null,
+        bool withTitle = true,
+        bool trimTrailingBlank = false)
     {
         if (!_chapters.TryGetValue(chapterId, out var chapter))
         {
@@ -136,7 +139,8 @@ sealed class BusinessTemplateMerger : IDisposable
         OffsetBookmarks(container);
         if (stripLeadingPageBreak || startOnNewPage) StripLeadingPageBreak(container);
         if (startOnNewPage) StartOnNewPage(container);
-        var titleParagraph = MarkOutlineLevel(container, title, level, heading);
+        if (trimTrailingBlank) TrimTrailingBlank(container);
+        var titleParagraph = MarkOutlineLevel(container, title, level, withTitle ? heading : null, withTitle);
         PrependNumber(titleParagraph, numberText);
         if (titleParagraph is not null) styleTitle?.Invoke(titleParagraph);
 
@@ -429,6 +433,37 @@ sealed class BusinessTemplateMerger : IDisposable
         }
     }
 
+    /// <summary>
+    /// 去掉章末没有文字和图片的段落（含只承载分页的段落，模版为附材料预留的空行也在其中），段内书签移到前一段；
+    /// 再去掉末段文字之后的分页，后面紧接的商务生成模板不会被推到下一页，也不会多出空白页。
+    /// </summary>
+    static void TrimTrailingBlank(Wp.Body container)
+    {
+        while (container.ChildElements.LastOrDefault(item => item is not Wp.SectionProperties) is Wp.Paragraph last
+            && last.ParagraphProperties?.SectionProperties is null
+            && last.Descendants<Wp.Text>().All(text => text.Text.Trim().Length == 0)
+            && !last.Descendants().Any(item => item is Wp.Drawing or Wp.Picture or Wp.EmbeddedObject or Wp.SdtElement or Wp.FieldChar))
+        {
+            var bookmarks = last.Descendants().Where(item => item is Wp.BookmarkStart or Wp.BookmarkEnd).ToList();
+            if (bookmarks.Count > 0)
+            {
+                if (last.PreviousSibling() is not Wp.Paragraph previous) break;
+                foreach (var bookmark in bookmarks)
+                {
+                    bookmark.Remove();
+                    previous.AppendChild(bookmark);
+                }
+            }
+            last.Remove();
+        }
+        if (container.ChildElements.LastOrDefault(item => item is not Wp.SectionProperties) is not Wp.Paragraph tail) return;
+        var content = tail.Descendants().LastOrDefault(item => item is Wp.Text { Text.Length: > 0 } or Wp.Drawing or Wp.Picture or Wp.EmbeddedObject);
+        foreach (var pageBreak in tail.Descendants<Wp.Break>().Where(item => item.Type?.Value == Wp.BreakValues.Page).ToList())
+        {
+            if (content is null || content.IsBefore(pageBreak)) pageBreak.Remove();
+        }
+    }
+
     /// <summary>章节开头几个非空顶层段落中与目录标题最接近的一段，找不到时取第一个非空段落；抽取表格位置时同样按此确定标题段。</summary>
     internal static Wp.Paragraph? FindTitleParagraph(IEnumerable<Wp.Paragraph> paragraphs, string title)
     {
@@ -449,9 +484,9 @@ sealed class BusinessTemplateMerger : IDisposable
     /// 在章节开头几段中找与目录标题最接近的段落写入大纲级别，找不到时用第一个非空段落。
     /// 其余段落（含表格、文本框内）一律写正文文本级别，模版自带的标题样式不进入导航窗格和整本目录。返回标题段。
     /// </summary>
-    static Wp.Paragraph? MarkOutlineLevel(Wp.Body container, string title, int level, Wp.Paragraph? heading)
+    static Wp.Paragraph? MarkOutlineLevel(Wp.Body container, string title, int level, Wp.Paragraph? heading, bool withTitle = true)
     {
-        var target = heading ?? FindTitleParagraph(container.Elements<Wp.Paragraph>(), title);
+        var target = withTitle ? heading ?? FindTitleParagraph(container.Elements<Wp.Paragraph>(), title) : null;
         foreach (var paragraph in container.Descendants<Wp.Paragraph>())
         {
             (paragraph.ParagraphProperties ??= new Wp.ParagraphProperties()).OutlineLevel = new Wp.OutlineLevel
