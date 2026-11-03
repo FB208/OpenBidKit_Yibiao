@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { OfficialRechargeOption, OfficialRechargeOrder } from '../../../shared/types/officialAccount';
 import { AppDialog, InlineSpinner, useToast } from '../../../shared/ui';
+import { formatFenAsYuan } from './officialDisplay';
 
 // 新充值查询商品，继续支付复用同一扫码面板；关闭后忽略迟到结果。
 export default function OfficialRechargeDialog({ onClose, onViewOrders, initialOrder }: {
@@ -21,7 +22,7 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
   const mounted = useRef(false);
   const { showToast } = useToast();
   const selected = options.find((item) => item.id === selectedId);
-  const isSuccess = order?.payStatus === 'SUCCESS';
+  const isSuccess = order?.status === 'PAID';
 
   useEffect(() => {
     mounted.current = true;
@@ -46,14 +47,14 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
 
   useEffect(() => {
     if (!order) return;
-    let lastStatus = order.payStatus;
+    let lastStatus = order.status;
     return window.yibiao.officialAccount.onRechargeOrderChanged((next) => {
-      if (next.id !== order.id) return;
+      if (next.orderNo !== order.orderNo) return;
       setOrder(next);
-      if (next.payStatus === 'SUCCESS' && lastStatus !== 'SUCCESS') showToast('充值成功', 'success');
-      lastStatus = next.payStatus;
+      if (next.status === 'PAID' && lastStatus !== 'PAID') showToast('充值成功', 'success');
+      lastStatus = next.status;
     });
-  }, [order?.id, showToast]);
+  }, [order?.orderNo, showToast]);
 
   // 显式点击才创建一份订单；同步锁阻止连续点击重复下单。
   const createOrder = async () => {
@@ -62,7 +63,7 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
     setSubmitting(true);
     setCreationFailed(false);
     try {
-      const created = await window.yibiao.officialAccount.createRechargeOrder({ optionId: selected.id });
+      const created = await window.yibiao.officialAccount.createRechargeOrder({ productId: selected.id });
       if (!mounted.current) return;
       setOrder(created);
       setQrCode(created.qrCode);
@@ -81,8 +82,8 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
     if (!order || checkingPayment) return;
     setCheckingPayment(true);
     try {
-      const latest = await window.yibiao.officialAccount.getRechargeOrder(order.id);
-      if (mounted.current && latest.payStatus === 'WAITING') showToast('暂未查询到付款结果，请稍后再试', 'info');
+      const latest = await window.yibiao.officialAccount.getRechargeOrder(order.orderNo);
+      if (mounted.current && latest.status === 'WAITING') showToast('暂未查询到付款结果，请稍后再试', 'info');
     } catch (error) {
       if (mounted.current) showToast(error instanceof Error ? error.message : '查询订单状态失败', 'error');
     } finally {
@@ -105,7 +106,7 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
       onOpenChange={(open) => { if (!open) onClose(); }}
       kicker="易标官方API"
       title={isSuccess ? '充值成功' : '充值'}
-      description={isSuccess ? 'e点已入账，开始下一份精彩。' : order?.payStatus === 'CLOSED' ? '可重新选择充值套餐。' : undefined}
+      description={isSuccess ? 'e点已入账，开始下一份精彩。' : order?.status === 'CLOSED' ? '可重新选择充值套餐。' : undefined}
       cardClassName={`donation-dialog-card official-recharge-dialog${isSuccess ? ' is-success' : ''}`}
       preventClose={submitting}
       actions={(
@@ -115,15 +116,15 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
           )}
           <button type="button" className={isSuccess ? 'primary-action donation-submit' : 'secondary-action'} disabled={submitting} onClick={onClose}>{isSuccess ? '完成' : '关闭'}</button>
           {creationFailed && <button type="button" className="secondary-action" onClick={onViewOrders}>查看订单</button>}
-          {order?.payStatus === 'WAITING' && (
+          {order?.status === 'WAITING' && (
             <button type="button" className="primary-action donation-submit" disabled={checkingPayment} onClick={() => { void checkPayment(); }}>
               {checkingPayment ? '正在查询…' : '完成付款'}
             </button>
           )}
-          {order && order.payStatus !== 'WAITING' && <button type="button" className={isSuccess ? 'secondary-action' : 'primary-action donation-submit'} onClick={resetProducts}>继续充值</button>}
+          {order && order.status !== 'WAITING' && <button type="button" className={isSuccess ? 'secondary-action' : 'primary-action donation-submit'} onClick={resetProducts}>继续充值</button>}
           {!order && status === 'ready' && selected && (
             <button type="button" className="primary-action donation-submit" disabled={submitting} onClick={() => { void createOrder(); }}>
-              {submitting ? '正在生成二维码…' : `微信支付 ¥${selected.price}`}
+              {submitting ? '正在生成二维码…' : `微信支付 ¥${formatFenAsYuan(selected.payAmountFen)}`}
             </button>
           )}
         </>
@@ -142,29 +143,29 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
               </div>
               <div className="official-recharge-success-credit">
                 <span>本次到账</span>
-                <p><strong>+{order.totalPoint}</strong><span>e点</span></p>
+                <p><strong>+{order.rechargePoint}</strong><span>e点</span></p>
               </div>
               <div className="official-recharge-success-receipt">
-                <span>{order.optionName}</span>
-                <span>实付 <strong>¥{order.payPrice}</strong></span>
+                <span>{order.productName}</span>
+                <span>实付 <strong>¥{formatFenAsYuan(order.payAmountFen)}</strong></span>
               </div>
             </div>
-          ) : order.payStatus === 'WAITING' && qrCode ? (
+          ) : order.status === 'WAITING' && qrCode ? (
             <div className="donation-payment-panel">
               <div className="donation-qr-wrap"><img src={qrCode} alt="微信充值支付二维码" /></div>
               <div className="donation-payment-copy">
                 <span>微信扫码支付</span>
-                <strong>¥{order.payPrice}</strong>
-                <p>{order.optionName} · {order.totalPoint} e点</p>
+                <strong>¥{formatFenAsYuan(order.payAmountFen)}</strong>
+                <p>{order.productName} · {order.rechargePoint} e点</p>
                 <p role="status">正在等待支付结果…</p>
                 <small>订单号：{order.orderNo}</small>
               </div>
             </div>
           ) : (
             <div className="donation-expired-panel" role="status">
-              <strong>{order.payStatus === 'CLOSED' ? '订单已关闭' : '未获取到支付二维码'}</strong>
-              <p>{order.optionName} · ¥{order.payPrice} · {order.totalPoint} e点</p>
-              {order.payStatus === 'WAITING' && <button type="button" className="inline-action" onClick={onViewOrders}>查看订单</button>}
+              <strong>{order.status === 'CLOSED' ? '订单已关闭' : '未获取到支付二维码'}</strong>
+              <p>{order.productName} · ¥{formatFenAsYuan(order.payAmountFen)} · {order.rechargePoint} e点</p>
+              {order.status === 'WAITING' && <button type="button" className="inline-action" onClick={onViewOrders}>查看订单</button>}
             </div>
           )
         ) : status !== 'ready' || options.length === 0 ? (
@@ -179,8 +180,8 @@ export default function OfficialRechargeDialog({ onClose, onViewOrders, initialO
               <label className={`official-recharge-product${selectedId === option.id ? ' is-selected' : ''}`} key={option.id}>
                 <input type="radio" name="official-recharge-option" value={option.id} checked={selectedId === option.id} onChange={() => setSelectedId(option.id)} />
                 <span className="official-recharge-name">{option.name}</span>
-                <span className="official-recharge-price">¥ <strong>{option.price}</strong></span>
-                <span className="official-recharge-points">{option.pointValue} e点</span>
+                <span className="official-recharge-price">¥ <strong>{formatFenAsYuan(option.payAmountFen)}</strong></span>
+                <span className="official-recharge-points">{option.rechargePoint} e点</span>
               </label>
             ))}
           </fieldset>

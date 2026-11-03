@@ -1045,13 +1045,15 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   }
 }
 
-async function ensureTextAiResponseOk(response, fallbackMessage) {
+async function ensureTextAiResponseOk(response, fallbackMessage, config) {
   if (response.ok) {
     return;
   }
 
   throw await createAiHttpErrorFromResponse(response, fallbackMessage, {
     source: 'text-model',
+    // 与官方请求头使用同一判断，余额不足只认发往易标官方服务商的请求。
+    official: config.text_model_provider === 'official',
     responseFormatUnsupportedChecker: isResponseFormatUnsupported,
   });
 }
@@ -1199,7 +1201,7 @@ async function readOpenAIChatStream(response) {
 
 async function requestTextAiNormal(app, config, requestBody, options = {}) {
   const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
-  await ensureTextAiResponseOk(response, 'AI 请求失败');
+  await ensureTextAiResponseOk(response, 'AI 请求失败', config);
   let responseData = null;
   try {
     responseData = await response.json();
@@ -1216,7 +1218,7 @@ async function requestTextAiNormal(app, config, requestBody, options = {}) {
 
 async function requestTextAiStream(app, config, requestBody, options = {}) {
   const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
-  await ensureTextAiResponseOk(response, 'AI 请求失败');
+  await ensureTextAiResponseOk(response, 'AI 请求失败', config);
   return readOpenAIChatStream(response);
 }
 
@@ -1596,7 +1598,7 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
     });
     await Promise.resolve(request.onRequestStart?.({ config, requestBody, requestId }));
     const response = await fetchChatCompletion(app, config, requestBody, { signal: request.signal });
-    await ensureTextAiResponseOk(response, 'AI 请求失败');
+    await ensureTextAiResponseOk(response, 'AI 请求失败', config);
     const result = await request.consumeResponse(response, {
       config,
       requestBody,

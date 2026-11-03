@@ -22,7 +22,7 @@ const googleImageSizes = ['512', '1K', '2K', '4K'];
 const agnesImageRatios = ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'];
 
 const textProviderBaseUrls = {
-  official: 'https://v3.yibiao.pro/qhp-yibiao/anonymous/yibiao/openai/v1',
+  official: 'https://v3.yibiao.pro/qhp-ai/anonymous/openai/v1',
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
@@ -34,7 +34,7 @@ const defaultTextModelProfiles = {
   official: {
     api_key: '',
     base_url: textProviderBaseUrls.official,
-    model_name: 'yibiao-text',
+    model_name: 'TEXT_GENERATION',
     multimodal_enabled: true,
     reasoning_effort: '',
     context_length_limit: 258000,
@@ -477,6 +477,12 @@ function normalizeConfig(config) {
     textModelProfiles.custom = textProfileFromUnknownProvider(source, rawTextProvider, textModelProfiles.custom);
   }
   const officialApiModelType = source.official_api_model_type ?? defaultConfig.official_api_model_type;
+  // 官方服务只接受两种逻辑模型且固定返回 SSE，模型名始终跟随模型类型，也覆盖旧版保存的模型名。
+  textModelProfiles.official = {
+    ...textModelProfiles.official,
+    model_name: officialApiModelType === 'high-quality' ? 'REASONING' : 'TEXT_GENERATION',
+    request_mode: 'stream',
+  };
   const activeTextProfile = textModelProfiles[textModelProvider];
   const sourceImageModel = source.image_model && typeof source.image_model === 'object' ? source.image_model : {};
   const imageModelProvider = isImageModelProvider(sourceImageModel.provider) ? sourceImageModel.provider : defaultConfig.image_model.provider;

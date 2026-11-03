@@ -451,7 +451,8 @@ async function runTextModelProbe(config, options) {
       signal: timeout.signal,
     });
     const rawText = await response.text();
-    const payloads = options.stream
+    // 易标官方服务忽略 stream 参数、始终返回 SSE，按响应类型解析。
+    const payloads = options.stream || String(response.headers.get('content-type') || '').includes('text/event-stream')
       ? parseSsePayloads(rawText)
       : (() => {
         try { return rawText ? [JSON.parse(rawText)] : []; } catch { return []; }

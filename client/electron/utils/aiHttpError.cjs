@@ -25,13 +25,14 @@ function parseResponseDetail(rawText) {
   }
 }
 
-function createAiHttpErrorPayload(response, rawText, source) {
+function createAiHttpErrorPayload(response, rawText, source, official) {
   return {
     status: Number(response?.status || 0),
     statusText: response?.statusText || '',
     contentType: getHeaderValue(response?.headers, 'content-type'),
     body: String(rawText || ''),
     source: source || 'ai-service',
+    official: official === true,
     createdAt: new Date().toISOString(),
   };
 }
@@ -52,7 +53,7 @@ function formatAiHttpErrorMessage(payload) {
 
 async function createAiHttpErrorFromResponse(response, fallbackMessage = 'AI 请求失败', options = {}) {
   const rawText = await response.text().catch(() => '');
-  const payload = createAiHttpErrorPayload(response, rawText, options.source);
+  const payload = createAiHttpErrorPayload(response, rawText, options.source, options.official);
   const detail = parseResponseDetail(rawText);
   const message = isAiHttpErrorHtmlPayload(payload)
     ? formatAiHttpErrorMessage(payload)
@@ -93,11 +94,11 @@ function copyAiHttpError(source, target) {
   return target;
 }
 
-// 易标官方 API 余额不足使用专用错误码；其他服务商的 402 不按此处理。
+// 只认发往易标官方服务商的请求：V4 的 402 错误码是通用格式，其他服务商返回同样格式也不按官方余额不足处理。
 function isOfficialBalanceInsufficient(payload) {
   try {
     const error = JSON.parse(String(payload?.body || '')).error;
-    return error?.type === 'yibiao_ai_error' && error.code === 'INSUFFICIENT_BALANCE';
+    return payload.official && payload.status === 402 && error?.code === 'insufficient_balance';
   } catch {
     return false;
   }

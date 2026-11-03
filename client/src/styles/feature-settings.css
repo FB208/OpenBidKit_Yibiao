@@ -715,6 +715,32 @@ fieldset.settings-list {
   font-size: 13px;
 }
 
+.official-orders-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.official-source-select {
+  min-width: 0;
+  max-width: 280px;
+  min-height: 32px;
+  padding: 4px 32px 4px 10px;
+  color: var(--yb-text);
+  font-size: 13px;
+  background-color: #eef3fa;
+  border: 1px solid #ccd6e3;
+  border-radius: var(--yb-radius-md);
+  outline: none;
+}
+
+.official-source-select:focus {
+  background-color: #ffffff;
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: var(--yb-focus-ring);
+}
+
 .official-api-table.official-orders-table {
   min-width: 660px;
 }
@@ -754,24 +780,7 @@ fieldset.settings-list {
   color: var(--yb-warning-deep);
 }
 
-.official-order-status.is-success {
-  color: var(--yb-success-deep);
-}
-
-/* 开票状态沿用订单状态文字样式，关闭保持默认灰色。 */
-.official-invoice-status[data-status='CAN_APPLY'] {
-  color: var(--yb-primary-deep);
-}
-
-.official-invoice-status[data-status='PENDING'] {
-  color: var(--yb-warning-deep);
-}
-
-.official-invoice-status[data-status='REJECTED'] {
-  color: var(--yb-danger-deep);
-}
-
-.official-invoice-status[data-status='ISSUED'] {
+.official-order-status.is-paid {
   color: var(--yb-success-deep);
 }
 
@@ -1794,13 +1803,6 @@ fieldset.settings-list {
 .privacy-item strong {
   color: var(--yb-text);
   font-size: 15px;
-}
-
-/* 开票备注在弹窗中纵向排列，避免设置页双栏最小宽度造成溢出。 */
-.settings-row.official-invoice-remark {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 0;
 }
 
 /* 存储空间弹窗：三组占用依次排列，组内明细在弹窗内滚动。 */

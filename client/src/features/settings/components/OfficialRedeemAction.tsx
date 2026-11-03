@@ -3,13 +3,12 @@ import type { FormEvent } from 'react';
 import type { OfficialAccountState } from '../../../shared/types/officialAccount';
 import { AppDialog, InlineSpinner, useToast } from '../../../shared/ui';
 
-// 邮箱账户兑换点数；同一账户、同一兑换码失败重试时沿用请求号。
+// 邮箱账户兑换点数；同一用户重复提交同一兑换码时服务端返回首次成功记录。
 export default function OfficialRedeemAction({ account }: { account: OfficialAccountState }) {
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const requests = useRef(new Map<string, string>());
   const pending = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const { showToast } = useToast();
@@ -40,15 +39,11 @@ export default function OfficialRedeemAction({ account }: { account: OfficialAcc
       setError('兑换码只能包含 1～64 位字母、数字、下划线和横线');
       return;
     }
-    const key = `${account.accountId}:${normalized}`;
-    const requestNo = requests.current.get(key) || crypto.randomUUID();
-    requests.current.set(key, requestNo);
     pending.current = true;
     setBusy(true);
     setError('');
     try {
-      const result = await window.yibiao.officialAccount.redeemCode({ code: normalized, requestNo });
-      requests.current.delete(key);
+      const result = await window.yibiao.officialAccount.redeemCode({ code: normalized });
       setCode('');
       close();
       showToast(`兑换成功，获得 ${result.redeemedPoint} 点`, 'success');
