@@ -1824,7 +1824,9 @@ function buildTenderLooseText(value) {
 }
 
 function buildTenderSkeletonKey(value) {
+  // 花括号只留给占位符，原文里的花括号先去掉，后面清洗标点时不能再删。
   let text = normalizeTenderComparableText(value)
+    .replace(/[{}]/g, '')
     .replace(/\b\d{4}年\d{1,2}月\d{1,2}日\b/g, '{date}')
     .replace(/\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/g, '{date}')
     .replace(/\b[A-Z]{2,}[-A-Z0-9]{4,}\b/gi, '{code}')
@@ -1836,7 +1838,7 @@ function buildTenderSkeletonKey(value) {
     .replace(/\b\d+(?:\.\d+)?\b/g, '{num}');
   text = text
     .replace(/[\s　]+/g, '')
-    .replace(/[.,，。;；:：、!！?？"'“”‘’《》<>〈〉()[\]【】{}]/g, '')
+    .replace(/[.,，。;；:：、!！?？"'“”‘’《》<>〈〉()[\]【】]/g, '')
     .toLowerCase();
   return text;
 }
@@ -1846,11 +1848,10 @@ function isTenderSkeletonAllowed(value, skeletonKey) {
   const compactLength = buildTenderLooseText(text).length;
   if (!skeletonKey || skeletonKey.length < 8 || !/[{}]/.test(skeletonKey)) return false;
   if (compactLength >= 18) return true;
-  return /(评分|评标|分值|计分|内容无瑕疵|内容存在|页码检索|合同复印件|技术要求|招标要求)/.test(text);
+  return /(评分|评标|分值|计分|技术要求|招标要求)/.test(text);
 }
 
 const tenderFieldDenyPattern = /(供应商名称|供应商地址|法定代表人|供应商代表|授权代表|被授权人|委托代理人|联系人|联系电话|电话|手机|邮政编码|邮箱|电子邮箱|开户|账号|银行|报价|投标报价|投标总价|合同金额|金额|总价)/;
-const tenderFieldAllowPattern = /^(投标日期|日期|项目名称|项目编号|采购人|采购代理机构|评分因素及评标标准页码检索|投标文件总目录|目录|附件\d*|投标书|开标一览表|报价分项一览表|投标产品配置清单|商务要求点对点应答表|技术要求点对点应答表|主要相关业绩一览表|政府采购政策情况表|中小微企业声明函|非残疾人福利性单位声明函)$/;
 
 function normalizeTenderFieldName(value) {
   return String(value || '')
@@ -1862,35 +1863,23 @@ function normalizeTenderFieldName(value) {
 
 function parseTenderFormatField(value) {
   const text = normalizeTenderComparableText(value);
-  if (!text) return null;
-  if (/^评分因素及评标标准页码检索(?:\s+\d{1,4}|\s+P?\d{1,4}(?:[-~至]P?\d{1,4})?)?$/i.test(text)) {
-    return { field: '评分因素及评标标准页码检索', tail: text.replace(/^评分因素及评标标准页码检索/i, '').trim() };
-  }
-
   const colonIndex = text.indexOf(':');
-  if (colonIndex > 0 && colonIndex <= 24) {
-    const field = normalizeTenderFieldName(text.slice(0, colonIndex));
-    const tail = text.slice(colonIndex + 1).trim();
-    return field ? { field, tail } : null;
-  }
-
-  const title = normalizeTenderFieldName(stripTenderDirectoryPageTail(text));
-  return tenderFieldAllowPattern.test(title) ? { field: title, tail: text.slice(title.length).trim() } : null;
+  if (colonIndex <= 0 || colonIndex > 24) return null;
+  const field = normalizeTenderFieldName(text.slice(0, colonIndex));
+  return field ? { field, tail: text.slice(colonIndex + 1).trim() } : null;
 }
 
 function isTenderFieldAllowed(field) {
-  if (!field || tenderFieldDenyPattern.test(field)) return false;
-  return tenderFieldAllowPattern.test(field);
+  return Boolean(field) && !tenderFieldDenyPattern.test(field);
 }
 
-function isSafeTenderFieldTail(value) {
+// 字段名取自本份招标文件；填写值留空、为日期，或原文出现在招标文件中（项目名称、编号、采购人、代理机构等）才视为照抄格式。
+function isSafeTenderFieldTail(value, tenderLooseText) {
   const tail = normalizeTenderComparableText(value).trim();
   if (!tail) return true;
   if (/^(?:\d{4}年\d{1,2}月\d{1,2}日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})$/.test(tail)) return true;
-  if (/^(?:第\s*)?\d{1,4}\s*页?$/.test(tail)) return true;
-  if (/^P\s*\d{1,4}(?:\s*[-~至]\s*P?\s*\d{1,4})?$/i.test(tail)) return true;
-  if (/^[A-Z0-9-]{4,}$/i.test(tail)) return true;
-  return tail.length <= 36 && /(天津港保税区消防救援支队|消防装备管理系统项目|天津众信招标咨询有限公司)/.test(tail);
+  const looseTail = buildTenderLooseText(tail);
+  return !looseTail || tenderLooseText.includes(looseTail);
 }
 
 function charBigramsFromLooseText(value) {
@@ -1911,11 +1900,22 @@ function shouldApplyNearTenderMatch(value, looseText) {
   return /(评分|评标|页码|投标日期|日期|技术要求|招标要求)/.test(normalizeTenderComparableText(value));
 }
 
-function buildTenderSourceMatcher(tenderSentences) {
+// 格式章节里的空白字段（如“项目名称：”）不算有效句子，字段名要从全部文本块收集。
+function collectTenderFormatFields(markdown) {
+  const fields = new Set();
+  for (const block of extractContentTextBlocks(markdown)) {
+    for (const part of splitContentBlockSentences(block)) {
+      const parsedField = parseTenderFormatField(part);
+      if (parsedField && isTenderFieldAllowed(parsedField.field)) fields.add(parsedField.field);
+    }
+  }
+  return fields;
+}
+
+function buildTenderSourceMatcher(tenderSentences, fieldSet = new Set()) {
   const exactSet = new Set();
   const strictSet = new Set();
   const skeletonSet = new Set();
-  const fieldSet = new Set();
   const entries = [];
   const gramIndex = new Map();
 
@@ -1929,8 +1929,6 @@ function buildTenderSourceMatcher(tenderSentences) {
     if (normalized) exactSet.add(normalized);
     if (strictKey && strictKey.length >= 3) strictSet.add(strictKey);
     if (isTenderSkeletonAllowed(normalized, skeletonKey)) skeletonSet.add(skeletonKey);
-    const parsedField = parseTenderFormatField(normalized);
-    if (parsedField && isTenderFieldAllowed(parsedField.field)) fieldSet.add(parsedField.field);
     const entry = { normalized, strictKey, skeletonKey, looseText, grams };
     const entryIndex = entries.length;
     entries.push(entry);
@@ -1941,6 +1939,7 @@ function buildTenderSourceMatcher(tenderSentences) {
     }
   }
 
+  const tenderLooseText = entries.map((entry) => entry.looseText).join('\n');
   const candidateCounts = new Uint32Array(entries.length);
 
   function matchNear(sentence) {
@@ -1986,7 +1985,7 @@ function buildTenderSourceMatcher(tenderSentences) {
       const strictKey = buildTenderStrictKey(normalized);
       if (strictKey && strictSet.has(strictKey)) return { reason: 'strict' };
       const parsedField = parseTenderFormatField(normalized);
-      if (parsedField && isTenderFieldAllowed(parsedField.field) && fieldSet.has(parsedField.field) && isSafeTenderFieldTail(parsedField.tail)) {
+      if (parsedField && isTenderFieldAllowed(parsedField.field) && fieldSet.has(parsedField.field) && isSafeTenderFieldTail(parsedField.tail, tenderLooseText)) {
         return { reason: 'field' };
       }
       const skeletonKey = buildTenderSkeletonKey(normalized);
@@ -2514,7 +2513,7 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
     if (Array.isArray(tenderFiles) && tenderFiles.length) {
       try {
         const tenderMarkdown = await readCombinedTenderMarkdown(contentFiles, tenderFiles);
-        tenderMatcher = buildTenderSourceMatcher(splitContentSentences(tenderMarkdown));
+        tenderMatcher = buildTenderSourceMatcher(splitContentSentences(tenderMarkdown), collectTenderFormatFields(tenderMarkdown));
       } catch (error) {
         updateContentAnalysis({ message: `招标文件句子白名单生成失败，继续比对投标正文：${error.message || error}` }, webContents, signature);
         developerLogger?.write('duplicate.content_analysis.tender_whitelist.error', {
