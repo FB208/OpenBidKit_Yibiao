@@ -72,6 +72,8 @@ static class FillTemplateFieldsAction
                     writtenElements.AddRange(RuleTableWriter.Fill(wordDocument.Body!, controls, table));
                 }
                 ListRowRemover.Remove(controls, request.RemoveRowFieldIds ?? []);
+                // 未使用的条目只标为待删，块数不变，章节块号仍与字段清单一致；并入章节和截章时删除。
+                TemplateRepeats.MarkIdle(wordDocument.Body!, request.RemoveRowFieldIds ?? []);
 
                 wordDocument.Save();
                 // 与 apply-template-fields 一致，只校验本动作写入且仍留在文档中的元素。

@@ -54,8 +54,9 @@ static class SliceTemplateChapterAction
                 {
                     if (index < request.StartBlock || index >= request.EndBlock) blocks[index].Remove();
                 }
-                // 与整本导出一致：先去掉 Agent 选定的格式文字，再去掉开头分页。
+                // 与整本导出一致：先去掉 Agent 选定的格式文字和标为待删的条目，再去掉开头分页。
                 BusinessTemplateMerger.RemoveFormatText(body);
+                TemplateRepeats.RemoveIdle(body);
                 BusinessTemplateMerger.StripLeadingPageBreak(body);
                 document.MainDocumentPart!.Document.Save();
             }

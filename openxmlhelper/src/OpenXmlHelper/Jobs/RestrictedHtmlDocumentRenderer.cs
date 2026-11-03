@@ -136,12 +136,21 @@ static class RestrictedHtmlDocumentRenderer
     static RenderResult RenderWholeDocument(string assetRoot, string outputPath, string html, JsonElement exportFormat, ChromeAssets chrome, FigureAssets assets, BusinessTemplateSource? businessTemplate)
     {
         var format = new FormatReader(exportFormat);
+        // 纸张、方向、双栏、页边距、一级标题另起页和各级标题样式（首行缩进除外）始终全文生效，样式范围外的段落也按这些设置排版。
         var basicPage = new Dictionary<string, JsonElement>();
         foreach (var name in new[] { "paper_size", "orientation", "two_column", "margin_top_cm", "margin_bottom_cm", "margin_left_cm", "margin_right_cm" })
         {
             if (format.Section("page").TryGetProperty(name, out var value)) basicPage[name] = value;
         }
-        var basic = new FormatReader(JsonSerializer.SerializeToElement(new { page = basicPage }));
+        var level1PageBreak = format.Bool(format.Root, "heading_level1_page_break_before", false);
+        var basicHeadings = format.Root.TryGetProperty("headings", out var headingList) && headingList.ValueKind == JsonValueKind.Array
+            ? headingList.EnumerateArray()
+                .Select(heading => heading.ValueKind == JsonValueKind.Object
+                    ? heading.EnumerateObject().Where(item => item.Name != "first_line_indent_chars").ToDictionary(item => item.Name, item => item.Value)
+                    : [])
+                .ToList()
+            : [];
+        var basic = new FormatReader(JsonSerializer.SerializeToElement(new { page = basicPage, heading_level1_page_break_before = level1PageBreak, headings = basicHeadings }));
         var ranges = ParseHtml(html).Body!.Children.ToList();
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         using var document = WordprocessingDocument.Create(outputPath, WordprocessingDocumentType.Document);
@@ -178,6 +187,7 @@ static class RestrictedHtmlDocumentRenderer
                 section.AddChild(new Wp.PageNumberType { Start = Math.Max(1, format.Integer(format.Section("page"), "page_number_start", 1)) }, true);
             var pageElements = new List<OpenXmlElement>();
             var afterChapter = false;
+            var afterMaterials = false;
             do
             {
                 var range = ranges[index++];
@@ -186,21 +196,29 @@ static class RestrictedHtmlDocumentRenderer
                 {
                     if (!businessPage) throw new InvalidOperationException("商务模版章节必须位于 business 页面范围");
                     // 组首或父目录标题之后的章节去掉开头分页；相邻章节之间保留模版自带的分页。
+                    // 证明材料之后的章节，以及开启一级标题另起页时的一级章节，章首另起一页。
+                    // 标题段按导出模板的标题样式排版；封面等前置页没有导出编号，保持模版原样。
                     var level = int.TryParse(range.GetAttribute("data-yb-business-level"), out var parsedLevel) ? parsedLevel : 1;
+                    var outlineNumber = range.GetAttribute("data-yb-outline-number");
                     pageElements.AddRange(merger!.ImportChapter(
                         chapterId,
                         range.GetAttribute("data-yb-business-title") ?? "",
                         level,
                         stripLeadingPageBreak: !afterChapter,
+                        startOnNewPage: afterChapter && (afterMaterials || (level == 1 && level1PageBreak)),
                         new PageAnchorRequest(
                             SplitAnchorIds(range.GetAttribute("data-yb-anchor-start")),
                             SplitAnchorIds(range.GetAttribute("data-yb-anchor-end")),
                             NextAnchorId),
-                        OutlineNumberText(range.GetAttribute("data-yb-outline-number"), format, level)));
+                        OutlineNumberText(outlineNumber, format, level),
+                        string.IsNullOrWhiteSpace(outlineNumber) ? null : title => ApplyHeadingLook(title, format, level, firstLineTwips: -1)));
                     afterChapter = true;
+                    afterMaterials = false;
                     continue;
                 }
-                afterChapter = false;
+                // 证明材料范围之后的章节另起一页，不接在材料图片后面。
+                afterMaterials = range.GetAttribute("data-yb-materials") == "true";
+                afterChapter = afterMaterials;
                 var rangeFormat = range.GetAttribute("data-yb-export-template") == "true" ? format : basic;
                 body.RemoveAllChildren();
                 body.AppendChild(section.CloneNode(true));
@@ -216,6 +234,7 @@ static class RestrictedHtmlDocumentRenderer
                     toc = new TocState(tocSdt, tocSdt.PreviousSibling() as Wp.Paragraph ?? throw new InvalidOperationException("目录缺少标题"), rangeFormat);
                 }
                 ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
+                ApplyPageBreakMarkers(body);
                 foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
                 {
                     element.Remove();
@@ -354,6 +373,20 @@ static class RestrictedHtmlDocumentRenderer
     /// <summary>商务章节上的锚点属性：空格分隔的目录节点 ID。</summary>
     static IReadOnlyList<string> SplitAnchorIds(string? value) =>
         (value ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>
+    /// 分页标记段落（证明材料标题前）换成下一段的段前分页。在排版之后处理，排版会清掉非一级标题的段前分页。
+    /// </summary>
+    static void ApplyPageBreakMarkers(Wp.Body body)
+    {
+        foreach (var marker in body.Elements<Wp.Paragraph>().Where(p => p.InnerText.Trim() == PageBreakMarker).ToList())
+        {
+            if (marker.NextSibling() is Wp.Paragraph next) EnsureParagraphProperties(next).PageBreakBefore = new Wp.PageBreakBefore();
+            marker.Remove();
+        }
+    }
+
+    const string PageBreakMarker = "YIBIAOPAGEBREAK";
 
     static void ApplyLayoutBookmarks(Wp.Body body, int bookmarkId)
     {
@@ -1179,13 +1212,7 @@ static class RestrictedHtmlDocumentRenderer
     {
         var heading = format.Heading(level);
         var halfPoints = FontHalfPoints(format.Text(heading, "size", level == 1 ? "小二" : level == 2 ? "四号" : "小四"));
-        SetParagraphLayout(
-            paragraph,
-            Alignment(format.Text(heading, "alignment", level == 1 ? "居中对齐" : "两端对齐")),
-            format.Number(heading, "spacing_before_pt", level <= 3 ? 10 : 5),
-            format.Number(heading, "spacing_after_pt", level <= 3 ? 10 : 5),
-            format.Number(heading, "line_spacing", 1),
-            CharsToTwips(format.Number(heading, "first_line_indent_chars", 0), halfPoints));
+        ApplyHeadingLook(paragraph, format, level, CharsToTwips(format.Number(heading, "first_line_indent_chars", 0), halfPoints));
         var properties = EnsureParagraphProperties(paragraph);
         SetSingleChild(properties, new Wp.ParagraphStyleId { Val = $"Heading{level}" });
         SetSingleChild(properties, new Wp.KeepNext());
@@ -1199,10 +1226,26 @@ static class RestrictedHtmlDocumentRenderer
             properties.RemoveAllChildren<Wp.PageBreakBefore>();
         }
         ClearHeadingBorder(properties);
+    }
+
+    /// <summary>
+    /// 标题外观：对齐、段前段后、行距，以及字体、字号、颜色、加粗。程序标题和商务模版章节标题段共用；
+    /// firstLineTwips 小于 0 时不改缩进（商务标题段保留模版原有缩进）。
+    /// </summary>
+    static void ApplyHeadingLook(Wp.Paragraph paragraph, FormatReader format, int level, int firstLineTwips)
+    {
+        var heading = format.Heading(level);
+        SetParagraphLayout(
+            paragraph,
+            Alignment(format.Text(heading, "alignment", level == 1 ? "居中对齐" : "两端对齐")),
+            format.Number(heading, "spacing_before_pt", level <= 3 ? 10 : 5),
+            format.Number(heading, "spacing_after_pt", level <= 3 ? 10 : 5),
+            format.Number(heading, "line_spacing", 1),
+            firstLineTwips);
         ApplyRuns(
             paragraph,
             format.Text(heading, "font", level <= 5 ? "黑体" : "宋体"),
-            halfPoints,
+            FontHalfPoints(format.Text(heading, "size", level == 1 ? "小二" : level == 2 ? "四号" : "小四")),
             Color(format.Text(heading, "text_color", "#243048"), "243048"),
             format.Bool(heading, "bold", false),
             null);

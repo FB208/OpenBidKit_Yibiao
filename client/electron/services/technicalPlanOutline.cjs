@@ -1,5 +1,13 @@
 const { randomUUID } = require('node:crypto');
 
+const CONTENT_MODE_LABELS = {
+  'ai-generate': 'AI生成',
+  'template-fill': '模板填写',
+  'rule-page': '规则和页码',
+  'directory-generate': '目录生成',
+  'manual-fill': '人工填写',
+  other: '其他模式',
+};
 const NODE_ID_PATTERN = '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
 
 // 编号只反映当前树的位置，绝不修改节点身份。
@@ -90,8 +98,24 @@ function stripOutlineFields(items, fields) {
   });
 }
 
+// 投标文件目录：编号、标题、处理方式和说明，页码引用按编号指向小节。
+function buildOutlineInput(outline) {
+  const lines = [];
+  const visit = (items, depth) => {
+    for (const item of items || []) {
+      const mode = item.children?.length ? '' : `（${CONTENT_MODE_LABELS[item.content_mode] || item.content_mode}）`;
+      const description = String(item.description ?? '').trim();
+      lines.push(`${'  '.repeat(depth)}- ${item.number} ${item.title}${mode}${description ? `：${description}` : ''}`);
+      visit(item.children, depth + 1);
+    }
+  };
+  visit(numberOutline(outline), 0);
+  return lines.join('\n');
+}
+
 module.exports = {
   NODE_ID_PATTERN,
+  buildOutlineInput,
   RULE_BASES,
   ruleBasisFields,
   numberOutline,

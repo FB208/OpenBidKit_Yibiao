@@ -27,7 +27,7 @@ export function isFilled(unit: BusinessFillReviewUnit, draft: UnitDraft) {
 }
 
 /**
- * 逐行清单表按行决定待处理：有任一格已填的行，空格待处理；一行都没填时只有第一行待处理，其余行为未使用的空行，导出时留空。
+ * 逐行清单表和可重复条目按行（条）决定待处理：有任一格已填的行，空格待处理；一行都没填时只有第一行待处理，其余行为未使用的空行，导出时删除或留空。
  * 签章格子不算已填。与 Main 的 businessTemplateFillTask.cjs findIdleListUnits 同一规则，改动时同步。
  */
 export function findIdleListUnitKeys(units: BusinessFillReviewUnit[], isUnitFilled: (unit: BusinessFillReviewUnit) => boolean) {
@@ -52,11 +52,13 @@ export function isPending(unit: BusinessFillReviewUnit, draft: UnitDraft, idle: 
   return !isFilled(unit, draft) && !idle && !unit.signature;
 }
 
-/** 填写项当前状态的说明，已填写时为空。 */
+/** 填写项当前状态的说明，已填写时为空（值含页码引用时说明导出时换成页码）。 */
 export function describeUnitState(unit: BusinessFillReviewUnit, draft: UnitDraft, idle: boolean) {
   if (unit.signature) return '线下签字盖章';
-  if (isFilled(unit, draft)) return '';
-  if (idle) return '未使用的空行，输入内容即启用';
+  if (unit.link?.form === 'same') return `随“${unit.link.source_name}”自动填写`;
+  if (unit.link) return `按“${unit.link.source_name}”自动换算大写，${unit.link.source_name}须填写金额数字`;
+  if (isFilled(unit, draft)) return /\{\{\s*页码/.test(draft.value) ? '导出时把 {{页码:编号}} 换成该小节的实际页码' : '';
+  if (idle) return unit.entry ? '未使用的条目，输入内容即启用' : '未使用的空行，输入内容即启用';
   if (unit.unresolved_reason) return unit.unresolved_reason;
   return unit.fill_by === 'manual' ? '待人工填写' : '待填写';
 }
@@ -73,6 +75,43 @@ export function collectFieldIds(blocks: BusinessFillLayoutBlock[], output: strin
     }
   }
   return output;
+}
+
+/** 资信库图片选择弹层内容，按所属记录分组；clearLabel 存在时提供“不选择”。附件字段和证明材料共用。 */
+export function BusinessImagePickerContent({ imageGroups, selectedId, clearLabel, onSelect }: {
+  imageGroups: Array<[string, BusinessFillReviewImage[]]>;
+  selectedId?: string;
+  clearLabel?: string;
+  onSelect: (imageId: string) => void;
+}) {
+  return (
+    <Popover.Content className="business-fill-image-popover" side="bottom" align="start" sideOffset={6}>
+      {clearLabel && (
+        <Popover.Close asChild>
+          <button type="button" className="secondary-action" onClick={() => onSelect('')}>{clearLabel}</button>
+        </Popover.Close>
+      )}
+      {imageGroups.map(([group, images]) => (
+        <section key={group}>
+          <strong>{group}</strong>
+          <div>
+            {images.map((item) => (
+              <Popover.Close asChild key={item.image_id}>
+                <button
+                  type="button"
+                  className={item.image_id === selectedId ? 'is-selected' : undefined}
+                  onClick={() => onSelect(item.image_id)}
+                >
+                  <img src={item.asset_url} alt={item.name} />
+                  <span>{item.label} · {item.name}</span>
+                </button>
+              </Popover.Close>
+            ))}
+          </div>
+        </section>
+      ))}
+    </Popover.Content>
+  );
 }
 
 type FieldVariant = 'inline' | 'cell' | 'block';
@@ -171,30 +210,12 @@ function BusinessFillDocument({
             </button>
           </Popover.Trigger>
           <Popover.Portal>
-            <Popover.Content className="business-fill-image-popover" side="bottom" align="start" sideOffset={6}>
-              <Popover.Close asChild>
-                <button type="button" className="secondary-action" onClick={() => onDraftChange(unit.key, { imageId: '' })}>不选择</button>
-              </Popover.Close>
-              {imageGroups.map(([group, images]) => (
-                <section key={group}>
-                  <strong>{group}</strong>
-                  <div>
-                    {images.map((item) => (
-                      <Popover.Close asChild key={item.image_id}>
-                        <button
-                          type="button"
-                          className={item.image_id === draft.imageId ? 'is-selected' : undefined}
-                          onClick={() => onDraftChange(unit.key, { imageId: item.image_id })}
-                        >
-                          <img src={item.asset_url} alt={item.name} />
-                          <span>{item.label} · {item.name}</span>
-                        </button>
-                      </Popover.Close>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </Popover.Content>
+            <BusinessImagePickerContent
+              imageGroups={imageGroups}
+              selectedId={draft.imageId}
+              clearLabel="不选择"
+              onSelect={(imageId) => onDraftChange(unit.key, { imageId })}
+            />
           </Popover.Portal>
         </Popover.Root>
       );
@@ -206,6 +227,7 @@ function BusinessFillDocument({
         placeholder={unit.name}
         aria-label={unit.name}
         onChange={(event) => onDraftChange(unit.key, { value: event.target.value })}
+        readOnly={Boolean(unit.link)}
         disabled={saving}
       />
     );

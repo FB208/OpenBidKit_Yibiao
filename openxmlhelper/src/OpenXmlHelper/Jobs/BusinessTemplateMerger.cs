@@ -13,6 +13,8 @@ sealed record BusinessTemplateSource(string Path, IReadOnlyList<TemplateChapterR
 /// 把已填写商务模版的章节按原样并入整本导出文档。
 /// 模版样式以新 ID 复制进来，不映射到导出文档的同名样式，表单的字体、行距和表格保持模版原样；
 /// 字段内容控件只保留内容，签章与未填占位由回填阶段决定。
+/// 例外是分页和标题段：证明材料之后、开启一级标题另起页时的一级章节，章首加段前分页；
+/// 章节标题段（大纲标题）按导出模板对应级别的标题样式排版，不改缩进和段落样式。
 /// </summary>
 sealed class BusinessTemplateMerger : IDisposable
 {
@@ -92,17 +94,21 @@ sealed class BusinessTemplateMerger : IDisposable
 
     /// <summary>
     /// 复制一章的正文块。章节紧跟分节符或父目录标题时去掉开头的分页，避免空白页和孤立标题页；
+    /// startOnNewPage（证明材料之后、开启一级标题另起页时的一级章节）时章首统一成段前分页。
     /// 与目录标题匹配的段落写入大纲级别，供导航窗格和 Word 自动目录使用。
     /// 被页码引用的小节在标题段加起点锚点、在本章末段加终点锚点（anchors 为空时不加）。
-    /// 先去掉 Agent 选定的格式文字，标题段和锚点都按去掉后的内容确定；numberText 为整本统一的章节编号，空时不加。
+    /// 先去掉 Agent 选定的格式文字，标题段和锚点都按去掉后的内容确定；numberText 为整本统一的章节编号，空时不加；
+    /// styleTitle 由整本导出按导出模板的标题样式排版标题段（含编号），为空时标题段保持模版原样。
     /// </summary>
     public IReadOnlyList<OpenXmlElement> ImportChapter(
         string chapterId,
         string title,
         int level,
         bool stripLeadingPageBreak,
+        bool startOnNewPage,
         PageAnchorRequest? anchors = null,
-        string numberText = "")
+        string numberText = "",
+        Action<Wp.Paragraph>? styleTitle = null)
     {
         if (!_chapters.TryGetValue(chapterId, out var chapter))
         {
@@ -118,6 +124,7 @@ sealed class BusinessTemplateMerger : IDisposable
             .Take(chapter.EndBlock - chapter.StartBlock)
             .Select(block => block.CloneNode(true)));
         RemoveFormatText(container);
+        TemplateRepeats.RemoveIdle(container);
         var heading = TakeHeading(container, chapter.Heading, title);
         UnwrapFieldControls(container);
         RemoveUnsupported(container, title);
@@ -127,9 +134,11 @@ sealed class BusinessTemplateMerger : IDisposable
         CrossDocumentImport.RemapNumbering(container, _sourcePart, _destPart, _context);
         CrossDocumentImport.RemapRelationships(container, _sourcePart, _destPart, _context.RelationshipIds);
         OffsetBookmarks(container);
-        if (stripLeadingPageBreak) StripLeadingPageBreak(container);
+        if (stripLeadingPageBreak || startOnNewPage) StripLeadingPageBreak(container);
+        if (startOnNewPage) StartOnNewPage(container);
         var titleParagraph = MarkOutlineLevel(container, title, level, heading);
         PrependNumber(titleParagraph, numberText);
+        if (titleParagraph is not null) styleTitle?.Invoke(titleParagraph);
 
         var blocks = container.ChildElements.ToList();
         if (anchors is not null)
@@ -398,6 +407,25 @@ sealed class BusinessTemplateMerger : IDisposable
             }
             if (paragraph.InnerText.Trim().Length > 0 || paragraph.Descendants<Wp.Drawing>().Any()) return;
             if (removed) paragraph.Remove();
+        }
+    }
+
+    /// <summary>
+    /// 章首另起一页：在已去掉开头分页的章首块加段前分页，不与模版自带的分页符叠加；
+    /// 章首是表格时在其前插一个不占高度的分页空段，写法同整本目录之后的分页。
+    /// </summary>
+    static void StartOnNewPage(Wp.Body container)
+    {
+        switch (container.ChildElements.FirstOrDefault(item => item is not Wp.SectionProperties))
+        {
+            case Wp.Paragraph paragraph:
+                (paragraph.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
+                break;
+            case Wp.Table table:
+                table.InsertBeforeSelf(new Wp.Paragraph(new Wp.ParagraphProperties(
+                    new Wp.PageBreakBefore(),
+                    new Wp.SpacingBetweenLines { Before = "0", After = "0", Line = "20", LineRule = Wp.LineSpacingRuleValues.Exact })));
+                break;
         }
     }
 

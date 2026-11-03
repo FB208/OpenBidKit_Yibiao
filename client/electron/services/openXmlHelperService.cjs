@@ -591,6 +591,8 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
           fs.mkdirSync(path.dirname(target), { recursive: true });
           const bytes = options.assets?.get(reference);
           if (bytes) fs.writeFileSync(target, bytes);
+          // 资信库图片等助手工作区内的文件（证明材料）按工作区相对路径读取，与商务模版回填口径一致。
+          else if (options.workspaceAssets?.has(reference)) fs.copyFileSync(path.join(workspace, reference), target);
           else fs.copyFileSync(path.join(assetRoot, reference), target);
           const type = mime.lookup(reference);
           if (type && type.startsWith('image/')) assetTypes[reference] = type;

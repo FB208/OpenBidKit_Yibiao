@@ -11,7 +11,7 @@ import { generationSettingsTabs, type GenerationSettingsTab } from '../generatio
 import { bidAnalysisTasks, getRequiredBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
-import type { BackgroundTaskState, BidAnalysisTasks, BidTemplateInspection, BusinessFillReviewValue, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
+import type { BackgroundTaskState, BidAnalysisTasks, BidTemplateInspection, BusinessFillReviewSubmission, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
 import type { ExportTemplateRecord, ExportTemplateScope } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog } from '../../export-format/pages/ExportFormatPage';
@@ -830,8 +830,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     setExportTemplateEditorOpen(true);
   };
 
-  const saveBusinessFillReview = async (values: BusinessFillReviewValue[]) => {
-    const saved = await window.yibiao!.technicalPlan.saveBusinessFillReview({ values });
+  const saveBusinessFillReview = async (submission: BusinessFillReviewSubmission) => {
+    const saved = await window.yibiao!.technicalPlan.saveBusinessFillReview(submission);
     setState((prev) => ({ ...prev, ...saved }));
   };
 

@@ -45,6 +45,13 @@ export interface CredentialLibraryProfile {
   industry: string;
   companyType: string;
   insuredEmployeeCount: string;
+  postalCode: string;
+  fax: string;
+  legalRepresentativeIdNumber: string;
+  /** 上年度从业人员（人）、营业收入和资产总额（万元），中小企业声明函和企业规模判断用。 */
+  lastYearEmployeeCount: string;
+  lastYearRevenue: string;
+  lastYearTotalAssets: string;
   companyIntro: string;
   taxCertificateDate: string;
   taxCertificateNote: string;
@@ -182,6 +189,12 @@ export const emptyCredentialProfile: CredentialLibraryProfile = {
   industry: '',
   companyType: '',
   insuredEmployeeCount: '',
+  postalCode: '',
+  fax: '',
+  legalRepresentativeIdNumber: '',
+  lastYearEmployeeCount: '',
+  lastYearRevenue: '',
+  lastYearTotalAssets: '',
   companyIntro: '',
   taxCertificateDate: '',
   taxCertificateNote: '',

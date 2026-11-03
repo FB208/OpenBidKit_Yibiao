@@ -4,8 +4,8 @@ const { MARKDOWN_MISSING_RESULT } = require('./bidAnalysisTask.cjs');
 const { RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { loadBusinessFillScope, collectLayoutFieldIds, renderBusinessTemplate } = require('./businessTemplateFillTask.cjs');
 const { CONTINUE_PROMPT, wasStagePrompted } = require('./contentGenerationAgent.cjs');
-const { RULE_FILL_BY, formatPageToken, collectRulePageChapterIds } = require('./rulePageTables.cjs');
-const { collectOutlineLeaves, numberOutline } = require('./technicalPlanOutline.cjs');
+const { RULE_FILL_BY, convertAgentPageRefs, numberedNodes, collectRulePageChapterIds } = require('./rulePageTables.cjs');
+const { buildOutlineInput, collectOutlineLeaves } = require('./technicalPlanOutline.cjs');
 
 const RULE_PAGE_STAGE = 'rule-page-compile';
 const TABLES_INPUT_FILE = '规则表.json';
@@ -17,22 +17,12 @@ const OUTPUT_FILE = '规则表结果.json';
 // 编制结果文件版本：清单表的行按 from（原地填写表格第几行）/ like（照第几行新增）记录、格子按网格列写入，另有重建表和新建表。
 const RULE_PAGE_TABLES_VERSION = 3;
 const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
-const CONTENT_MODE_LABELS = {
-  'ai-generate': 'AI生成',
-  'template-fill': '模板填写',
-  'rule-page': '规则和页码',
-  'directory-generate': '目录生成',
-  'manual-fill': '人工填写',
-  other: '其他模式',
-};
 // 应答依据对应的评分要求：程序按目录标明的依据只给对应文件，不让 Agent 自行判断该参考哪一份。
 const SCORING_REFERENCES = {
   technical: { taskId: 'techRequirements', file: '技术评分要求.md', label: '技术评分要求', part: '技术' },
   business: { taskId: 'businessScoring', file: '商务评分要求.md', label: '商务评分要求', part: '商务' },
 };
 const RULE_BASIS_KEYS = { technical: ['technical'], business: ['business'], both: ['technical', 'business'] };
-// Agent 写目录编号，程序换成稳定节点 ID；允许全角冒号和多余空格。
-const AGENT_PAGE_REF_PATTERN = /\{\{\s*页码\s*[:：]\s*([^{}]*?)\s*\}\}/g;
 
 const nonEmptyString = { type: 'string', minLength: 1 };
 const RULE_PAGE_RESULT_SCHEMA = {
@@ -262,21 +252,6 @@ function buildTablesInput(specs, references) {
   };
 }
 
-// 投标文件目录：编号、标题、处理方式和说明，页码引用按编号指向小节。
-function buildOutlineInput(outline) {
-  const lines = [];
-  const visit = (items, depth) => {
-    for (const item of items || []) {
-      const mode = item.children?.length ? '' : `（${CONTENT_MODE_LABELS[item.content_mode] || item.content_mode}）`;
-      const description = textOf(item.description);
-      lines.push(`${'  '.repeat(depth)}- ${item.number} ${item.title}${mode}${description ? `：${description}` : ''}`);
-      visit(item.children, depth + 1);
-    }
-  };
-  visit(numberOutline(outline), 0);
-  return lines.join('\n');
-}
-
 function createRulePagePrompt({ resume = false, hasGlobalFacts = false, referenceFiles = [] } = {}) {
   return `请只在当前工作目录内工作。已有材料足以判断时自主执行，不要调用 ask-user。${resume ? '这是之前中断任务的继续：先检查已有的结果文件，保留有效内容，只补齐或修正未完成部分。' : ''}
 
@@ -291,10 +266,10 @@ function createRulePagePrompt({ resume = false, hasGlobalFacts = false, referenc
 - ${GLOBAL_FACTS_INPUT_FILE}：本次投标已确定的全局事实。` : ''}
 
 要求：
-1. 先按表格的标题、分段行和表注确定它应答招标文件哪一部分的条款（如项目需求书、商务要求、技术参数、评分表），再按该部分原文逐条列出，每条一行，不遗漏、不合并、不加入该部分以外的条目，顺序与原文一致；原文分段的按段列出。模版已印好的行只是该部分的第一项或示例时，按原文补齐其余各项。序号类列按行编号。
+1. 先按表格的标题、分段行和表注确定它应答招标文件哪一部分的条款（如项目需求书、商务要求、技术参数、评分表），再按该部分原文逐条列出，每条一行，不遗漏、不合并、不加入该部分以外的条目，顺序与原文一致；原文分段的按段列出。条款只写“详见××”一类引用时，按所引用的原文逐条列出。模版印出的分段和行都可能不全：已印好的行只是该部分的第一项或示例时，按原文补齐其余各项；原文有而模版没有的分段，新增分段行后列出该段条目。序号类列按行编号。
 2. 招标要求、评分标准等照录招标文件原文；应答类内容写出具体数值或内容，依据招标文件${hasGlobalFacts ? '和全局事实' : ''}，不编造。basis 指明的评分要求文件用来核对与本表相关的评分口径（如★条款、负偏离扣分、逐条应答要求）是否都已应答、偏离说明是否准确。
-3. 需要写本投标文件中对应内容所在页码的单元格，只写 {{页码:目录编号}}，编号取自 ${OUTLINE_INPUT_FILE}，指向响应该项的小节；涉及多个小节时写多个，用“、”分隔。程序导出时换成实际页码，不要自己写页码数字。
-4. 没有依据的单元格列入 unresolved 并写明原因。
+3. 需要写本投标文件中对应内容所在页码的单元格，只写页码引用，编号取自 ${OUTLINE_INPUT_FILE}，指向响应该项的小节；涉及多个小节时写多个，用“、”分隔。{{页码:目录编号}} 写成数字（3 或 3-7），表头或原文已有“第…页”时用；{{页码文字:目录编号}} 写成“第3页”或“第3页至第7页”，单独成格、需要完整表述时用。程序导出时换成实际页码，不要自己写页码数字。
+4. 没有依据的单元格列入 unresolved 并写明原因；报价、金额类单元格一律列入 unresolved，由投标人填写。
 5. kind=list 的表格有两种做法。招标文件给出的表格适合本表时照模版填写，不要重建。
    照模版填写（不写 rebuild 和 columns）：rows 按最终顺序列出每一行，每行写 from 或 like 之一，values 的键用所照行 cells 中的名称。
    - from=N：原地填写模版第 N 行，values 只写该行的待填格（fill），印好的内容保留不动；from 必须按 N 从小到大出现。
@@ -302,7 +277,7 @@ function createRulePagePrompt({ resume = false, hasGlobalFacts = false, referenc
    - 新增的行接在上一行之后；所照的行在上一行之后时，新增的行放到所照行的位置。因此要放进某一分段的条目，照该分段内的行新增。
    - 没写到的模版行：只有待填格和序号的空行会删除，印有内容的行（表头、分段行、已印好的条目）保留在原位。
    重建（rebuild=true）：模版表格不能容纳本表内容时使用，例如表格把其他部分的内容混在一起，或合并单元格使条目无法逐条列出。写 columns 和 rows，程序用新表替换模版表格。
-6. kind=new 和重建的表：columns 至少两列，rows 每行写 values（键为 columns 中的列名）；需要分段时写分组行 {"group":"分段名称"}，分组行整行合并。
+6. kind=new 和重建的表：columns 至少两列，rows 每行写 values（键为 columns 中的列名）；原文分段时每一段都写分组行 {"group":"分段名称"}，分段名称照录原文的分段标题（如“第一部分 价格（20分）”），分组行整行合并。
 结果格式（${OUTPUT_FILE}）：
 {"tables":[{"id":"T1","rows":[{"from":2,"values":{"投标应答":"…"}},{"like":5,"values":{"序号":"1","招标要求":"…","投标应答":"…"}}]},{"id":"T2","columns":["序号","评分因素","所在页码"],"rows":[{"group":"一、技术部分"},{"values":{"序号":"1","评分因素":"…","所在页码":"{{页码:3.2}}"}}]}],"unresolved":[{"id":"T1","row":1,"column":"名称","reason":"原因"}]}
 - 每张表恰好出现一次；kind=new 和重建必须给出 columns，行不写 from 或 like。
@@ -321,14 +296,7 @@ function blockingIssue(message) {
  */
 function validateRulePageResult(payload, specs, outline) {
   const issues = [];
-  const nodes = new Map();
-  const visit = (items) => {
-    for (const item of items || []) {
-      nodes.set(item.number, item);
-      visit(item.children);
-    }
-  };
-  visit(numberOutline(outline));
+  const nodes = numberedNodes(outline);
   const specIds = new Set(specs.map(spec => spec.id));
   for (const table of payload.tables) {
     if (!specIds.has(table.id)) issues.push(blockingIssue(`表格 ${table.id} 不在 ${TABLES_INPUT_FILE} 中`));
@@ -337,21 +305,9 @@ function validateRulePageResult(payload, specs, outline) {
     if (!specIds.has(item.id)) issues.push(blockingIssue(`unresolved 中的表格 ${item.id} 不在 ${TABLES_INPUT_FILE} 中`));
   }
   const convertCell = (value, label) => {
-    const before = issues.length;
-    const converted = value.replace(AGENT_PAGE_REF_PATTERN, (match, number) => {
-      const node = nodes.get(number);
-      if (!node) {
-        issues.push(blockingIssue(`${label}的页码引用 ${match} 中的目录编号不存在，编号须取自 ${OUTLINE_INPUT_FILE}`));
-        return match;
-      }
-      if (!node.children?.length && node.content_mode === 'directory-generate') {
-        issues.push(blockingIssue(`${label}的页码引用 ${match} 指向投标文件目录，请指向响应该项的小节`));
-        return match;
-      }
-      return formatPageToken(node.id);
-    });
-    if (issues.length === before && /\{\{(?!YBPAGE:)/.test(converted)) issues.push(blockingIssue(`${label}含有无法识别的 {{…}}，页码引用只能写 {{页码:目录编号}}`));
-    return converted;
+    const converted = convertAgentPageRefs(value, nodes, OUTLINE_INPUT_FILE);
+    for (const problem of converted.problems) issues.push(blockingIssue(`${label}：${problem}`));
+    return converted.value;
   };
 
   const tables = [];

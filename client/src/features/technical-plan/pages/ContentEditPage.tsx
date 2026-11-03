@@ -5,7 +5,7 @@ import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
 import type { ClientConfig, OutlineContentMode, TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineWordControlOptions } from '../../../shared/types';
-import type { BackgroundTaskState, BusinessFillReview, BusinessTemplateFillState, BusinessFillReviewValue, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections, RulePageState } from '../types';
+import type { BackgroundTaskState, BusinessFillReview, BusinessTemplateFillState, BusinessFillReviewSubmission, ContentGenerationOptions, ContentGenerationRuntimeState, ContentGenerationSectionStatus, ContentGenerationSections, RulePageState } from '../types';
 import BusinessFillReviewDialog from '../components/BusinessFillReviewDialog';
 import ContentWordPreview from '../components/ContentWordPreview';
 import { normalizeContentGenerationOptions } from '../contentGenerationOptions';
@@ -31,7 +31,7 @@ interface ContentEditPageProps {
   onOpenGenerationSettingsAppearance: () => void;
   onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
   onContentGenerationReset: () => Promise<void>;
-  onBusinessFillReviewSave: (values: BusinessFillReviewValue[]) => Promise<void>;
+  onBusinessFillReviewSave: (submission: BusinessFillReviewSubmission) => Promise<void>;
 }
 
 type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning' | 'pending';
@@ -536,11 +536,11 @@ function ContentEditPage({
     return () => { cancelled = true; };
   }, [businessReviewOpen, showToast]);
 
-  const confirmBusinessReview = async (values: BusinessFillReviewValue[]) => {
+  const confirmBusinessReview = async (submission: BusinessFillReviewSubmission) => {
     if (!task?.task_id) return;
     try {
       setBusinessReviewSaving(true);
-      await window.yibiao.tasks.confirmBusinessFillReview({ taskId: task.task_id, values });
+      await window.yibiao.tasks.confirmBusinessFillReview({ taskId: task.task_id, ...submission });
       setBusinessReviewMode(null);
       showToast('已确认商务模版字段值，正在回填 Word', 'success');
     } catch (error) {
@@ -551,10 +551,10 @@ function ContentEditPage({
   };
 
   // 填写完成后编辑字段值：Main 按新值重新回填 Word 后保存。
-  const saveBusinessReviewEdit = async (values: BusinessFillReviewValue[]) => {
+  const saveBusinessReviewEdit = async (submission: BusinessFillReviewSubmission) => {
     try {
       setBusinessReviewSaving(true);
-      await onBusinessFillReviewSave(values);
+      await onBusinessFillReviewSave(submission);
       setBusinessReviewMode(null);
       showToast('商务模版字段值已保存，并重新回填 Word', 'success');
     } catch (error) {
@@ -1195,7 +1195,7 @@ function ContentEditPage({
         saving={businessReviewSaving}
         onDismiss={() => setBusinessReviewMode(null)}
         onInteraction={businessReviewMode === 'confirm' ? suppressBusinessReviewAutoConfirmation : undefined}
-        onConfirm={(values) => { void (businessReviewMode === 'edit' ? saveBusinessReviewEdit(values) : confirmBusinessReview(values)); }}
+        onConfirm={(submission) => { void (businessReviewMode === 'edit' ? saveBusinessReviewEdit(submission) : confirmBusinessReview(submission)); }}
       />
 
       <Dialog.Root

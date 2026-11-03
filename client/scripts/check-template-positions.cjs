@@ -425,6 +425,347 @@ test('规则表：分段表格新增行落在所照行的分段、照分段行�
   assert.ok(!rebuilt.includes('乙要求'));
 });
 
+// 可重复条目：Agent 标出的段落条目按条编号、逐条填写，未使用的条目整本导出时删除。
+const { groupFieldUnits, buildFieldsInput } = require('../electron/services/businessTemplateFillTask.cjs');
+
+test('可重复条目：字段按条编号并逐条填写，只校验能否执行；未使用的条目回填时标记、截章时删除', async () => {
+  const name = 'repeat-source';
+  const { candidates } = await scanFile(name, [
+    para('中小企业声明函', '<w:pStyle w:val="1"/>'),
+    para('本公司郑重声明，具体情况如下：'),
+    para('1.__________（标的名称），承接企业为__________；'),
+    para('2.__________（标的名称），承接企业为__________；'),
+    para('以上企业不属于大企业的分支机构。'),
+    table([[cell(para('甲')), cell(para('乙'))]], 'TableGrid'),
+    sectPr(),
+  ].join(''), [{ id: 'm1', title: '中小企业声明函', auto_fill: true, start_block: 0, end_block: 6 }]);
+  const blanks = (prefix) => candidates.filter((item) => item.kind === 'text-placeholder' && item.context?.startsWith(prefix));
+  const entryFields = [1, 2].flatMap((number) => {
+    const [subjectBlank, companyBlank] = blanks(`${number}.`);
+    assert.ok(subjectBlank && companyBlank, `第 ${number} 条应有两个空位`);
+    return [
+      { candidate_id: subjectBlank.candidate_id, name: '标的名称', subject: '采购标的', fill_by: 'ai' },
+      { candidate_id: companyBlank.candidate_id, name: '标的承接企业名称', subject: '标的承接企业', fill_by: 'ai' },
+    ];
+  });
+  const used = new Set(entryFields.map((item) => item.candidate_id));
+  const applyRepeats = async (repeats) => {
+    const result = await service.runJob({
+      action: 'apply-template-fields',
+      request: {
+        input: `technical-plan/${name}.docx`,
+        output: 'technical-plan/repeat-template.docx',
+        fields_output: 'technical-plan/repeat-fields.json',
+        fields: entryFields,
+        ignored_candidate_ids: candidates.filter((item) => !used.has(item.candidate_id)).map((item) => item.candidate_id),
+        repeats,
+      },
+      timeoutMs: 60000,
+    });
+    return fs.readFileSync(path.join(result.jobDir, 'template-preview.txt'), 'utf8');
+  };
+  const repeatError = async (repeats) => {
+    try {
+      await applyRepeats(repeats);
+    } catch (error) {
+      return error.message;
+    }
+    assert.fail('应当报错');
+  };
+  assert.match(await repeatError([{ entries: [{ from: 'b2' }] }]), /至少需要两条/);
+  assert.match(await repeatError([{ entries: [{ from: 'b2', to: 'b5.r1.c1.p1' }, { from: 'b3' }] }]), /不在同一层级/);
+  assert.match(await repeatError([{ entries: [{ from: 'b2', to: 'b3' }, { from: 'b3' }] }]), /范围重叠/);
+  assert.match(await repeatError([{ entries: [{ from: 'b2' }, { from: 'b4' }] }]), /第 2 条 中没有选用的字段/);
+  assert.match(await repeatError([{ entries: [{ from: 'b3' }, { from: 'b2' }] }, { entries: [{ from: 'b1' }, { from: 'b0' }] }]), /包含章节标题段/);
+
+  const preview = await applyRepeats([{ entries: [{ from: 'b2' }, { from: 'b3' }] }]);
+  assert.match(preview, /^b2 {2}〔条目 e1·第1条〕1\.【标的名称】/m);
+  assert.match(preview, /^b3 {2}〔条目 e1·第2条〕2\.【标的名称】/m);
+  assert.match(preview, /^b4 {2}以上企业/m, '条目外的段落不加前缀');
+
+  const definitions = readJson('technical-plan/repeat-fields.json');
+  assert.deepEqual(
+    definitions.fields.map((field) => [field.name, field.table_id, field.row, field.entry]),
+    [['标的名称', 'e1', 1, true], ['标的承接企业名称', 'e1', 1, true], ['标的名称', 'e1', 2, true], ['标的承接企业名称', 'e1', 2, true]],
+  );
+  const units = groupFieldUnits(definitions.fields);
+  assert.equal(units.length, 4, '两条各自成为填写项');
+  const input = buildFieldsInput(units);
+  assert.deepEqual(input.fields, []);
+  assert.deepEqual(input.tables.map((item) => [item.table_id, item.entries, item.rows]), [['e1', true, [1, 2]]]);
+
+  const [first, second] = [1, 2].map((row) => definitions.fields.filter((field) => field.row === row));
+  const chapter = definitions.chapters[0];
+  const fillAndSlice = async (removeIds) => {
+    await service.runJob({
+      action: 'fill-template-fields',
+      request: {
+        input: 'technical-plan/repeat-template.docx',
+        output: 'technical-plan/repeat-filled.docx',
+        values: [
+          { id: first[0].id, value: '运维服务' },
+          { id: first[1].id, value: '甲公司' },
+          ...second.map((field) => ({ id: field.id, blank: true })),
+        ],
+        remove_row_field_ids: removeIds,
+      },
+      timeoutMs: 60000,
+    });
+    const filled = documentXml('technical-plan/repeat-filled.docx');
+    const bytes = await service.createTemplateChapterDocx({ input: 'technical-plan/repeat-filled.docx', startBlock: chapter.start_block, endBlock: chapter.end_block });
+    return { filled, sliced: new AdmZip(Buffer.from(bytes)).readAsText('word/document.xml') };
+  };
+  const removed = await fillAndSlice(second.map((field) => field.id));
+  assert.ok(removed.filled.includes('w:name="_YbR1_1"') && removed.filled.includes('w:name="_YbD1_2"'), '回填时只把未使用的条目改名为待删');
+  const removedText = removed.sliced.replace(/<\/w:p>/g, '\n').replace(/<[^>]+>/g, '');
+  assert.match(removedText, /1\.运维服务（标的名称），承接企业为甲公司；/);
+  assert.ok(!removedText.includes('2.'), '未使用的条目在截章时删除');
+  assert.ok(removedText.includes('以上企业不属于大企业的分支机构。'));
+  assert.ok(!/_YbR|_YbD/.test(removed.sliced), '截章后不留条目书签');
+
+  const kept = await fillAndSlice([]);
+  assert.ok(!kept.filled.includes('_YbD'));
+  assert.ok(kept.sliced.replace(/<[^>]+>/g, '').includes('2.'), '不在未使用列表中的条目保留');
+});
+
+// 金额联动：填写 Agent 声明同值和大写，程序只校验能否执行，确认弹窗按来源同步、换算大写。
+const { checkBusinessTemplateFillResult, buildConfirmedEntries } = require('../electron/services/businessTemplateFillTask.cjs');
+
+test('金额联动：links 校验能否执行并记下联动，确认时保留联动；金额换算中文大写', async () => {
+  const fields = [
+    { id: 'f1', name: '投标总价', subject: '投标人', fill_by: 'ai', kind: 'text' },
+    { id: 'f2', name: '投标总价大写', subject: '投标人', fill_by: 'ai', kind: 'text' },
+    ...[2, 3].flatMap((row) => [
+      { id: `s${row}`, name: '服务名称', subject: '报价项目', fill_by: 'ai', kind: 'text', table_id: 't1', row },
+      { id: `p${row}`, name: '投标总价', subject: '报价项目', fill_by: 'ai', kind: 'text', table_id: 't1', row },
+    ]),
+  ];
+  const units = groupFieldUnits(fields);
+  const tableTotal = { table_id: 't1', row: 2, name: '投标总价' };
+  const check = (patch) => checkBusinessTemplateFillResult(JSON.stringify({
+    values: [],
+    rows: [{ table_id: 't1', row: 2, values: [{ name: '服务名称', value: '运维服务' }] }],
+    unresolved: [{ name: '投标总价', reason: '金额由投标人填写' }],
+    links: [
+      { target: tableTotal, source: { name: '投标总价' }, form: 'same' },
+      { target: { name: '投标总价大写' }, source: { name: '投标总价' }, form: 'uppercase' },
+    ],
+    ...patch,
+  }), units);
+  const messages = (patch) => check(patch).issues.map((item) => item.message).join('；');
+
+  const result = check({});
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.value.entries.p2, { link: { source: 'f1', form: 'same' }, unresolved_reason: '随“投标总价”填写' });
+  assert.deepEqual(result.value.entries.f2, { link: { source: 'f1', form: 'uppercase' }, unresolved_reason: '按“投标总价”换算大写' });
+  assert.deepEqual(result.value.entries.p3, { blank: true }, '未使用的行照常留空，不带联动');
+
+  assert.match(messages({ unresolved: [{ name: '投标总价', reason: '金额' }, { name: '投标总价大写', reason: '金额' }] }), /已声明联动/);
+  assert.match(messages({ links: [
+    { target: { name: '投标总价大写' }, source: { name: '投标总价' }, form: 'uppercase' },
+    { target: tableTotal, source: { name: '投标总价大写' }, form: 'same' },
+  ] }), /是另一条 links 的 target/);
+  assert.match(messages({ links: [{ target: { ...tableTotal, row: 3 }, source: { name: '投标总价' }, form: 'same' }] }), /第 3 行没有写入 rows/);
+  assert.match(messages({ links: [{ target: { name: '投标总价' }, source: { name: '投标总价' }, form: 'same' }] }), /同一个位置/);
+
+  // 来源已有取值时，同值联动一并写入。
+  const copied = check({ values: [{ name: '投标总价', value: '100000' }], unresolved: [] });
+  assert.deepEqual(copied.value.entries.p2, { link: { source: 'f1', form: 'same' }, value: '100000' });
+
+  // 确认时联动随填写项保留，弹窗提交的计算值照常写入。
+  const saved = fields.map((field) => ({ ...field, ...(result.value.entries[field.id] || {}) }));
+  const unitKey = (id) => units.find((unit) => unit.field_ids.includes(id)).key;
+  const confirmed = buildConfirmedEntries(saved, [
+    { key: unitKey('f1'), value: '123456' },
+    { key: unitKey('f2'), value: '壹拾贰万叁仟肆佰伍拾陆元整' },
+  ]);
+  assert.deepEqual(confirmed.f2, { value: '壹拾贰万叁仟肆佰伍拾陆元整', link: { source: 'f1', form: 'uppercase' } });
+  assert.deepEqual(confirmed.p2, { unresolved_reason: '随“投标总价”填写', link: { source: 'f1', form: 'same' } });
+
+  const { toChineseAmount } = await import(require('node:url').pathToFileURL(path.join(__dirname, '../src/features/technical-plan/services/amountUppercase.ts')).href);
+  assert.equal(toChineseAmount('123456'), '壹拾贰万叁仟肆佰伍拾陆元整');
+  assert.equal(toChineseAmount('￥1,234,567.89元'), '壹佰贰拾叁万肆仟伍佰陆拾柒元捌角玖分');
+  assert.equal(toChineseAmount('10005'), '壹万零伍元整');
+  assert.equal(toChineseAmount('100000'), '壹拾万元整');
+  assert.equal(toChineseAmount('1010'), '壹仟零壹拾元整');
+  assert.equal(toChineseAmount('50000300'), '伍仟万零叁佰元整');
+  assert.equal(toChineseAmount('100000001'), '壹亿零壹元整');
+  assert.equal(toChineseAmount('12.3'), '壹拾贰元叁角整');
+  assert.equal(toChineseAmount('12.05'), '壹拾贰元零伍分');
+  assert.equal(toChineseAmount('0.05'), '伍分');
+  assert.equal(toChineseAmount('0'), '零元整');
+  assert.equal(toChineseAmount('十二万'), null);
+  assert.equal(toChineseAmount('1.234'), null);
+});
+
+// 证明材料：填写 Agent 列出材料和承诺书，程序只校验放置位置和图片，导出时在小节之后插入标题和图片。
+const { renderMaterialsHtml } = require('../electron/services/technicalPlanExport.cjs');
+const { defaultExportFormat } = require('../electron/services/exportFormatDefaults.cjs');
+
+test('证明材料：校验放置位置和图片并换成节点 ID；导出 HTML 逐项另起一页、附图、缺少时待填写；转换后标题带段前分页且进大纲', async () => {
+  const outline = [
+    { id: 'n-perf', title: '业绩一览表', content_mode: 'template-fill' },
+    { id: 'n-parent', title: '其他', children: [{ id: 'n-other', title: '其他资料', content_mode: 'template-fill' }] },
+  ];
+  const fields = [{ id: 'f1', name: '投标人名称', subject: '投标人', fill_by: 'ai', kind: 'text' }];
+  const check = (patch) => checkBusinessTemplateFillResult(JSON.stringify({
+    values: [{ name: '投标人名称', value: '甲公司' }], rows: [], unresolved: [], ...patch,
+  }), groupFieldUnits(fields), new Set(['img1', 'img2']), outline);
+  const messages = (patch) => check(patch).issues.map((item) => item.message).join('；');
+
+  const result = check({
+    materials: [
+      { after: '1', title: '某项目合同及验收证明', basis: '评分标准“供应商实施能力”', image_ids: ['img1', 'img2', 'img1'] },
+      { after: '2.1', title: '被授权人社保证明', basis: '资格要求第 5 条', image_ids: [], missing: '资信库没有授权代表的社保证明' },
+    ],
+    commitments: [{ after: '2.1', title: '技术要求承诺书', basis: '技术要求（二）', paragraphs: ['致：招标人', '我公司承诺：……'] }],
+  });
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.value.materials.map((item) => [item.after, item.image_ids]), [['n-perf', ['img1', 'img2']], ['n-other', []]]);
+  assert.equal(result.value.commitments[0].after, 'n-other');
+  assert.match(messages({ materials: [{ after: '2', title: '甲', basis: '乙', image_ids: ['img1'] }] }), /不是 投标文件目录\.md 中的目录叶子编号/);
+  assert.match(messages({ materials: [{ after: '1', title: '甲', basis: '乙', image_ids: ['img9'] }] }), /图片不在资信库中：img9/);
+  assert.match(messages({ materials: [{ after: '1', title: '甲', basis: '乙', image_ids: [] }] }), /没有图片，请选择资信库图片或写 missing/);
+  assert.match(messages({ commitments: [{ after: '9', title: '甲', basis: '乙', paragraphs: ['丙'] }] }), /after“9”不是/);
+
+  const images = new Map([['img1', { relativePath: 'test/a.png', originalName: '合同.png' }]]);
+  const rendered = renderMaterialsHtml([
+    ...result.value.materials,
+    ...result.value.commitments,
+  ], { level: 1, images, companyName: '甲公司' });
+  assert.deepEqual([...rendered.refs], ['credential-library/test/a.png']);
+  assert.equal(rendered.pendingCount, 2, '缺少和图片已删除各一处，承诺书落款日期不算缺少');
+  assert.match(rendered.html, /<p>YIBIAOPAGEBREAK<\/p>\n<h2>某项目合同及验收证明<\/h2>\n<figure data-yb-size="page" data-yb-fit="contain"><img data-yb-asset-ref="credential-library\/test\/a\.png" alt="合同\.png"><\/figure>/);
+  assert.match(rendered.html, /【待填写：某项目合同及验收证明：所选资信库图片已删除】/);
+  // 用户在确认弹窗移除了全部图片、又没有缺少说明的材料，同样标为待填写并计数。
+  const emptied = renderMaterialsHtml([{ after: 'n-perf', title: '某项目合同', basis: '评分标准', image_ids: [] }], { level: 1, images, companyName: '甲公司' });
+  assert.equal(emptied.pendingCount, 1);
+  assert.match(emptied.html, /【待填写：某项目合同（评分标准）】/);
+  assert.match(rendered.html, /【待填写：被授权人社保证明：资信库没有授权代表的社保证明】/);
+  assert.match(rendered.html, /<h2>技术要求承诺书<\/h2>\n<p>致：招标人<\/p>\n<p>我公司承诺：……<\/p>\n<p>投标人名称（公章）：甲公司<\/p>\n<p>日期：【待填写：日期】<\/p>/);
+
+  // 真实助手转换：分页标记换成标题段前分页，标题进大纲，图片按整页尺寸嵌入。
+  const imageDir = path.join(workspace, 'credential-library', 'test');
+  fs.mkdirSync(imageDir, { recursive: true });
+  fs.writeFileSync(path.join(imageDir, 'a.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+  const html = `<section data-yb-export-template="false" data-yb-export-page-template="false"><h1>业绩一览表</h1><p>正文</p>\n${rendered.html}</section>`;
+  const converted = await service.createRestrictedHtmlDocx(html, defaultExportFormat, { copyAssets: true, wholeDocument: true, workspaceAssets: rendered.refs });
+  const xml = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
+  assert.ok(!xml.includes('YIBIAOPAGEBREAK'), '分页标记已移除');
+  const headings = [...xml.matchAll(/<w:p>(?:(?!<\/w:p>).)*?<w:outlineLvl w:val="1" \/>(?:(?!<\/w:p>).)*?<\/w:p>/gs)].map((match) => match[0]);
+  assert.equal(headings.length, 3, '两项材料和承诺书的标题都进大纲');
+  assert.ok(headings.every((item) => item.includes('<w:pageBreakBefore />')), '每项另起一页');
+  assert.equal(xml.split('<w:drawing>').length - 1, 1, '附上资信库图片');
+});
+
+test('整本导出分页：证明材料之后的商务章节另起一页；一级标题另起页对商务章节和范围外标题全文生效', async () => {
+  // 投标书章末、资格证明书章首各有一个只承载分页的段落（模版的“附件N”去掉后留下的），声明函章首是表格。
+  const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  samples.buildDocx(planDir, 'page-break-source.docx', [
+    para('投标书'), para('投标书正文'), pageBreak,
+    para('授权书'), para('授权书正文'),
+    pageBreak, para('资格证明书'), para('资格证明书正文'),
+    table([[cell(para('声明函内容')), cell(para(''))]]), para('声明函'),
+    sectPr(),
+  ].join(''));
+  const chapters = [
+    { id: 'b1', title: '投标书', auto_fill: true, start_block: 0, end_block: 3 },
+    { id: 'b2', title: '授权书', auto_fill: true, start_block: 3, end_block: 5 },
+    { id: 'b3', title: '资格证明书', auto_fill: true, start_block: 5, end_block: 8 },
+    { id: 'b4', title: '声明函', auto_fill: true, start_block: 8, end_block: 10 },
+  ];
+  const chapter = (id, title) => `<section data-yb-business-chapter="${id}" data-yb-business-level="1" data-yb-business-title="${title}" data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
+  const materials = renderMaterialsHtml([{ after: 'b1', title: '投标书附件', basis: '资格要求', image_ids: [], missing: '资信库没有该材料' }], { level: 1, images: new Map(), companyName: '甲公司' });
+  const html = [
+    chapter('b1', '投标书'),
+    `<section data-yb-export-template="false" data-yb-export-page-template="business" data-yb-materials="true">${materials.html}</section>`,
+    chapter('b2', '授权书'),
+    chapter('b3', '资格证明书'),
+    chapter('b4', '声明函'),
+    '<section data-yb-export-template="false" data-yb-export-page-template="false"><h1>附录一</h1><p>正文</p><h1>附录二</h1><p>正文</p></section>',
+  ].join('\n');
+  const render = async (level1PageBreak) => {
+    const format = { ...defaultExportFormat, heading_level1_page_break_before: level1PageBreak };
+    const converted = await service.createRestrictedHtmlDocx(html, format, {
+      copyAssets: true,
+      wholeDocument: true,
+      businessTemplate: { input: 'technical-plan/page-break-source.docx', chapters },
+    });
+    const xml = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
+    const paragraphs = [...xml.matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)].map((match) => match[0]);
+    const text = (paragraph) => [...paragraph.matchAll(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)].map((match) => match[1]).join('');
+    const index = (value) => paragraphs.findIndex((paragraph) => text(paragraph) === value);
+    const breakBefore = (value) => paragraphs[index(value)].includes('<w:pageBreakBefore />');
+    // 声明函表格前一段是不是段前分页的空段。
+    const tableStart = xml.indexOf('<w:tbl>', xml.indexOf('授权书正文'));
+    const beforeTable = xml.slice(xml.lastIndexOf('<w:p', tableStart), tableStart);
+    return { paragraphs, index, breakBefore, tableBreak: beforeTable.includes('<w:pageBreakBefore />') && !/<w:t[ >]/.test(beforeTable) };
+  };
+
+  const off = await render(false);
+  assert.ok(off.breakBefore('授权书'), '证明材料之后的章节另起一页');
+  assert.ok(!off.breakBefore('资格证明书'), '开关关闭时不加段前分页');
+  assert.match(off.paragraphs[off.index('资格证明书') - 1], /<w:br w:type="page" \/>/, '保留模版自带的分页段');
+  assert.ok(!off.tableBreak);
+  assert.ok(!off.breakBefore('附录二'));
+
+  const on = await render(true);
+  assert.ok(!on.breakBefore('投标书'), '页面组首章不加段前分页');
+  assert.ok(on.breakBefore('授权书'));
+  assert.ok(on.breakBefore('资格证明书'), '商务一级章节另起一页');
+  assert.equal(on.paragraphs[on.index('资格证明书') - 1].includes('<w:br w:type="page" />'), false, '章首的分页段已去掉，不与段前分页叠加');
+  assert.ok(on.tableBreak, '章首是表格时前插分页空段');
+  assert.ok(!on.breakBefore('附录一'), '页面组首段不分页');
+  assert.ok(on.breakBefore('附录二'), '样式范围外的一级标题同样另起一页');
+});
+
+test('各级标题样式全文生效：商务章节标题段和样式范围外标题套用模板标题样式，封面等前置页保持模版原样', async () => {
+  samples.buildDocx(planDir, 'heading-style-source.docx', [
+    para([run('投标文件', '<w:sz w:val="52"/>')], '<w:jc w:val="center"/>'), para('封面正文'),
+    para('授权书', '<w:ind w:firstLine="420"/>'), para('授权书正文'),
+    sectPr(),
+  ].join(''));
+  const chapters = [
+    { id: 'c0', title: '投标文件封面', auto_fill: true, start_block: 0, end_block: 2 },
+    { id: 'c1', title: '授权书', auto_fill: true, start_block: 2, end_block: 4 },
+  ];
+  const chapter = (id, title, number) => `<section data-yb-business-chapter="${id}" data-yb-business-level="1" data-yb-business-title="${title}"${number ? ` data-yb-outline-number="${number}"` : ''} data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
+  const html = [
+    chapter('c0', '投标文件封面'),
+    chapter('c1', '授权书', '2'),
+    '<section data-yb-export-template="false" data-yb-export-page-template="false"><h1 data-yb-outline-number="3">附录</h1><p>正文</p></section>',
+  ].join('\n');
+  const format = {
+    ...defaultExportFormat,
+    headings: defaultExportFormat.headings.map((heading, index) => (index === 0
+      ? { ...heading, font: '楷体', size: '三号', alignment: '左对齐', bold: true, text_color: '#FF0000', spacing_before_pt: 24, first_line_indent_chars: 2, numbering_format: 'custom', numbering_template: '第{zh}章' }
+      : heading)),
+  };
+  const converted = await service.createRestrictedHtmlDocx(html, format, {
+    copyAssets: true,
+    wholeDocument: true,
+    businessTemplate: { input: 'technical-plan/heading-style-source.docx', chapters },
+  });
+  const zip = new AdmZip(Buffer.from(converted.bytes));
+  const paragraphs = [...zip.readAsText('word/document.xml').matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)].map((match) => match[0]);
+  const find = (value) => paragraphs.find((paragraph) => [...paragraph.matchAll(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)].map((match) => match[1]).join('') === value);
+  const styled = (paragraph) => paragraph.includes('w:eastAsia="楷体"') && /<w:color w:val="FF0000" ?\/>/.test(paragraph);
+
+  const title = find('第二章 授权书');
+  assert.ok(title, '商务章节标题按模板格式编号');
+  assert.ok(styled(title) && /<w:sz w:val="32" ?\/>/.test(title) && /<w:b ?\/>/.test(title), '字体、字号、颜色、加粗套用一级标题样式');
+  assert.match(title, /<w:jc w:val="left" ?\/>/);
+  assert.match(title, /w:before="480"/);
+  assert.match(title, /<w:ind w:firstLine="420" ?\/>/, '首行缩进保留模版原样');
+  assert.ok(!find('授权书正文').includes('楷体'), '表单正文保持模版原样');
+  assert.ok(!styled(find('投标文件')), '前置页的封面标题保持模版原样');
+
+  const appendix = find('第三章 附录');
+  assert.ok(appendix && styled(appendix), '样式范围外的标题同样套用并按模板格式编号');
+  assert.doesNotMatch(appendix, /w:firstLine=/, '首行缩进按样式范围，范围外不缩进');
+  assert.match(zip.readAsText('word/styles.xml'), /楷体/, 'Word 的标题样式同样取模板标题样式');
+});
+
 test('回填不改取值文字：后文是另一个标签时只补空格，取值与后文重复的字由填写 Agent 按原句处理', async () => {
   const name = 'fit-source';
   const { candidates } = await scanFile(name, [
@@ -516,4 +857,84 @@ test('制表符和分页段落可写入且保留断点；去掉的章末附件�
   const bytes = await service.createTemplateChapterDocx({ input: 'technical-plan/mark-filled.docx', startBlock: chapter.start_block, endBlock: chapter.end_block });
   const sliced = new AdmZip(Buffer.from(bytes)).readAsText('word/document.xml').replace(/<[^>]+>/g, '');
   assert.ok(sliced.includes('投标人名称：北京建设公司') && !sliced.includes('附件4'), sliced);
+});
+
+// 页码引用：普通字段和规则表共用换算，Agent 按原句选数字或文字写法，助手按写法生成页码域并按域代码回填。
+const { convertAgentPageRefs, toAgentPageRefs, numberedNodes, createPageRefDisplay } = require('../electron/services/rulePageTables.cjs');
+
+test('页码引用：两种写法换成节点标记并可换回，字段值校验与确认换回，预览和相邻合并，助手按写法回填页码', async () => {
+  const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const T = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const outline = [
+    { id: A, title: '中小企业声明函', content_mode: 'template-fill' },
+    { id: D, title: '残疾人声明函', content_mode: 'template-fill' },
+    { id: T, title: '目录', content_mode: 'directory-generate' },
+  ];
+  const nodes = numberedNodes(outline);
+  assert.deepEqual(convertAgentPageRefs('见{{页码:1}}；{{页码文字：2}}', nodes, '目录.md'), { value: `见{{YBPAGE:${A}}}；{{YBPAGE:${D}|text}}`, problems: [] });
+  assert.match(convertAgentPageRefs('{{页码:9}}', nodes, '目录.md').problems.join(''), /目录编号不存在，编号须取自 目录\.md/);
+  assert.match(convertAgentPageRefs('{{页码:3}}', nodes, '目录.md').problems.join(''), /指向投标文件目录/);
+  assert.match(convertAgentPageRefs('{{其他:1}}', nodes, '目录.md').problems.join(''), /无法识别的 \{\{…\}\}/);
+  assert.equal(toAgentPageRefs(`{{YBPAGE:${A}}}、{{YBPAGE:${D}|text}}`, new Map([[A, '1'], [D, '2']])), '{{页码:1}}、{{页码文字:2}}');
+
+  // 商务填写：字段值里的引用换成标记；确认时弹窗显示的写法换回，手填数字照原样保存。
+  const fields = [{ id: 'f1', name: '中小企业声明函所在页码', subject: '投标文件', fill_by: 'ai', kind: 'text' }];
+  const units = groupFieldUnits(fields);
+  const filled = checkBusinessTemplateFillResult(JSON.stringify({ values: [{ name: '中小企业声明函所在页码', value: '{{页码:1}}' }], rows: [], unresolved: [] }), units, new Set(), outline);
+  assert.deepEqual(filled.issues, []);
+  assert.deepEqual(filled.value.entries.f1, { value: `{{YBPAGE:${A}}}` });
+  assert.match(checkBusinessTemplateFillResult(JSON.stringify({ values: [{ name: '中小企业声明函所在页码', value: '{{页码:9}}' }], rows: [], unresolved: [] }), units, new Set(), outline).issues[0].message, /“中小企业声明函所在页码”：页码引用 \{\{页码:9\}\} 中的目录编号不存在/);
+  assert.deepEqual(buildConfirmedEntries(fields, [{ key: units[0].key, value: '{{页码文字:2}}' }], outline).f1, { value: `{{YBPAGE:${D}|text}}` });
+  assert.deepEqual(buildConfirmedEntries(fields, [{ key: units[0].key, value: '12' }], outline).f1, { value: '12' });
+
+  // 预览显示小节标题；导出时只合并同一写法的相邻小节。
+  assert.equal(createPageRefDisplay(outline)(`第{{YBPAGE:${A}}}页`), '第〔页码：中小企业声明函〕页');
+  const exportDisplay = createPageRefDisplay(outline, { forExport: true });
+  assert.equal(exportDisplay(`{{YBPAGE:${A}|text}}、{{YBPAGE:${D}|text}}`), `{{YBPAGE:${A}:${D}|text}}`);
+  assert.equal(exportDisplay(`{{YBPAGE:${A}}}、{{YBPAGE:${D}|text}}`), `{{YBPAGE:${A}}}、{{YBPAGE:${D}|text}}`);
+
+  // 真实助手：数字写法和文字写法分别生成 IF 域，回填后为“3-5”“第3页至第5页”，起止相同时为“3”“第3页”。
+  const html = `<section data-yb-export-template="false" data-yb-export-page-template="false"><p>YIBIAOANCHOR:S:${A}</p><h1>中小企业声明函</h1><p>声明内容</p><p>YIBIAOANCHOR:E:${A}</p><p>数字：见第{{YBPAGE:${A}}}页。</p><p>文字：见{{YBPAGE:${A}|text}}。</p></section>`;
+  const converted = await service.createRestrictedHtmlDocx(html, defaultExportFormat, { copyAssets: true, wholeDocument: true });
+  assert.equal(converted.pageRefs?.count, 2);
+  const bookmark = (prefix) => `${prefix}${A.replace(/-/g, '')}`;
+  // 段落的显示文字：域外文字和最外层域的结果，嵌套 PAGEREF 属于域代码，不计入。
+  const visibleText = (paragraph) => {
+    const stack = [];
+    let text = '';
+    for (const match of paragraph.matchAll(/<w:fldChar w:fldCharType="(begin|separate|end)"|<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)) {
+      if (match[1] === 'begin') stack.push({ result: false });
+      else if (match[1] === 'separate') stack.at(-1).result = true;
+      else if (match[1] === 'end') stack.pop();
+      else if (!stack.length || (stack.length === 1 && stack[0].result)) text += match[2];
+    }
+    return text;
+  };
+  const resultText = async (start, end) => {
+    const output = await service.fillTocPageNumbers(Buffer.from(converted.bytes), null, { [bookmark('_YbPS')]: start, [bookmark('_YbPE')]: end });
+    assert.equal(output.refMissingCount, 0);
+    const xml = new AdmZip(Buffer.from(output.bytes)).readAsText('word/document.xml');
+    return [...xml.matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)].map((match) => visibleText(match[0])).filter((text) => /^(数字|文字)/.test(text));
+  };
+  assert.deepEqual(await resultText('3', '5'), ['数字：见第3-5页。', '文字：见第3页至第5页。']);
+  assert.deepEqual(await resultText('3', '3'), ['数字：见第3页。', '文字：见第3页。']);
+});
+
+// 资信库企业资料补充字段：填写 Agent 的资信库输入带上有值的新字段，空值不输出。
+test('资信库输入：邮编、传真、法定代表人身份证号和上年度规模指标有值时输出，空值不输出', () => {
+  const { buildCredentialLibraryInput } = require('../electron/services/businessTemplateFillTask.cjs');
+  const input = buildCredentialLibraryInput({
+    profile: {
+      companyName: '甲公司', phone: '021-1', fax: '021-2', postalCode: '200000', legalRepresentative: '张三',
+      legalRepresentativeIdNumber: '110101198001011234', lastYearEmployeeCount: '86', lastYearRevenue: '1200', lastYearTotalAssets: '',
+    },
+  });
+  assert.deepEqual(Object.entries(input.基本信息).filter(([key]) => /传真|邮政编码|身份证号|上年度/.test(key)), [
+    ['传真', '021-2'],
+    ['邮政编码', '200000'],
+    ['法定代表人身份证号', '110101198001011234'],
+    ['上年度从业人员（人）', '86'],
+    ['上年度营业收入（万元）', '1200'],
+  ]);
 });

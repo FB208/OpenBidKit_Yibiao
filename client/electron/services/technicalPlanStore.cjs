@@ -29,6 +29,7 @@ const { ORIGINAL_RESTORATION_AGENT_TASK_KEY } = require('./originalPlanRestorati
 const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 // 与 rulePageCompileTask.cjs 的 RULE_PAGE_TABLES_VERSION 一致；此处不引用任务模块，避免 Store 加载 Agent 依赖。
 const RULE_PAGE_TABLES_VERSION = 3;
+const BUSINESS_MATERIALS_VERSION = 1;
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 
@@ -40,8 +41,8 @@ const bidTemplateRelativePath = path.join('technical-plan', 'bid-template.docx')
 const bidTemplateSourceRelativePath = path.join('technical-plan', 'bid-template-source.docx').replace(/\\/g, '/');
 const bidTemplateFieldsRelativePath = path.join('technical-plan', 'bid-template-fields.json').replace(/\\/g, '/');
 const bidTemplateBlankRelativePath = path.join('technical-plan', 'bid-template-blank.docx').replace(/\\/g, '/');
-// 字段清单中由商务模版填写写入的键，四者互斥（blank 表示逐行清单表未使用的单元格留空）；失效时一并清除。
-const BID_TEMPLATE_FILL_KEYS = ['value', 'selected', 'image_id', 'unresolved_reason', 'blank'];
+// 字段清单中由商务模版填写写入的键，前五者互斥（blank 表示逐行清单表未使用的单元格留空），link 为填写 Agent 声明的联动；失效时一并清除。
+const BID_TEMPLATE_FILL_KEYS = ['value', 'selected', 'image_id', 'unresolved_reason', 'blank', 'link'];
 const originalPlanMarkdownRelativePath = path.join('technical-plan', 'original-plan.md').replace(/\\/g, '/');
 const originalOutlineRuntimeFileName = 'original-outline-runtime.json';
 const defaultOutlineWordControlOptions = Object.freeze({
@@ -525,6 +526,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const bidTemplateBlankPath = getTechnicalPlanBidTemplateBlankPath(app);
   // 规则和页码的编制结果，回填商务模版时与字段值一起写入；随模版和正文失效。
   const rulePageTablesPath = path.join(path.dirname(bidTemplatePath), 'rule-page-tables.json');
+  // 商务填写 Agent 列出的证明材料和承诺书，整本导出时插在对应小节之后。
+  const businessMaterialsPath = path.join(path.dirname(bidTemplatePath), 'business-materials.json');
   const originalPlanMarkdownPath = getTechnicalPlanOriginalPlanMarkdownPath(app);
   const originalOutlineRuntimePath = path.join(path.dirname(originalPlanMarkdownPath), originalOutlineRuntimeFileName);
   const workspaceDir = path.dirname(path.dirname(tenderMarkdownPath));
@@ -1037,6 +1040,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidTemplateFieldsPath,
       bidTemplateBlankPath,
       rulePageTablesPath,
+      businessMaterialsPath,
     ];
     const templateDir = path.dirname(bidTemplatePath);
     if (fs.existsSync(templateDir)) {
@@ -1045,6 +1049,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
         `${path.basename(bidTemplateFieldsPath)}.`,
         `${path.basename(bidTemplateBlankPath)}.`,
         `${path.basename(rulePageTablesPath)}.`,
+        `${path.basename(businessMaterialsPath)}.`,
       ];
       for (const name of fs.readdirSync(templateDir)) {
         // 整本导出临时生成的商务模版正常会在导出后删除，这里清理异常退出留下的文件。
@@ -1128,6 +1133,23 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     writeBidTemplateFile(rulePageTablesPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8'));
   }
 
+  // 证明材料清单：{materials, commitments}，after 为目录节点 ID；没有时为空清单。
+  function readBusinessMaterials() {
+    if (!fs.existsSync(businessMaterialsPath)) return { materials: [], commitments: [] };
+    const payload = JSON.parse(fs.readFileSync(businessMaterialsPath, 'utf-8'));
+    return { materials: payload.materials || [], commitments: payload.commitments || [] };
+  }
+
+  // null 表示清除（重新填写且没有 Agent 结果时）。
+  function saveBusinessMaterials(payload) {
+    if (!payload) {
+      fs.rmSync(businessMaterialsPath, { force: true });
+      return;
+    }
+    const content = { version: BUSINESS_MATERIALS_VERSION, materials: payload.materials || [], commitments: payload.commitments || [] };
+    writeBidTemplateFile(businessMaterialsPath, tempPath => fs.writeFileSync(tempPath, `${JSON.stringify(content, null, 2)}\n`, 'utf-8'));
+  }
+
   // 编制结果失效（目录变更、重新编制）时暂存删除；商务模版 Word 不重写，预览和导出按结果缺失处理。
   function stageRulePageReset(changes) {
     if (fs.existsSync(rulePageTablesPath)) stageContentFileRemoval(changes, rulePageTablesPath);
@@ -1137,12 +1159,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function stageBusinessTemplateReset(changes) {
     if (!fs.existsSync(bidTemplateFieldsPath)) return;
     const payload = readBidTemplateFields();
-    if (!hasBidTemplateFillValues(payload) && !fs.existsSync(rulePageTablesPath)) return;
+    if (!hasBidTemplateFillValues(payload) && !fs.existsSync(rulePageTablesPath) && !fs.existsSync(businessMaterialsPath)) return;
     if (!fs.existsSync(bidTemplateBlankPath)) throw new Error('商务模版缺少空白底稿，请重新生成目录');
     try {
       stageContentFileRemoval(changes, bidTemplatePath);
       stageContentFileRemoval(changes, bidTemplateFieldsPath);
       stageRulePageReset(changes);
+      if (fs.existsSync(businessMaterialsPath)) stageContentFileRemoval(changes, businessMaterialsPath);
     } catch (error) {
       throw toBidTemplateLockError(error);
     }
@@ -2836,6 +2859,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveBidTemplateFieldValues,
     readRulePageTables,
     saveRulePageTables,
+    readBusinessMaterials,
+    saveBusinessMaterials,
     resetRulePageTables: createContentWordTransaction(changes => stageRulePageReset(changes)),
     readContentGenerationRuntime() {
       return safeJsonParse(readMetaRow().content_generation_runtime_json, undefined);

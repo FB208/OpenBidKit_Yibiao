@@ -14,7 +14,8 @@ sealed record PageAnchorRequest(IReadOnlyList<string> StartNodeIds, IReadOnlyLis
 
 /// <summary>
 /// 整本导出的页码引用：Main 在被引用小节的标题前、子树末尾写锚点标记（商务章节在并入时加），这里换成零宽书签；
-/// 正文中的 {{YBPAGE:节点ID}}（或合并相邻小节的 {{YBPAGE:起点ID:终点ID}}）换成 IF 域，起止页相同时只显示一个数，否则显示“起-止”，在 Word 中更新域后同样成立。
+/// 正文中的 {{YBPAGE:节点ID}}（或合并相邻小节的 {{YBPAGE:起点ID:终点ID}}）换成 IF 域，起止页相同时只显示一个数，否则显示“起-止”；
+/// 带 |text 后缀的文字写法显示“第3页”或“第3页至第7页”。写法由 Agent 按上下文选择，在 Word 中更新域后同样成立。
 /// 页码先写等宽占位，由 Main 测量后经 fill-toc-page-numbers 回填。
 /// </summary>
 static class PageReferenceBuilder
@@ -28,8 +29,8 @@ static class PageReferenceBuilder
     const string Placeholder = "0000";
     const string MissingMark = "【待填写：页码】";
 
-    // {{YBPAGE:节点ID}} 引用一个小节；{{YBPAGE:起点ID:终点ID}} 是 Main 合并的相邻小节，从起点小节开头到终点小节结尾。
-    static readonly Regex TokenPattern = new(@"\{\{YBPAGE:(?<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?::(?<end>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))?\}\}", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    // {{YBPAGE:节点ID}} 引用一个小节；{{YBPAGE:起点ID:终点ID}} 是 Main 合并的相邻小节，从起点小节开头到终点小节结尾；|text 为文字写法。
+    static readonly Regex TokenPattern = new(@"\{\{YBPAGE:(?<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?::(?<end>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))?(?<text>\|text)?\}\}", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     static readonly Regex PageRefPattern = new(@"PAGEREF\s+(?<name>_YbP[SE][0-9a-f]{32})", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     static string BookmarkName(bool start, string nodeId) =>
@@ -121,7 +122,7 @@ static class PageReferenceBuilder
                     count += 1;
                     if (names.Contains(start) && names.Contains(end))
                     {
-                        replacement.AddRange(CreateReference(run.RunProperties, start, end));
+                        replacement.AddRange(CreateReference(run.RunProperties, start, end, match.Groups["text"].Success));
                     }
                     else
                     {
@@ -154,7 +155,7 @@ static class PageReferenceBuilder
     }
 
     /// <summary>
-    /// 按书签回填页码引用：PAGEREF 写各自页码，外层 IF 写“起”或“起-止”；页码缺失时都写空。
+    /// 按书签回填页码引用：PAGEREF 写各自页码，外层 IF 按域代码求值（见 EvaluateIf），数字和文字两种写法、新旧文档都适用；页码缺失时都写空。
     /// 返回缺页码的引用数，touched 收集改动的段落供调用方校验。
     /// </summary>
     public static int FillPageNumbers(Wp.Body body, IReadOnlyDictionary<string, string> pages, List<OpenXmlElement> touched)
@@ -183,25 +184,23 @@ static class PageReferenceBuilder
                 else if (fieldChar == Wp.FieldCharValues.End)
                 {
                     stack.Pop();
-                    var instruction = frame.Instruction.ToString();
+                    var instruction = string.Concat(frame.Parts.Select(part => part.Text ?? ""));
                     if (PageRefPattern.Match(instruction) is { Success: true } reference)
                     {
                         var name = reference.Groups["name"].Value;
                         SetResult(frame.ResultRuns, PageOf(name));
-                        if (stack.Count > 0) stack.Peek().References.Add(name);
+                        if (stack.Count > 0) stack.Peek().Parts.Add((null, name));
                     }
-                    else if (instruction.TrimStart().StartsWith("IF", StringComparison.Ordinal) && frame.References.Count >= 2)
+                    else if (instruction.TrimStart().StartsWith("IF", StringComparison.Ordinal) && frame.Parts.Count(part => part.Reference is not null) >= 2)
                     {
-                        var start = PageOf(frame.References[0]);
-                        var end = PageOf(frame.References[1]);
-                        var value = start.Length == 0 || end.Length == 0 ? "" : start == end ? start : $"{start}-{end}";
+                        var value = EvaluateIf(frame.Parts, PageOf);
                         if (value.Length == 0) missing += 1;
                         SetResult(frame.ResultRuns, value);
                     }
                 }
                 else if (!frame.InResult && run.GetFirstChild<Wp.FieldCode>() is { } code)
                 {
-                    frame.Instruction.Append(code.Text);
+                    frame.Parts.Add((code.Text, null));
                 }
                 else if (frame.InResult)
                 {
@@ -213,12 +212,38 @@ static class PageReferenceBuilder
         return missing;
     }
 
+    /// <summary>域代码按顺序记下的文字（Text）和嵌套 PAGEREF 的书签（Reference）。</summary>
     sealed class FieldFrame
     {
-        public StringBuilder Instruction { get; } = new();
+        public List<(string? Text, string? Reference)> Parts { get; } = [];
         public bool InResult { get; set; }
         public List<Wp.Run> ResultRuns { get; } = [];
-        public List<string> References { get; } = [];
+    }
+
+    /// <summary>
+    /// IF "{起}" = "{止}" "相同时" "不同时"：按引号切出四段，嵌套 PAGEREF 换成页码后比较前两段，取相应的显示文字；
+    /// 任一页码缺失时为空。数字和文字写法、旧文档的 IF 域都按同一方式求值。
+    /// </summary>
+    static string EvaluateIf(IReadOnlyList<(string? Text, string? Reference)> parts, Func<string, string> pageOf)
+    {
+        var segments = new List<StringBuilder> { new() };
+        foreach (var (text, reference) in parts)
+        {
+            if (reference is not null)
+            {
+                var page = pageOf(reference);
+                if (page.Length == 0) return "";
+                segments[^1].Append(page);
+                continue;
+            }
+            foreach (var character in text ?? "")
+            {
+                if (character == '"') segments.Add(new StringBuilder());
+                else segments[^1].Append(character);
+            }
+        }
+        if (segments.Count < 8) return "";
+        return segments[1].ToString() == segments[3].ToString() ? segments[5].ToString() : segments[7].ToString();
     }
 
     static void SetResult(IReadOnlyList<Wp.Run> runs, string value)
@@ -232,8 +257,11 @@ static class PageReferenceBuilder
         }
     }
 
-    /// <summary>IF "{PAGEREF S}" = "{PAGEREF E}" "{PAGEREF S}" "{PAGEREF S}-{PAGEREF E}"：嵌套域和结果都沿用原文字格式。</summary>
-    static IEnumerable<Wp.Run> CreateReference(Wp.RunProperties? properties, string start, string end)
+    /// <summary>
+    /// IF "{PAGEREF S}" = "{PAGEREF E}" "相同时" "不同时"：数字写法为“{S}”/“{S}-{E}”，文字写法为“第{S}页”/“第{S}页至第{E}页”。
+    /// 嵌套域和结果都沿用原文字格式，结果先写等宽占位。
+    /// </summary>
+    static IEnumerable<Wp.Run> CreateReference(Wp.RunProperties? properties, string start, string end, bool text)
     {
         IEnumerable<Wp.Run> PageRef(string name) =>
         [
@@ -243,19 +271,22 @@ static class PageReferenceBuilder
             TextRun(properties, Placeholder),
             FieldChar(properties, Wp.FieldCharValues.End),
         ];
+        IEnumerable<Wp.Run> Code(string value) => [FieldCode(properties, value)];
+        IEnumerable<Wp.Run> same = text ? [.. Code("第"), .. PageRef(start), .. Code("页")] : PageRef(start);
+        IEnumerable<Wp.Run> range = text
+            ? [.. Code("第"), .. PageRef(start), .. Code("页至第"), .. PageRef(end), .. Code("页")]
+            : [.. PageRef(start), .. Code("-"), .. PageRef(end)];
         return new[] { FieldChar(properties, Wp.FieldCharValues.Begin), FieldCode(properties, " IF \"") }
             .Concat(PageRef(start))
             .Append(FieldCode(properties, "\" = \""))
             .Concat(PageRef(end))
             .Append(FieldCode(properties, "\" \""))
-            .Concat(PageRef(start))
+            .Concat(same)
             .Append(FieldCode(properties, "\" \""))
-            .Concat(PageRef(start))
-            .Append(FieldCode(properties, "-"))
-            .Concat(PageRef(end))
+            .Concat(range)
             .Append(FieldCode(properties, "\" "))
             .Append(FieldChar(properties, Wp.FieldCharValues.Separate))
-            .Append(TextRun(properties, Placeholder))
+            .Append(TextRun(properties, text ? $"第{Placeholder}页" : Placeholder))
             .Append(FieldChar(properties, Wp.FieldCharValues.End));
     }
 

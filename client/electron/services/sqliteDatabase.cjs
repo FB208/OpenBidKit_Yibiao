@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 43;
+const schemaVersion = 44;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -326,6 +326,13 @@ function addTechnicalPlanOutlineContentMode(db) {
 // 规则和页码叶子的应答依据（技术、商务、技术和商务），其他节点为空。
 function addTechnicalPlanOutlineRuleBasis(db) {
   addColumnIfMissing(db, 'technical_plan_outline_nodes', 'rule_basis', 'TEXT');
+}
+
+// 资信库企业资料：邮编、传真、法定代表人身份证号和上年度规模指标（中小企业声明函、法定代表人资格证明书等填写用）。
+function addCredentialLibraryProfileFields(db) {
+  for (const column of ['postal_code', 'fax', 'legal_representative_id_number', 'last_year_employee_count', 'last_year_revenue', 'last_year_total_assets']) {
+    addColumnIfMissing(db, 'credential_library_profile', column, 'TEXT');
+  }
 }
 
 function createTaskLogsSchema(db) {
@@ -1024,6 +1031,12 @@ function createCredentialLibrarySchema(db) {
       industry TEXT,
       company_type TEXT,
       insured_employee_count TEXT,
+      postal_code TEXT,
+      fax TEXT,
+      legal_representative_id_number TEXT,
+      last_year_employee_count TEXT,
+      last_year_revenue TEXT,
+      last_year_total_assets TEXT,
       company_intro TEXT,
       tax_certificate_date TEXT,
       tax_certificate_note TEXT,
@@ -1784,6 +1797,18 @@ const schemaHealthColumnGroups = [
       rule_basis: 'TEXT',
     },
   },
+  {
+    version: 44,
+    table: 'credential_library_profile',
+    columns: {
+      postal_code: 'TEXT',
+      fax: 'TEXT',
+      legal_representative_id_number: 'TEXT',
+      last_year_employee_count: 'TEXT',
+      last_year_revenue: 'TEXT',
+      last_year_total_assets: 'TEXT',
+    },
+  },
 ];
 
 function quoteIdentifier(value) {
@@ -2058,6 +2083,11 @@ const migrations = [
     version: 43,
     description: '技术方案规则和页码目录新增应答依据',
     up: addTechnicalPlanOutlineRuleBasis,
+  },
+  {
+    version: 44,
+    description: '资信库企业资料新增邮编、传真、法定代表人身份证号和上年度规模指标',
+    up: addCredentialLibraryProfileFields,
   },
 ];
 

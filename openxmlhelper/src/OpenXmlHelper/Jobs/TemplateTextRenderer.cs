@@ -50,11 +50,13 @@ static class TemplateTextRenderer
         TemplateFieldCandidateFile scan,
         IReadOnlyDictionary<TemplateFieldCandidate, string> labels,
         IReadOnlyList<TemplateFieldCandidate> removals,
-        IReadOnlyList<TemplateParagraphEntry?> headings)
+        IReadOnlyList<TemplateParagraphEntry?> headings,
+        IReadOnlyList<List<TemplateRepeatItem>> repeats)
     {
         var intro = $"投标模版效果正文：按当前分类显示导出后的样子，每行一个段落，格式为“定位号  文字”，定位号与投标模版正文相同。{LocatorNote}\n"
             + "【字段名】为填写位置，【字段名←原文】为替换该原文的填写位置，〔择一 字段名：原文〕〔勾选 字段名：原文〕保留原文供选择，〔附件 字段名〕为图片位置，"
             + $"〔规则 列名〕〔规则表 名称〕由规则和页码编制，〔已去掉：原文〕为导出时去掉的文字；{MarkNote}\n"
+            + "〔条目 清单id·第N条〕标出可重复条目中的段落，填写时按实际条数使用，未用到的条目导出时删除。\n"
             + "每章标题行给出导出时加章节编号的标题段。\n";
         var shown = labels.Keys.Concat(removals).ToList();
         return RenderCore(
@@ -65,7 +67,8 @@ static class TemplateTextRenderer
                 : string.Format(labels[candidate], original),
             (chapter, index) => $"【章节 {chapter.Id}：{chapter.Title}】标题段：{HeadingLabel(headings[index], chapter.Title)}",
             intro,
-            showWritable: false);
+            showWritable: false,
+            entry => TemplateRepeats.Locate(repeats, entry.Paragraph) is { } item ? TemplateRepeats.PreviewLabel(item) : "");
     }
 
     /// <summary>
@@ -96,7 +99,8 @@ static class TemplateTextRenderer
         Func<TemplateFieldCandidate, string, string> mark,
         Func<TemplateChapterRange, int, string> header,
         string intro,
-        bool showWritable)
+        bool showWritable,
+        Func<TemplateParagraphEntry, string>? prefix = null)
     {
         var entries = new Dictionary<Wp.Paragraph, TemplateParagraphEntry>(ReferenceEqualityComparer.Instance);
         foreach (var entry in scan.Paragraphs) entries.TryAdd(entry.Paragraph, entry);
@@ -135,7 +139,7 @@ static class TemplateTextRenderer
             var chapter = item.Entry?.Chapter ?? item.Candidate?.Chapter;
             if (chapter is null) continue;
             var line = item.Entry is { } entry
-                ? RenderEntry(entry, inline.GetValueOrDefault(entry.Paragraph), trailing.GetValueOrDefault(entry.Paragraph), mark, showWritable)
+                ? RenderEntry(entry, inline.GetValueOrDefault(entry.Paragraph), trailing.GetValueOrDefault(entry.Paragraph), mark, showWritable, prefix?.Invoke(entry) ?? "")
                 : $"{TemplateFieldScanner.ToLocator(item.Candidate!.Location)}  {(showWritable ? "〔不可标记〕" : "")}{mark(item.Candidate!, Show(item.Candidate!.Text ?? ""))}";
             if (line is null) continue;
             if (!ReferenceEquals(chapter, currentChapter))
@@ -158,7 +162,8 @@ static class TemplateTextRenderer
         List<TemplateFieldCandidate>? inline,
         List<TemplateFieldCandidate>? trailing,
         Func<TemplateFieldCandidate, string, string> mark,
-        bool showWritable)
+        bool showWritable,
+        string prefix)
     {
         var text = entry.Text;
         var content = new StringBuilder();
@@ -193,6 +198,6 @@ static class TemplateTextRenderer
         var marks = string.Concat(extra.OrderBy(item => item.Order).Select(item => mark(item, Show(item.Text ?? ""))));
         if (text.Trim().Length == 0 && content.ToString().Trim().Length == 0 && marks.Length == 0) return null;
         var body = text.Trim().Length == 0 ? $"（空）{content}" : content.ToString();
-        return $"{entry.Locator}  {(showWritable && !entry.Writable ? "〔不可标记〕" : "")}{body}{marks}";
+        return $"{entry.Locator}  {prefix}{(showWritable && !entry.Writable ? "〔不可标记〕" : "")}{body}{marks}";
     }
 }

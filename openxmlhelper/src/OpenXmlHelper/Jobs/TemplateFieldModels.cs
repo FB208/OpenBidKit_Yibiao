@@ -252,6 +252,9 @@ sealed class TemplateFieldDefinition
     public string? TableId { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Row { get; set; }
+    /// <summary>可重复条目中的字段（见 TemplateRepeats）：table_id 为条目清单 id，row 为第几条，逐条填写。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Entry { get; set; }
     /// <summary>字段在模版中的原句，【▢】标出填写处，供填写时让取值能直接放进原句。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Context { get; set; }
@@ -326,7 +329,7 @@ sealed class FillTemplateFieldsRequest
     /// <summary>规则和页码的编制结果，在 values 之后写入。</summary>
     [JsonPropertyName("rule_tables")]
     public List<RuleTableFill> RuleTables { get; set; } = [];
-    /// <summary>整本导出时清单表未使用行的字段 ID：整行字段都在其中时删除该行（见 ListRowRemover）。</summary>
+    /// <summary>整本导出时清单未使用行的字段 ID：整行字段都在其中时删除该行（见 ListRowRemover），条目内字段都在其中时标为待删（见 TemplateRepeats）。</summary>
     [JsonPropertyName("remove_row_field_ids")]
     public List<string> RemoveRowFieldIds { get; set; } = [];
 }
@@ -384,6 +387,20 @@ sealed class ApplyTemplateFieldsRequest
     public List<TemplateRemoval> Removals { get; set; } = [];
     /// <summary>Agent 指定的章节标题段；未列出的章节由程序按目录标题认定。</summary>
     public List<TemplateHeading> Headings { get; set; } = [];
+    /// <summary>Agent 标出的可重复条目（按实际条数填写，未用的条目导出时删除）。</summary>
+    public List<TemplateRepeat> Repeats { get; set; } = [];
+}
+
+/// <summary>一组可重复条目：entries 按顺序给出各条的段落范围，from 至 to（省略时同 from）为同一父元素下的段落。</summary>
+sealed class TemplateRepeat
+{
+    public List<TemplateRepeatEntry> Entries { get; set; } = [];
+}
+
+sealed class TemplateRepeatEntry
+{
+    public string From { get; set; } = "";
+    public string? To { get; set; }
 }
 
 /// <summary>导出时去掉的一段原文：at 为段落定位号，text 为段内原文，before/after 在段内不唯一时区分。</summary>

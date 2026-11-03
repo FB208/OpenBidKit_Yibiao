@@ -48,6 +48,12 @@ static class ApplyTemplateFieldsAction
                 PlaceTableSlots(candidates, headings);
                 var normalized = NormalizeSelections(request, candidates);
                 CheckSelectedRanges(normalized.Select(item => item.Candidate).Concat(removals));
+                // 可重复条目按写入前的位置解析，条目内字段按条编号，写完字段后再加条目书签。
+                var repeats = TemplateRepeats.Resolve(
+                    request.Repeats,
+                    candidates,
+                    normalized.Select(item => (item.Candidate, item.Selection.FillBy == TemplateFieldKinds.RuleFillBy)).ToList(),
+                    headings);
                 // 效果正文按写入前的段落文字生成，定位号与模版正文一致，供 Agent 审阅后修改分类。
                 preview = TemplateTextRenderer.RenderPreview(
                     candidates,
@@ -56,7 +62,8 @@ static class ApplyTemplateFieldsAction
                         item => TemplateTextRenderer.PreviewLabel(item.Candidate, item.Fields.Select(field => field.Name).ToList(), item.Selection.FillBy == TemplateFieldKinds.RuleFillBy),
                         ReferenceEqualityComparer.Instance),
                     removals,
-                    headings);
+                    headings,
+                    repeats);
                 var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
                 var body = mainPart.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
                 // 写入会插入附件段落、把跨段勾选项包进块级控件，先记下各章首块，写完再换算块号。
@@ -70,6 +77,7 @@ static class ApplyTemplateFieldsAction
                 foreach (var item in normalized.OrderBy(item => item.Candidate.Order))
                 {
                     var kind = TemplateFieldKinds.ToFieldKind(item.Candidate.Kind);
+                    var repeat = TemplateRepeats.Locate(repeats, TemplateRepeats.Host(item.Candidate));
                     var fields = new List<(TemplateFieldDefinition Field, int WordId)>();
                     // 拆分的附件按部分顺序各占一个字段，未拆分的候选只有一项。
                     foreach (var part in item.Fields)
@@ -89,11 +97,13 @@ static class ApplyTemplateFieldsAction
                             Instruction = part.Instruction,
                             Kind = kind,
                             Options = kind is TemplateFieldKinds.ChoiceField or TemplateFieldKinds.SelectField ? item.Candidate.Options : null,
-                            TableId = item.Candidate.TableId,
-                            Row = item.Candidate.TableId is null ? null : item.Candidate.RowNumber,
+                            TableId = repeat?.ListId ?? item.Candidate.TableId,
+                            Row = repeat?.Number ?? (item.Candidate.TableId is null ? null : item.Candidate.RowNumber),
+                            Entry = repeat is null ? null : true,
                             Context = string.IsNullOrWhiteSpace(item.Candidate.Context) ? null : item.Candidate.Context,
                         };
                         definitions.Fields.Add(field);
+                        repeat?.FieldIds.Add(field.Id);
                         fields.Add((field, nextWordId++));
                     }
                     applications.Add((item.Candidate, fields));
@@ -119,6 +129,7 @@ static class ApplyTemplateFieldsAction
                     if (replacedStart >= 0 && chapterStarts[replacedStart].Parent is null) chapterStarts[replacedStart] = written[^1];
                 }
 
+                TemplateRepeats.Mark(body, repeats);
                 var hasHeadings = TemplateHeadings.Mark(body, headings);
                 definitions.Chapters = ResolveFinalChapters(body, chapterRanges, chapterStarts, hasHeadings);
                 mainPart.Document.Save();

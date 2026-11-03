@@ -113,6 +113,30 @@ const TEMPLATE_FIELD_CLASSIFICATION_SCHEMA = {
         },
       },
     },
+    // 可重复条目：每项一组，entries 按顺序给出各条的首末段落定位号（to 省略时同 from），至少两条。
+    repeats: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['entries'],
+        additionalProperties: false,
+        properties: {
+          entries: {
+            type: 'array',
+            minItems: 2,
+            items: {
+              type: 'object',
+              required: ['from'],
+              additionalProperties: false,
+              properties: {
+                from: { type: 'string', minLength: 1 },
+                to: { type: 'string', minLength: 1 },
+              },
+            },
+          },
+        },
+      },
+    },
   },
 };
 
@@ -262,7 +286,7 @@ function createPiOpenXmlTool({
       })),
       fields_file: Type.Optional(Type.String({
         minLength: 1,
-        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组，可选 positions、removals 和 headings 数组；positions 每项包含 id、at（投标模版正文中的定位号）、op（insert、span、choose、attachment 或 table），按 op 填写 before、after、text、options；removals 每项包含 at、text，可选 before、after；headings 每项包含 chapter_id 和 at（定位号或 null）；fields 每项包含 candidate_id（规则候选或补充位置的 id）、name、subject、fill_by（ai、manual 或 rule），可选 instruction；附件需要多张图片时用 parts 拆分。',
+        description: 'apply-template-fields 必填，当前工作区内的分类 JSON 文件路径。顶层为 fields 和 ignored_candidate_ids 数组，可选 positions、removals、headings 和 repeats 数组；positions 每项包含 id、at（投标模版正文中的定位号）、op（insert、span、choose、attachment 或 table），按 op 填写 before、after、text、options；removals 每项包含 at、text，可选 before、after；headings 每项包含 chapter_id 和 at（定位号或 null）；repeats 每项包含 entries（至少两条，每条 from 和可选 to 为首末段落定位号）；fields 每项包含 candidate_id（规则候选或补充位置的 id）、name、subject、fill_by（ai、manual 或 rule），可选 instruction；附件需要多张图片时用 parts 拆分。',
       })),
     }, { additionalProperties: false }),
     execute: async (_toolCallId, params, signal) => {
@@ -402,6 +426,7 @@ function createPiOpenXmlTool({
           const positions = normalizePositions(selections.positions);
           const removals = normalizeRemovals(selections.removals);
           const headings = normalizeHeadings(selections.headings);
+          const repeats = normalizeRepeats(selections.repeats);
           emitStep(3, `正在写入 ${fields.length} 个字段`);
           const result = await openXmlHelperService.runJob({
             action: APPLY_TEMPLATE_FIELDS_ACTION,
@@ -415,6 +440,7 @@ function createPiOpenXmlTool({
               positions,
               removals,
               headings,
+              repeats,
             },
             signal,
           });
@@ -569,6 +595,15 @@ function normalizeHeadings(headings) {
   return (Array.isArray(headings) ? headings : []).map((item) => ({
     chapter_id: String(item?.chapter_id || '').trim(),
     at: typeof item?.at === 'string' && item.at.trim() ? item.at.trim() : null,
+  }));
+}
+
+function normalizeRepeats(repeats) {
+  return (Array.isArray(repeats) ? repeats : []).map((item) => ({
+    entries: (Array.isArray(item?.entries) ? item.entries : []).map((entry) => ({
+      from: String(entry?.from || '').trim(),
+      ...(typeof entry?.to === 'string' && entry.to.trim() ? { to: entry.to.trim() } : {}),
+    })),
   }));
 }
 

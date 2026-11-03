@@ -330,6 +330,10 @@ export interface BusinessFillReviewUnit {
   options?: string[];
   table_id?: string;
   row?: number;
+  /** 可重复条目中的填写项：table_id 为条目清单 id，row 为第几条。 */
+  entry?: boolean;
+  /** 填写 Agent 声明的联动：随来源填写项同值（same）或为其金额大写（uppercase），弹窗中只读。 */
+  link?: { key: string; form: 'same' | 'uppercase'; source_name: string };
   value?: string;
   selected?: string[];
   image_id?: string;
@@ -397,6 +401,9 @@ export interface BusinessFillReview {
   /** 正文默认字号（磅）。 */
   base_size: number;
   chapters: BusinessFillReviewChapter[];
+  materials: BusinessMaterials;
+  /** 目录叶子 ID 对应的“编号 标题”，供证明材料显示放置位置。 */
+  placements: Record<string, string>;
 }
 
 /** 投标模版与当前目录不一致的非 AI 叶子；auto_fill 为当前处理方式对应的字段是否自动填写，rule_page 为是否规则和页码。 */
@@ -420,6 +427,34 @@ export interface BusinessFillReviewValue {
   value?: string;
   selected?: string[];
   image_id?: string;
+}
+
+/** 商务填写 Agent 列出的证明材料：整本导出时插在目录节点 after 之后，按顺序附资信库图片，missing 说明缺少的内容。 */
+export interface BusinessMaterial {
+  after: string;
+  title: string;
+  basis: string;
+  image_ids: string[];
+  missing?: string;
+}
+
+/** 招标文件要求书面承诺但没有格式的条款生成的承诺书，落款由导出时加上。 */
+export interface BusinessCommitment {
+  after: string;
+  title: string;
+  basis: string;
+  paragraphs: string[];
+}
+
+export interface BusinessMaterials {
+  materials: BusinessMaterial[];
+  commitments: BusinessCommitment[];
+}
+
+/** 确认弹窗提交的字段值和证明材料。 */
+export interface BusinessFillReviewSubmission {
+  values: BusinessFillReviewValue[];
+  materials: BusinessMaterials;
 }
 
 export interface ContentGenerationRuntimeState {

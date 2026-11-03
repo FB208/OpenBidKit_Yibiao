@@ -17,7 +17,7 @@ const BUSINESS_DEFAULT_CONTENT_MODES = new Set(['template-fill', 'rule-page', 'd
 // 投标文件目录的判断口径，生成和调整目录的提示词共用。
 const DIRECTORY_GENERATE_RULE = '“目录”（attr=目录、content_mode=directory-generate）只指投标文件自身的目录页：列出本文件各章节标题和页码，导出时按实际页码自动生成，全目录最多一个。标题带“目录”“检索”“页码”“清单”等字样、但行内容由招标文件规定的表格（如评分因素页码检索表、资料清单）不是目录。';
 // 规则和页码的判断口径：按招标文件逐项列出、每行对应一条要求或评分项的表格，并标明应答依据（rule_basis）；生成和调整目录的提示词共用。
-const RULE_PAGE_RULE = '“规则和页码”（content_mode=rule-page）指按招标文件规定逐项列出、每一行对应招标文件一条要求或一个评分项的表格，如评分因素页码检索表、商务或技术要求点对点应答表、偏离表，不论是否标注本投标文件页码；只按固定格式填写的文件仍用 template-fill。rule-page 叶子必须填写 rule_basis，表示这张表应答的部分：应答技术要求或技术评分项的填 technical，应答商务要求或商务评分项的填 business，同时涵盖技术和商务的（如列出全部评分项的页码检索表、技术商务合在一起的偏离表）填 both；其他叶子不填写 rule_basis。';
+const RULE_PAGE_RULE = '“规则和页码”（content_mode=rule-page）指按招标文件规定逐项列出、每一行对应招标文件一条要求或一个评分项的表格，如评分因素页码检索表、商务或技术要求点对点应答表、偏离表、按招标清单逐项列出分项的报价表，不论是否标注本投标文件页码；只按固定格式填写的文件仍用 template-fill。rule-page 叶子必须填写 rule_basis，表示这张表应答的部分：应答技术要求或技术评分项的填 technical，应答商务要求或商务评分项的填 business，同时涵盖技术和商务的（如列出全部评分项的页码检索表、技术商务合在一起的偏离表）填 both；其他叶子不填写 rule_basis。';
 
 function normalizeSourcePath(value) {
   return String(value || '').trim().replace(/\\/g, '/');
@@ -137,7 +137,7 @@ ${structureDescriptions.map((item) => `- ${item}`).join('\n')}
 字段要求：
 1. 顶层必须是对象，包含 basis、format_scope 和 outline。所有节点 id 填 null，程序接收后分配唯一 ID；数组顺序表示目录顺序；number 由程序计算，不要用编号充当 ID。
 2. 一级目录必须填写 attr，子目录不填写 attr。attr 从“通用”“商务/资信”“技术”“其他”“目录”“报价”“业绩”中选择。
-3. 叶子节点填写 content_mode，父节点只包含 children，不包含 content_mode 或 content_mode_note。一级目录叶子：attr=商务/资信时使用 template-fill 或 rule-page；attr=业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时必须使用 manual-fill。子目录叶子按内容判断：按格式填写的文件使用 template-fill，规则和页码条目使用 rule-page，投标文件目录使用 directory-generate，报价使用 manual-fill。${DIRECTORY_GENERATE_RULE}${RULE_PAGE_RULE}需要投标人自行编写方案正文的条目使用 ai-generate（一级目录的 attr 选“技术”）。无法归类的使用 other，并在 content_mode_note 说明原因。
+3. 叶子节点填写 content_mode，父节点只包含 children，不包含 content_mode 或 content_mode_note。一级目录叶子：attr=商务/资信时使用 template-fill 或 rule-page；attr=业绩时必须使用 template-fill；attr=目录时必须使用 directory-generate；attr=报价时按内容判断（报价文件按格式填写的为 template-fill（金额由投标人填写），按招标清单逐项列出分项的报价表为 rule-page，没有可填写格式、需投标人另行编制的为 manual-fill）。子目录叶子按内容判断：按格式填写的文件使用 template-fill，规则和页码条目使用 rule-page，投标文件目录使用 directory-generate，报价文件按上述报价的方式判断。${DIRECTORY_GENERATE_RULE}${RULE_PAGE_RULE}需要投标人自行编写方案正文的条目使用 ai-generate（一级目录的 attr 选“技术”）。无法归类的使用 other，并在 content_mode_note 说明原因。
 4. description 简要说明该文件的用途。
 5. 结构示例（只示意字段，标题、层级和数量以原文为准）：{"basis":"${FORMAT_TEMPLATE_BASIS}","format_scope":[{"start":120,"end":480}],"outline":[{"id":null,"title":"原文条目标题","description":"用途说明","attr":"商务/资信","content_mode":"template-fill","source":{"start":121,"end":160}},{"id":null,"title":"原文条目标题","description":"用途说明","attr":"商务/资信","source":{"start":160,"end":240},"children":[{"id":null,"title":"原文子条目标题","description":"用途说明","content_mode":"template-fill","source":{"start":161,"end":200}},{"id":null,"title":"原文子条目标题","description":"用途说明","content_mode":"template-fill","source":{"start":200,"end":240}}]}]}
 6. ${outputFile} 必须是纯 JSON，不包含 Markdown 代码块或解释文字。程序已预置 Schema，可用 json-validation 自查，只传 file_path；本阶段结束后程序会校验结构，并逐项核对 source 位置与原文标题，不通过会退回问题清单继续修复。`;

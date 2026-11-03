@@ -1197,7 +1197,7 @@ function GenerationSettingsPage({
               <section className="generation-settings-export-template-section">
                 <div className="generation-settings-appearance-head">
                   <strong id="generation-settings-export-template-scope-label">模板样式范围</strong>
-                  <span id="generation-settings-export-template-scope-description">纸张、方向、双栏和页边距始终应用于整个文件；其余样式（包括页眉页脚、页码和首页不同）遵循所选范围。选择仅技术方案时，AI 与非 AI 范围交界处另起页。</span>
+                  <span id="generation-settings-export-template-scope-description">纸张、方向、双栏、页边距、一级标题另起页和各级标题样式（首行缩进除外）始终应用于整个文件；其余样式（包括页眉页脚、页码和首页不同）遵循所选范围。选择仅技术方案时，AI 与非 AI 范围交界处另起页。</span>
                 </div>
                 <div className="generation-settings-export-template-control">
                   <select
