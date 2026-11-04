@@ -989,6 +989,36 @@ test('结构规则：单元格唯一段落整段是格式文字时，截章和�
   assertWordStructure(exported, '整本导出');
 });
 
+test('结构规则：抽章只保留选中的块，跨章的书签补齐到章内、跨章的域退化为文字，整对在章外的书签不带进来', async () => {
+  const name = 'extract-pairs-source';
+  samples.buildDocx(planDir, `${name}.docx`, [
+    para('第一章 投标函'),
+    `<w:p><w:bookmarkStart w:id="7" w:name="_Toc700"/>${run('跨章书签起点')}</w:p>`,
+    para('第二章 开标一览表'),
+    `<w:p>${run('跨章书签终点')}<w:bookmarkEnd w:id="7"/></w:p>`,
+    `<w:p>${run('页码')}<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${run('1')}</w:p>`,
+    `<w:p>${run('2')}<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`,
+    `<w:p><w:bookmarkStart w:id="8" w:name="_Toc800"/>${run('第三章')}<w:bookmarkEnd w:id="8"/></w:p>`,
+    sectPr(),
+  ].join(''));
+  await service.runJob({
+    action: 'extract-chapters',
+    request: {
+      sources: [`technical-plan/${name}.docx`],
+      chapters: [{ id: 'x1', title: '开标一览表', startBlock: 2, endBlock: 5 }],
+      output: 'technical-plan/extract-pairs.docx',
+    },
+    timeoutMs: 60000,
+  });
+  const xml = documentXml('technical-plan/extract-pairs.docx');
+  assertWordStructure(xml, '抽章');
+  const text = xml.replace(/<[^>]+>/g, '');
+  assert.ok(text.includes('第二章 开标一览表') && text.includes('页码1') && !text.includes('第三章'), text);
+  assert.match(xml, /<w:bookmarkStart\b[^>]*w:name="_Toc700"/, '跨章书签的起点补到章内');
+  assert.doesNotMatch(xml, /_Toc800/, '整对在章外的书签不带进来');
+  assert.doesNotMatch(xml, /<w:fldChar\b/, '只抽到一半的域退化为普通文字');
+});
+
 // 页码引用：普通字段和规则表共用换算，Agent 按原句选数字或文字写法，助手按写法生成页码域并按域代码回填。
 const { convertAgentPageRefs, toAgentPageRefs, numberedNodes, createPageRefDisplay } = require('../electron/services/rulePageTables.cjs');
 

@@ -15,21 +15,26 @@ sealed class PairedMarkers
 {
     readonly HashSet<OpenXmlElement> _content;
     readonly IReadOnlyList<OpenXmlElement>? _anchors;
+    readonly bool _keepEnclosedBookmarks;
     readonly List<OpenXmlElement> _extra = [];
     readonly HashSet<OpenXmlElement> _extraSet = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<OpenXmlElement, RootIndex> _roots = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<Wp.Paragraph, OpenXmlElement> _startCursors = new(ReferenceEqualityComparer.Instance);
 
-    PairedMarkers(IReadOnlyList<OpenXmlElement> content, IReadOnlyList<OpenXmlElement>? anchors)
+    PairedMarkers(IReadOnlyList<OpenXmlElement> content, IReadOnlyList<OpenXmlElement>? anchors, bool keepEnclosedBookmarks)
     {
         _content = new HashSet<OpenXmlElement>(content, ReferenceEqualityComparer.Instance);
         _anchors = anchors;
+        _keepEnclosedBookmarks = keepEnclosedBookmarks;
     }
 
-    /// <summary>处理 content（将被删除的最上层元素）里的成对标记，返回需要一并删除的元素。anchors 为替换内容，书签移到其中。</summary>
-    public static List<OpenXmlElement> Prepare(IReadOnlyList<OpenXmlElement> content, IReadOnlyList<OpenXmlElement>? anchors)
+    /// <summary>
+    /// 处理 content（将被删除的最上层元素）里的成对标记，返回需要一并删除的元素。anchors 为替换内容，书签移到其中。
+    /// keepEnclosedBookmarks 为 false 时两端都在 content 里的书签随内容删除（取子集生成新文档时用）。
+    /// </summary>
+    public static List<OpenXmlElement> Prepare(IReadOnlyList<OpenXmlElement> content, IReadOnlyList<OpenXmlElement>? anchors, bool keepEnclosedBookmarks = true)
     {
-        var markers = new PairedMarkers(content, anchors);
+        var markers = new PairedMarkers(content, anchors, keepEnclosedBookmarks);
         markers.Run(content);
         return markers._extra;
     }
@@ -89,6 +94,7 @@ sealed class PairedMarkers
         }
         var startOwner = start is not null ? OwnerOf(start) : null;
         var endOwner = end is not null ? OwnerOf(end) : null;
+        if (!_keepEnclosedBookmarks && startOwner is not null && endOwner is not null) return;
         var startBlock = startOwner is not null && WordStructureRules.IsBlockLike(startOwner);
         var endBlock = endOwner is not null && WordStructureRules.IsBlockLike(endOwner);
         if (startOwner is not null && endOwner is not null && startBlock && endBlock)

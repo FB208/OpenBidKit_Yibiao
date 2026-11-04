@@ -27,6 +27,13 @@ static class WordStructure
     /// <summary>整批删除，按整批判断成对标记；返回降级为清空的段落。</summary>
     public static IReadOnlyCollection<OpenXmlElement> RemoveRange(IEnumerable<OpenXmlElement> elements) => RemoveCore(elements, null);
 
+    /// <summary>
+    /// 取子集生成新文档（抽章、截章预览、目录小文档）时用 keepEnclosedBookmarks: false：
+    /// 两端都在被删内容里的书签随内容删除，不挪进保留的内容；只有一半在被删内容里的书签、域、批注仍按 R4 处理。
+    /// </summary>
+    public static IReadOnlyCollection<OpenXmlElement> RemoveRange(IEnumerable<OpenXmlElement> elements, bool keepEnclosedBookmarks) =>
+        RemoveCore(elements, null, keepEnclosedBookmarks);
+
     /// <summary>删除 parent 下类型为 T 的直接子元素。</summary>
     public static void RemoveChildren<T>(OpenXmlElement parent) where T : OpenXmlElement =>
         RemoveCore(parent.Elements<T>().ToList(), null);
@@ -153,7 +160,7 @@ static class WordStructure
     /// 删除的核心流程：规整目标 → R1 决定哪些末尾段落降级为清空 → R4 处理成对标记 → 摘除 → 一并删除标记的另一端等 →
     /// R2 删掉变空的行和表格 → R1 给仍不以段落结尾的单元格补空段。anchors 为替换内容。返回降级为清空的段落。
     /// </summary>
-    static HashSet<OpenXmlElement> RemoveCore(IEnumerable<OpenXmlElement> elements, IReadOnlyList<OpenXmlElement>? anchors)
+    static HashSet<OpenXmlElement> RemoveCore(IEnumerable<OpenXmlElement> elements, IReadOnlyList<OpenXmlElement>? anchors, bool keepEnclosedBookmarks = true)
     {
         var targets = Normalize(elements);
         var cleared = new HashSet<OpenXmlElement>(ReferenceEqualityComparer.Instance);
@@ -190,7 +197,7 @@ static class WordStructure
         var rows = content.Where(WordStructureRules.IsCellLevel).Select(item => item.Ancestors<Wp.TableRow>().FirstOrDefault()).OfType<Wp.TableRow>().Distinct().ToList();
         var tables = content.Where(WordStructureRules.IsRowLevel).Select(item => item.Ancestors<Wp.Table>().FirstOrDefault()).OfType<Wp.Table>().Distinct().ToList();
 
-        var extra = PairedMarkers.Prepare(content, anchors);
+        var extra = PairedMarkers.Prepare(content, anchors, keepEnclosedBookmarks);
         foreach (var element in content) element.Remove();
         RemoveExtra(extra);
 

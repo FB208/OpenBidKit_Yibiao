@@ -147,7 +147,7 @@ static class TableOfContentsBuilder
                 .FirstOrDefault(item => item is not null)
                 ?? body.Elements<Wp.SectionProperties>().Last();
             var finalSection = (Wp.SectionProperties)section.CloneNode(true);
-            WordStructure.RemoveRange(blocks.Where((_, index) => index < startBlock || index >= endBlock).ToList());
+            WordStructure.RemoveRange(blocks.Where((_, index) => index < startBlock || index >= endBlock).ToList(), keepEnclosedBookmarks: false);
             WordStructure.RemoveChildren<Wp.SectionProperties>(body);
             body.AppendChild(finalSection);
             if (blocks[startBlock] is Wp.Paragraph first)
