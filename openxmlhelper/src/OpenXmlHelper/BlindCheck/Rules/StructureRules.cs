@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -134,7 +134,7 @@ static class StructureRules
     }
 
     /// <summary>页眉页脚里页码以外的文字和对象；有页码域时，只含页码的段落算页码，不算内容。</summary>
-    public static List<string> HeaderFooterContent(XElement element, bool hasPageFields)
+    public static List<string> HeaderFooterContent(OpenXmlElement element, bool hasPageFields)
     {
         return HeaderFooterTexts(element).Where(text => !hasPageFields || !PageNumberOnly.IsMatch(text)).ToList();
     }
@@ -143,7 +143,7 @@ static class StructureRules
     /// 页眉页脚里页码以外的可见内容，检查和修复共用同一口径：文字和对象，加上可见的段落边框，记为"[横线]"
     /// （中文版 Word 的「页眉」样式自带下边框，文字删光后横线仍显示在每页顶部）。表格按其中的文字计入。
     /// </summary>
-    public static List<string> HeaderFooterMarks(StyleSheet sheet, XElement root, bool hasPageFields)
+    public static List<string> HeaderFooterMarks(StyleSheet sheet, OpenXmlElement root, bool hasPageFields)
     {
         var contents = HeaderFooterContent(root, hasPageFields);
         if (BorderedParagraphs(sheet, root).Any()) contents.Add("[横线]");
@@ -151,20 +151,20 @@ static class StructureRules
     }
 
     /// <summary>显示边框的段落；文本框里的段落随文本框计入内容，不单独看。</summary>
-    public static IEnumerable<XElement> BorderedParagraphs(StyleSheet sheet, XElement element)
+    public static IEnumerable<OpenXmlElement> BorderedParagraphs(StyleSheet sheet, OpenXmlElement element)
     {
         return element.DescendantsAndSelf(W.P)
             .Where(paragraph => !paragraph.Ancestors().Any(item => item.Name == W.TxbxContent || item.Name == W.VTxbxContent) && HasVisibleBorder(sheet, paragraph));
     }
 
     /// <summary>段落实际显示的边框：每一边先看直接设置，再沿段落样式链往上找，nil、none 算没有。</summary>
-    static bool HasVisibleBorder(StyleSheet sheet, XElement paragraph)
+    static bool HasVisibleBorder(StyleSheet sheet, OpenXmlElement paragraph)
     {
         var properties = paragraph.Element(W.PPr);
         var style = sheet.ResolveParagraphStyle(W.ValOf(properties?.Element(W.PStyle)));
         var layers = new[] { properties }.Concat(sheet.Chain(style, "paragraph").Select(item => item.PPr))
             .Select(item => item?.Element(W.Ns + "pBdr"))
-            .OfType<XElement>()
+            .OfType<OpenXmlElement>()
             .ToList();
         return BorderSides.Any(side => layers.Select(layer => layer.Element(W.Ns + side)).FirstOrDefault(item => item is not null) is { } border
             && W.ValOf(border) is not (null or "nil" or "none"));
@@ -174,7 +174,7 @@ static class StructureRules
     /// 页眉页脚各段显示的文字：文本框按框内文字计入（WPS 插入的页码就是一个只含页码域的文本框），
     /// 图片等其他对象记为"[图片]"；文本框里的段落随所在对象计入，不再单独列出。
     /// </summary>
-    public static IEnumerable<string> HeaderFooterTexts(XElement element)
+    public static IEnumerable<string> HeaderFooterTexts(OpenXmlElement element)
     {
         foreach (var paragraph in element.DescendantsAndSelf(W.P))
         {
@@ -184,7 +184,7 @@ static class StructureRules
         }
     }
 
-    static string ObjectAwareText(XElement child)
+    static string ObjectAwareText(OpenXmlElement child)
     {
         var text = DocumentModel.PieceText(child);
         if (text != DocumentModel.ObjectPlaceholder.ToString()) return text;
@@ -212,7 +212,7 @@ static class StructureRules
 
         // 表格之间必须隔一个段落、文末最后一个段落不能删，这两类空段落不报。
         var blocks = model.BodyBlocks;
-        var required = new HashSet<XElement>(ReferenceEqualityComparer.Instance);
+        var required = new HashSet<OpenXmlElement>(ReferenceEqualityComparer.Instance);
         for (var index = 0; index < blocks.Count; index += 1)
         {
             if (blocks[index].IsTable) continue;
@@ -459,7 +459,7 @@ static class StructureRules
             || target.StartsWith("www.", StringComparison.OrdinalIgnoreCase);
     }
 
-    static Finding HyperlinkFinding(RuleContext context, RuleSpec rule, string part, XElement? element, string target)
+    static Finding HyperlinkFinding(RuleContext context, RuleSpec rule, string part, OpenXmlElement? element, string target)
     {
         var paragraph = element?.AncestorsAndSelf(W.P).FirstOrDefault();
         var record = paragraph is null ? null : context.Model.Records.GetValueOrDefault(paragraph);
@@ -538,7 +538,7 @@ static class StructureRules
         }
     }
 
-    public static XElement? LocalChild(XElement? parent, string localName)
+    public static OpenXmlElement? LocalChild(OpenXmlElement? parent, string localName)
     {
         return parent?.Elements().FirstOrDefault(item => item.Name.LocalName == localName);
     }

@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -28,7 +28,7 @@ static class TableRules
     }
 
     /// <summary>正文顶层表格，序号与结果定位里的"第 N 个表格"一致。</summary>
-    static IEnumerable<(int Index, XElement Table)> TopTables(RuleContext context)
+    static IEnumerable<(int Index, OpenXmlElement Table)> TopTables(RuleContext context)
     {
         var index = 0;
         foreach (var block in context.Model.BodyBlocks.Where(item => item.IsTable))

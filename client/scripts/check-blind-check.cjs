@@ -372,6 +372,9 @@ test('彩色：形状、图表、页面背景按彩色要求检查，招标文�
   zip.addFile('word/charts/chart1.xml', Buffer.from(chartXml, 'utf8'));
   const rels = zip.readAsText('word/_rels/document.xml.rels').replace('</Relationships>', '<Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/chart1.xml"/></Relationships>');
   zip.updateFile('word/_rels/document.xml.rels', Buffer.from(rels, 'utf8'));
+  // 新增的部件要在 [Content_Types].xml 声明类型，否则不是合法的 docx（OpenXML SDK 拒绝打开）。
+  const types = zip.readAsText('[Content_Types].xml').replace('</Types>', '<Override PartName="/word/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>');
+  zip.updateFile('[Content_Types].xml', Buffer.from(types, 'utf8'));
   const document = zip.readAsText('word/document.xml').replace('<w:body>', '<w:background w:color="FFFF00"/><w:body>');
   zip.updateFile('word/document.xml', Buffer.from(document, 'utf8'));
   zip.writeZip(sourcePath);

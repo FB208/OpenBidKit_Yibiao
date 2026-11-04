@@ -1,5 +1,7 @@
 using System.Text;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
+using Wp = DocumentFormat.OpenXml.Wordprocessing;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Rules;
@@ -97,7 +99,7 @@ static class TextFixes
                     var value = builder.ToString();
                     if (value != piece)
                     {
-                        if (value.Length == 0) child.Remove();
+                        if (value.Length == 0) WordStructure.Remove(child);
                         else PropertyWriter.SetTextValue(child, value);
                         runChanged = true;
                     }
@@ -116,10 +118,10 @@ static class TextFixes
     /// 把段落渲染文字中 [start, start + length) 的字符换成 value：value 写进范围开头所在的 w:t，其余字符删除，删空的 w:t 和文本块一并去掉。
     /// 范围里有制表符、符号等非 w:t 内容时不改，返回 false。
     /// </summary>
-    public static bool ReplaceRange(XElement paragraph, int start, int length, string value)
+    public static bool ReplaceRange(OpenXmlElement paragraph, int start, int length, string value)
     {
         var offset = 0;
-        var pieces = new List<(XElement Element, int Start)>();
+        var pieces = new List<(OpenXmlElement Element, int Start)>();
         foreach (var run in DocumentModel.RenderedRuns(paragraph))
         {
             foreach (var child in run.Elements())
@@ -143,7 +145,7 @@ static class TextFixes
             }
 
             var run = element.Parent;
-            element.Remove();
+            WordStructure.Remove(element);
             PropertyWriter.RemoveIfEmptyRun(run);
         }
 
@@ -151,14 +153,14 @@ static class TextFixes
     }
 
     /// <summary>手动换行：软回车 w:br（分页符、分栏符除外）、w:cr，以及 w:t 里夹带的换行字符，返回所含的换行数。</summary>
-    static int LineBreaks(XElement child)
+    static int LineBreaks(OpenXmlElement child)
     {
         if (child.Name == W.T) return child.Value.Count(item => item == '\n');
         return (child.Name == W.Br && W.Attr(child, "type") is null or "textWrapping") || child.Name == W.Cr ? 1 : 0;
     }
 
     /// <summary>去掉拆出的新段开头的空格：缩进由段落格式负责，换行后手打的空格留着会多缩进。</summary>
-    static void TrimLeadingSpaces(XElement paragraph)
+    static void TrimLeadingSpaces(OpenXmlElement paragraph)
     {
         foreach (var text in DocumentModel.RenderedRuns(paragraph).SelectMany(run => run.Elements(W.T)).ToList())
         {
@@ -170,14 +172,14 @@ static class TextFixes
             }
 
             var run = text.Parent;
-            text.Remove();
+            WordStructure.Remove(text);
             PropertyWriter.RemoveIfEmptyRun(run);
         }
     }
 
-    static bool Visible(IEnumerable<XNode> nodes)
+    static bool Visible(IEnumerable<OpenXmlElement> nodes)
     {
-        return nodes.OfType<XElement>().SelectMany(element => element.DescendantsAndSelf()).Any(item =>
+        return nodes.OfType<OpenXmlElement>().SelectMany(element => element.DescendantsAndSelf()).Any(item =>
             (item.Name == W.T && item.Value.Trim().Length > 0) || item.Name == W.Drawing || item.Name == W.Pict || item.Name == W.Object || item.Name == W.Sym
             || (item.Name.Namespace == W.Mc && item.Name.LocalName == "AlternateContent"));
     }
@@ -196,7 +198,7 @@ static class TextFixes
         {
             var paragraph = record.Element;
             var direct = paragraph.Elements(W.R_).Sum(run => run.Elements().Sum(LineBreaks));
-            if (paragraph.Parent is null || direct == 0) continue;
+            if (!WordStructure.IsAttached(paragraph) || direct == 0) continue;
             var pPr = paragraph.Element(W.PPr);
             if (direct != DocumentModel.RenderedRuns(paragraph).Sum(run => run.Elements().Sum(LineBreaks))
                 || fix.Rules.HeadingLevel(record) is not null || StructureFixes.HasNumbering(fix, record)
@@ -206,18 +208,25 @@ static class TextFixes
                 continue;
             }
 
-            var segments = new List<List<XNode>> { new() };
-            foreach (var node in paragraph.Nodes().Where(node => node != pPr).ToList())
+            // 段内元素全部摘下（经结构层移动，书签等标记随元素走），按换行分成片段后重新装进原段落和拆出的新段落。
+            var segments = new List<List<OpenXmlElement>> { new() };
+            foreach (var node in paragraph.Elements().Where(node => node != pPr).ToList())
             {
-                node.Remove();
-                if (node is not XElement run || run.Name != W.R_ || !run.Elements().Any(child => LineBreaks(child) > 0))
+                WordStructure.Detach(node);
+                if (node is not OpenXmlElement run || run.Name != W.R_ || !run.Elements().Any(child => LineBreaks(child) > 0))
                 {
                     segments[^1].Add(node);
                     continue;
                 }
 
                 var rPr = run.Element(W.RPr);
-                XElement NewRun() => new(W.R_, run.Attributes(), rPr is null ? null : new XElement(rPr));
+                OpenXmlElement NewRun()
+                {
+                    var created = run.CloneNode(false);
+                    if (rPr is not null) created.AppendChild(rPr.CloneNode(true));
+                    return created;
+                }
+
                 var piece = NewRun();
                 void Flush()
                 {
@@ -227,7 +236,7 @@ static class TextFixes
 
                 foreach (var child in run.Elements().Where(item => item != rPr).ToList())
                 {
-                    child.Remove();
+                    WordStructure.Detach(child);
                     if (child.Name != W.T && LineBreaks(child) > 0)
                     {
                         Flush();
@@ -245,14 +254,14 @@ static class TextFixes
                             }
 
                             if (lines[index].Length == 0) continue;
-                            var text = new XElement(W.T);
+                            var text = new Wp.Text();
                             PropertyWriter.SetTextValue(text, lines[index]);
-                            piece.Add(text);
+                            piece.AppendChild(text);
                         }
                     }
                     else
                     {
-                        piece.Add(child);
+                        piece.AppendChild(child);
                     }
                 }
 
@@ -260,8 +269,8 @@ static class TextFixes
             }
 
             // 没有可见内容的片段（连续换行、段尾换行留下的空行）并进前一段，书签等标记不丢。
-            var kept = new List<List<XNode>>();
-            var leading = new List<XNode>();
+            var kept = new List<List<OpenXmlElement>>();
+            var leading = new List<OpenXmlElement>();
             foreach (var segment in segments)
             {
                 if (!Visible(segment))
@@ -276,22 +285,27 @@ static class TextFixes
             }
 
             if (kept.Count == 0) kept.Add(leading);
-            paragraph.Add(kept[0]);
+            paragraph.Append(kept[0]);
             var previous = paragraph;
             for (var index = 1; index < kept.Count; index += 1)
             {
-                var properties = pPr is null ? null : new XElement(pPr);
-                if (index < kept.Count - 1) properties?.Element(W.SectPr)?.Remove();
-                var next = new XElement(W.P, properties, kept[index]);
+                var next = new Wp.Paragraph();
+                if (pPr is not null)
+                {
+                    var properties = next.AppendChild(pPr.CloneNode(true));
+                    if (index < kept.Count - 1 && properties.Element(W.SectPr) is { } copiedSection) WordStructure.Remove(copiedSection);
+                }
+
+                next.Append(kept[index]);
                 // 段前分页可能来自样式，新段写显式关闭值才关得掉。
                 if (record.Format.PageBreakBefore) PropertyWriter.SetParagraphToggle(next, "pageBreakBefore", false);
-                previous.AddAfterSelf(next);
+                previous.InsertAfterSelf(next);
                 TrimLeadingSpaces(next);
                 previous = next;
             }
 
             // 分节符属于原段落的最后一行，留在拆出的最后一段。
-            if (kept.Count > 1) pPr?.Element(W.SectPr)?.Remove();
+            if (kept.Count > 1 && pPr?.Element(W.SectPr) is { } section) WordStructure.Remove(section);
             count += direct;
             fix.Touch(record);
         }

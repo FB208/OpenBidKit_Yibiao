@@ -2,7 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Model;
 
@@ -437,9 +437,31 @@ static class ImageFormats
         info.IsVector = true;
         using var stream = new MemoryStream(data);
         using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null });
-        var document = XDocument.Load(reader);
-        var text = string.Concat(document.Descendants().Where(item => item.Name.LocalName == "text").Select(item => item.Value));
-        info.VectorText = CleanVectorText(text);
+        info.VectorText = CleanVectorText(SvgText(reader));
+    }
+
+    /// <summary>全部 text 元素里的文字（含 tspan 等子元素），不含元素之间仅用于排版的空白。</summary>
+    static string SvgText(XmlReader reader)
+    {
+        var builder = new StringBuilder();
+        var depth = 0;
+        while (reader.Read())
+        {
+            switch (reader.NodeType)
+            {
+                case XmlNodeType.Element when reader.LocalName == "text" && !reader.IsEmptyElement:
+                    depth += 1;
+                    break;
+                case XmlNodeType.EndElement when reader.LocalName == "text" && depth > 0:
+                    depth -= 1;
+                    break;
+                case XmlNodeType.Text or XmlNodeType.CDATA or XmlNodeType.SignificantWhitespace when depth > 0:
+                    builder.Append(reader.Value);
+                    break;
+            }
+        }
+
+        return builder.ToString();
     }
 
     static string CleanVectorText(string text)

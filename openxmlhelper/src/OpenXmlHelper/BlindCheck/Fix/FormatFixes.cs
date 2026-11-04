@@ -1,3 +1,4 @@
+using Yibiao.OpenXmlHelper.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using static Yibiao.OpenXmlHelper.BlindCheck.Fix.PropertyWriter;
@@ -159,11 +160,7 @@ static class FormatFixes
     /// </summary>
     static void DeleteHiddenContent(RunRecord run)
     {
-        foreach (var child in run.Element.Elements().ToList())
-        {
-            if (child.Name == W.RPr || child.Name == W.FldChar || child.Name == W.InstrText) continue;
-            child.Remove();
-        }
+        WordStructure.RemoveRange(run.Element.Elements().Where(child => child.Name != W.RPr && child.Name != W.FldChar && child.Name != W.InstrText).ToList());
 
         RemoveIfEmptyRun(run.Element);
     }

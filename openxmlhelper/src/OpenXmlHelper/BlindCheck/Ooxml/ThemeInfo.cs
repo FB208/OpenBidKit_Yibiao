@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -29,7 +29,7 @@ sealed class ThemeInfo
     readonly Dictionary<string, string> _fonts = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _colors = new(StringComparer.Ordinal);
 
-    public static ThemeInfo Parse(XDocument? document)
+    public static ThemeInfo Parse(PartXml? document)
     {
         var theme = new ThemeInfo();
         var root = document?.Root;
@@ -59,7 +59,7 @@ sealed class ThemeInfo
         return theme;
     }
 
-    void ReadFontBlock(string prefix, XElement? block)
+    void ReadFontBlock(string prefix, OpenXmlElement? block)
     {
         if (block is null) return;
         var latin = block.Element(W.A + "latin")?.Attribute("typeface")?.Value;

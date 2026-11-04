@@ -1,4 +1,5 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -7,19 +8,19 @@ namespace Yibiao.OpenXmlHelper.BlindCheck.Fix;
 /// <summary>一个域：简单域是 w:fldSimple；复杂域由 begin / separate / end 三个 fldChar 和中间的文本块组成。</summary>
 sealed class FieldInstance
 {
-    public XElement? Simple { get; init; }
+    public OpenXmlElement? Simple { get; init; }
     public string Instruction { get; set; } = "";
     public string Kind { get; set; } = "unknown";
-    public List<XElement> Runs { get; } = [];
-    public List<XElement> Markers { get; } = [];
-    public List<XElement> InstructionTexts { get; } = [];
+    public List<OpenXmlElement> Runs { get; } = [];
+    public List<OpenXmlElement> Markers { get; } = [];
+    public List<OpenXmlElement> InstructionTexts { get; } = [];
     public bool InResult { get; set; }
 }
 
 /// <summary>在文本块层面定位域，支持整个删除（连同显示结果）或取消域、保留显示结果。</summary>
 static class FieldEditor
 {
-    public static List<FieldInstance> Collect(XElement root)
+    public static List<FieldInstance> Collect(OpenXmlElement root)
     {
         var fields = new List<FieldInstance>();
         var stack = new List<FieldInstance>();
@@ -79,12 +80,15 @@ static class FieldEditor
     {
         if (field.Simple is not null)
         {
-            if (field.Simple.Parent is not null) field.Simple.Remove();
+            if (field.Simple.Parent is not null) WordStructure.Remove(field.Simple);
             return;
         }
 
+        // 一次整批交给结构层：整个域的标记一起删除，不会被当成“只删了一半的域”去降级剩余部分。
         var begin = field.Markers[0];
         var end = field.Markers[^1];
+        var removed = new List<OpenXmlElement>();
+        var partial = new List<OpenXmlElement>();
         foreach (var run in field.Runs)
         {
             if (run.Parent is null) continue;
@@ -92,7 +96,7 @@ static class FieldEditor
             var hasEnd = end.Parent == run;
             if (!hasBegin && !hasEnd)
             {
-                run.Remove();
+                removed.Add(run);
                 continue;
             }
 
@@ -101,11 +105,14 @@ static class FieldEditor
             var to = hasEnd ? children.IndexOf(end) : children.Count - 1;
             for (var index = from; index <= to; index += 1)
             {
-                if (children[index].Name != W.RPr) children[index].Remove();
+                if (children[index].Name != W.RPr) removed.Add(children[index]);
             }
 
-            PropertyWriter.RemoveIfEmptyRun(run);
+            partial.Add(run);
         }
+
+        WordStructure.RemoveRange(removed);
+        partial.ForEach(PropertyWriter.RemoveIfEmptyRun);
     }
 
     /// <summary>取消域：去掉域标记和指令，保留显示结果的文字。</summary>
@@ -113,19 +120,16 @@ static class FieldEditor
     {
         if (field.Simple is not null)
         {
-            StructureFixes.Unwrap(field.Simple);
+            WordStructure.Unwrap(field.Simple);
             return;
         }
 
-        foreach (var element in field.Markers.Concat(field.InstructionTexts))
-        {
-            if (element.Parent is not null) element.Remove();
-        }
+        WordStructure.RemoveRange(field.Markers.Concat(field.InstructionTexts).Where(element => element.Parent is not null).ToList());
 
         foreach (var run in field.Runs) PropertyWriter.RemoveIfEmptyRun(run);
     }
 
-    public static IEnumerable<XElement> ResultRuns(FieldInstance field)
+    public static IEnumerable<OpenXmlElement> ResultRuns(FieldInstance field)
     {
         if (field.Simple is not null) return field.Simple.Elements(W.R_);
         return field.Runs.Where(run => run.Parent is not null && run.Element(W.FldChar) is null && run.Element(W.InstrText) is null);

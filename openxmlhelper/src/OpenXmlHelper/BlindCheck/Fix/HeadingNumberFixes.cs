@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Rules;
@@ -53,7 +53,7 @@ static class HeadingNumberFixes
     }
 
     /// <summary>把段落开头的手写序号换成 replacement（空串即删去），序号后的空格一并去掉；开头不是这个序号时不改。</summary>
-    static bool ReplacePrefix(XElement paragraph, string prefix, string replacement)
+    static bool ReplacePrefix(OpenXmlElement paragraph, string prefix, string replacement)
     {
         var text = DocumentModel.ParagraphText(paragraph);
         var start = text.Length - text.TrimStart(' ', '　', '\t').Length;

@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Model;
@@ -8,9 +8,9 @@ sealed record TocEntry(int Level, string Text, string Normalized);
 
 sealed class TocInfo
 {
-    public HashSet<XElement> Paragraphs { get; } = new(ReferenceEqualityComparer.Instance);
+    public HashSet<OpenXmlElement> Paragraphs { get; } = new(ReferenceEqualityComparer.Instance);
     /// <summary>域外按目录样式认出的目录段落（目录转成纯文本后剩下的），修复删除目录时按同一标准。</summary>
-    public HashSet<XElement> Styled { get; } = new(ReferenceEqualityComparer.Instance);
+    public HashSet<OpenXmlElement> Styled { get; } = new(ReferenceEqualityComparer.Instance);
     public List<TocEntry> Entries { get; } = [];
     public bool HasToc { get; set; }
     public bool HasField { get; set; }
@@ -20,16 +20,16 @@ sealed class TocInfo
 sealed class Outline
 {
     public TocInfo Toc { get; init; } = new();
-    public Dictionary<XElement, int> Levels { get; } = new(ReferenceEqualityComparer.Instance);
+    public Dictionary<OpenXmlElement, int> Levels { get; } = new(ReferenceEqualityComparer.Instance);
     public Dictionary<string, int> SourceCounts { get; } = new(StringComparer.Ordinal);
     /// <summary>每个标题的级别来源：toc / style / pattern。编号兜底的级别只是名义级别，不能用于层级比较。</summary>
-    public Dictionary<XElement, string> Sources { get; } = new(ReferenceEqualityComparer.Instance);
+    public Dictionary<OpenXmlElement, string> Sources { get; } = new(ReferenceEqualityComparer.Instance);
 
-    public int? LevelOf(XElement paragraph) => Levels.TryGetValue(paragraph, out var level) ? level : null;
+    public int? LevelOf(OpenXmlElement paragraph) => Levels.TryGetValue(paragraph, out var level) ? level : null;
 
-    public string? SourceOf(XElement paragraph) => Sources.GetValueOrDefault(paragraph);
+    public string? SourceOf(OpenXmlElement paragraph) => Sources.GetValueOrDefault(paragraph);
 
-    public bool IsToc(XElement paragraph) => Toc.Paragraphs.Contains(paragraph);
+    public bool IsToc(OpenXmlElement paragraph) => Toc.Paragraphs.Contains(paragraph);
 
     /// <summary>标题按目录认定（目录有 3 条以上条目）；此时不按编号兜底。</summary>
     public bool UsedToc { get; init; }
@@ -237,7 +237,7 @@ static class OutlineAnalyzer
     {
         var info = new TocInfo();
         var paragraphs = model.BodyElement.Descendants(W.P).ToList();
-        var position = new Dictionary<XElement, int>(ReferenceEqualityComparer.Instance);
+        var position = new Dictionary<OpenXmlElement, int>(ReferenceEqualityComparer.Instance);
         for (var index = 0; index < paragraphs.Count; index += 1) position[paragraphs[index]] = index;
 
         foreach (var field in FieldScanner.Scan(model.BodyElement).Where(item => item.Kind == "toc"))
@@ -255,7 +255,7 @@ static class OutlineAnalyzer
             }
         }
 
-        var inField = new HashSet<XElement>(info.Paragraphs, ReferenceEqualityComparer.Instance);
+        var inField = new HashSet<OpenXmlElement>(info.Paragraphs, ReferenceEqualityComparer.Instance);
         info.Styled.UnionWith(StyledToc(model, paragraphs, inField));
         foreach (var paragraph in paragraphs)
         {
@@ -290,9 +290,9 @@ static class OutlineAnalyzer
         return info;
     }
 
-    static string TextOf(DocumentModel model, XElement paragraph) => model.Records.TryGetValue(paragraph, out var record) ? record.Text : DocumentModel.ParagraphText(paragraph);
+    static string TextOf(DocumentModel model, OpenXmlElement paragraph) => model.Records.TryGetValue(paragraph, out var record) ? record.Text : DocumentModel.ParagraphText(paragraph);
 
-    static int? TocLevelOfStyle(DocumentModel model, XElement paragraph)
+    static int? TocLevelOfStyle(DocumentModel model, OpenXmlElement paragraph)
     {
         var styleId = W.ValOf(paragraph.Element(W.PPr)?.Element(W.PStyle));
         return TocLevelOfStyle(styleId is null ? null : model.Sheet.ById.GetValueOrDefault(styleId)?.DisplayName, styleId);
@@ -302,9 +302,9 @@ static class OutlineAnalyzer
     /// 域外套用目录样式的段落：成片出现，且前面有目录标题或过半以页码结尾才算目录（目录转成纯文本后的样子）；
     /// 正文里偶然套用目录样式、没有页码的段落不算。
     /// </summary>
-    static HashSet<XElement> StyledToc(DocumentModel model, List<XElement> paragraphs, HashSet<XElement> inField)
+    static HashSet<OpenXmlElement> StyledToc(DocumentModel model, List<OpenXmlElement> paragraphs, HashSet<OpenXmlElement> inField)
     {
-        var result = new HashSet<XElement>(ReferenceEqualityComparer.Instance);
+        var result = new HashSet<OpenXmlElement>(ReferenceEqualityComparer.Instance);
         bool Member(int index) => paragraphs[index].Parent?.Name != W.Tc && !inField.Contains(paragraphs[index]) && TocLevelOfStyle(model, paragraphs[index]) is not null;
         for (var index = 0; index < paragraphs.Count; index += 1)
         {
@@ -321,7 +321,7 @@ static class OutlineAnalyzer
     }
 
     /// <summary>前面最近的非空段落（中间最多隔两个空段落）是目录标题。</summary>
-    static bool TitledBefore(DocumentModel model, List<XElement> paragraphs, int start)
+    static bool TitledBefore(DocumentModel model, List<OpenXmlElement> paragraphs, int start)
     {
         for (var index = start - 1; index >= 0 && index >= start - 3; index -= 1)
         {
@@ -335,7 +335,7 @@ static class OutlineAnalyzer
     }
 
     /// <summary>段落里的文字全在域外（域开始之前或结束之后），域里没有文字。</summary>
-    static bool OnlyOutside(XElement paragraph, FieldSpan field)
+    static bool OnlyOutside(OpenXmlElement paragraph, FieldSpan field)
     {
         var inside = false;
         var outside = false;
@@ -372,18 +372,18 @@ static class OutlineAnalyzer
 sealed class FieldSpan
 {
     public string Kind { get; set; } = "unknown";
-    public XElement? Begin { get; init; }
-    public XElement? End { get; set; }
+    public OpenXmlElement? Begin { get; init; }
+    public OpenXmlElement? End { get; set; }
     /// <summary>开始和结束标记（复杂域的 begin / end fldChar，简单域是 fldSimple 本身）。</summary>
-    public XElement? BeginMarker { get; init; }
-    public XElement? EndMarker { get; set; }
+    public OpenXmlElement? BeginMarker { get; init; }
+    public OpenXmlElement? EndMarker { get; set; }
     public string Instruction { get; set; } = "";
 }
 
 /// <summary>按 fldChar begin/separate/end 配对扫描复杂域，并收集 instrText 指令。</summary>
 static class FieldScanner
 {
-    public static List<FieldSpan> Scan(XElement root)
+    public static List<FieldSpan> Scan(OpenXmlElement root)
     {
         var fields = new List<FieldSpan>();
         var stack = new Stack<FieldSpan>();
@@ -420,7 +420,7 @@ static class FieldScanner
         return fields;
     }
 
-    static XElement? OwningParagraph(XElement element) => element.Ancestors(W.P).FirstOrDefault();
+    static OpenXmlElement? OwningParagraph(OpenXmlElement element) => element.Ancestors(W.P).FirstOrDefault();
 
     public static string Classify(string instruction)
     {

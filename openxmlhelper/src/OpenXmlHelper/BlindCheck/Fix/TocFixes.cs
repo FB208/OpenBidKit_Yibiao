@@ -1,4 +1,6 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
+using Wp = DocumentFormat.OpenXml.Wordprocessing;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -12,18 +14,15 @@ namespace Yibiao.OpenXmlHelper.BlindCheck.Fix;
 /// </summary>
 static class TocFixes
 {
-    static readonly XName PageBreakBefore = W.Ns + "pageBreakBefore";
-    static readonly XName DocPartGallery = W.Ns + "docPartGallery";
-    static readonly XName SdtPr = W.Ns + "sdtPr";
-    static readonly XName PPrChange = W.Ns + "pPrChange";
-    static readonly XName BookmarkStart = W.Ns + "bookmarkStart";
-    static readonly XName BookmarkEnd = W.Ns + "bookmarkEnd";
+    static readonly WName PageBreakBefore = W.Ns + "pageBreakBefore";
+    static readonly WName DocPartGallery = W.Ns + "docPartGallery";
+    static readonly WName SdtPr = W.Ns + "sdtPr";
 
     /// <summary>
     /// 一处目录删除后的接缝：目录前面最近的内容块（没有时为文档开头）、原来前后内容之间是否换页，
     /// 以及原来和目录同页的空段落（目录删掉后会挪到封面末尾或正文开头，变成多余的空行）。
     /// </summary>
-    sealed record Seam(XElement? Before, bool NeedsBreak, List<XElement> Strays);
+    sealed record Seam(OpenXmlElement? Before, bool NeedsBreak, List<OpenXmlElement> Strays);
 
     public static int Fix(FixContext fix)
     {
@@ -32,11 +31,11 @@ static class TocFixes
         var toc = fix.Rules.Outline.Toc;
         var body = model.BodyElement;
         var blocks = Blocks(body);
-        var position = new Dictionary<XElement, int>(ReferenceEqualityComparer.Instance);
+        var position = new Dictionary<OpenXmlElement, int>(ReferenceEqualityComparer.Instance);
         for (var index = 0; index < blocks.Count; index += 1) position[blocks[index]] = index;
 
         var fields = FieldEditor.Collect(body).Where(field => field.Kind == "toc").ToList();
-        var spanned = new HashSet<XElement>(ReferenceEqualityComparer.Instance);
+        var spanned = new HashSet<OpenXmlElement>(ReferenceEqualityComparer.Instance);
         foreach (var field in fields)
         {
             var first = TopIndex(field.Simple ?? field.Markers[0], position);
@@ -49,7 +48,7 @@ static class TocFixes
         }
 
         // 整段清掉的段落：域外的目录样式条目、目录标题、手工目录的各行。
-        var removed = new HashSet<XElement>(toc.Styled.Where(item => position.ContainsKey(item) && !spanned.Contains(item)), ReferenceEqualityComparer.Instance);
+        var removed = new HashSet<OpenXmlElement>(toc.Styled.Where(item => position.ContainsKey(item) && !spanned.Contains(item)), ReferenceEqualityComparer.Instance);
         var ranges = new List<(int From, int End)>();
         foreach (var (start, end) in Regions(blocks, block => spanned.Contains(block) || removed.Contains(block)))
         {
@@ -89,16 +88,16 @@ static class TocFixes
         var seams =ranges.OrderBy(item => item.From).Select(item => MakeSeam(model, blocks, item.From, item.End)).ToList();
         var tablePairs = AdjacentTables(body);
         var endsWithTable = LastBlock(body)?.Name == W.Tbl;
-        var sdts = new HashSet<XElement>(ReferenceEqualityComparer.Instance);
+        var sdts = new HashSet<OpenXmlElement>(ReferenceEqualityComparer.Instance);
         fields.ForEach(FieldEditor.DeleteWhole);
         foreach (var paragraph in spanned.Concat(removed))
         {
-            if (paragraph.Parent is null) continue;
+            if (!WordStructure.IsAttached(paragraph)) continue;
             sdts.UnionWith(paragraph.Ancestors(W.Sdt));
             // 域可能结束在下一个标题里：域外还有正文的段落保留，只清掉空的超链接外壳。
             if (!removed.Contains(paragraph) && Visible(paragraph) && !IsTitle(model, paragraph))
             {
-                paragraph.Elements(W.Hyperlink).Where(link => !link.Descendants(W.R_).Any()).ToList().ForEach(link => link.Remove());
+                WordStructure.RemoveRange(paragraph.Elements(W.Hyperlink).Where(link => !link.Descendants(W.R_).Any()).ToList());
                 continue;
             }
 
@@ -113,13 +112,13 @@ static class TocFixes
     }
 
     /// <summary>正文顶层的段落和表格，内容控件、自定义 XML 里的展开（与检查模型的正文块一致）。</summary>
-    static List<XElement> Blocks(XElement body)
+    static List<OpenXmlElement> Blocks(OpenXmlElement body)
     {
-        var blocks = new List<XElement>();
+        var blocks = new List<OpenXmlElement>();
         Collect(body);
         return blocks;
 
-        void Collect(XElement parent)
+        void Collect(OpenXmlElement parent)
         {
             foreach (var child in parent.Elements())
             {
@@ -131,31 +130,31 @@ static class TocFixes
     }
 
     /// <summary>元素所在的正文顶层段落序号；在表格单元格里时返回 null。</summary>
-    static int? TopIndex(XElement element, Dictionary<XElement, int> position)
+    static int? TopIndex(OpenXmlElement element, Dictionary<OpenXmlElement, int> position)
     {
         var paragraph = element.AncestorsAndSelf(W.P).LastOrDefault();
         return paragraph is not null && position.TryGetValue(paragraph, out var index) ? index : null;
     }
 
-    static string? StyleName(DocumentModel model, XElement paragraph, out string? styleId)
+    static string? StyleName(DocumentModel model, OpenXmlElement paragraph, out string? styleId)
     {
         styleId = W.ValOf(paragraph.Element(W.PPr)?.Element(W.PStyle));
         return styleId is null ? null : model.Sheet.ById.GetValueOrDefault(styleId)?.DisplayName;
     }
 
-    static bool IsTocStyle(DocumentModel model, XElement paragraph)
+    static bool IsTocStyle(DocumentModel model, OpenXmlElement paragraph)
     {
         var name = StyleName(model, paragraph, out var styleId);
         return OutlineAnalyzer.TocLevelOfStyle(name, styleId) is not null;
     }
 
-    static bool IsTitle(DocumentModel model, XElement paragraph)
+    static bool IsTitle(DocumentModel model, OpenXmlElement paragraph)
     {
         var name = StyleName(model, paragraph, out var styleId);
         return OutlineAnalyzer.IsTocTitleStyle(name, styleId) || OutlineAnalyzer.IsTocTitle(DocumentModel.ParagraphText(paragraph));
     }
 
-    static List<(int Start, int End)> Regions(List<XElement> blocks, Func<XElement, bool> member)
+    static List<(int Start, int End)> Regions(List<OpenXmlElement> blocks, Func<OpenXmlElement, bool> member)
     {
         var regions = new List<(int, int)>();
         for (var index = 0; index < blocks.Count; index += 1)
@@ -170,7 +169,7 @@ static class TocFixes
     }
 
     /// <summary>目录前面单独一行的目录标题，中间最多隔两个空段落。</summary>
-    static XElement? FindTitle(DocumentModel model, List<XElement> blocks, int start)
+    static OpenXmlElement? FindTitle(DocumentModel model, List<OpenXmlElement> blocks, int start)
     {
         for (var index = start - 1; index >= 0 && index >= start - 3; index -= 1)
         {
@@ -187,7 +186,7 @@ static class TocFixes
     /// 手工目录：一行"××目录"标题，下面连续 3 行以上，每行去掉点导引和页码后都与后文某段文字相同（行间可隔空段落）。
     /// 至少一行是检查认出的目录段落时才删，与检查口径一致；没有目录标题的不删。
     /// </summary>
-    static List<(XElement Title, List<XElement> Lines)> ManualTocs(DocumentModel model, TocInfo toc, List<XElement> blocks, Func<XElement, bool> handled)
+    static List<(OpenXmlElement Title, List<OpenXmlElement> Lines)> ManualTocs(DocumentModel model, TocInfo toc, List<OpenXmlElement> blocks, Func<OpenXmlElement, bool> handled)
     {
         var texts = blocks.Select(block => block.Name == W.P ? DocumentModel.ParagraphText(block) : "").ToList();
         var lastIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -197,12 +196,12 @@ static class TocFixes
             if (normalized.Length > 0) lastIndex[normalized] = index;
         }
 
-        var result = new List<(XElement, List<XElement>)>();
+        var result = new List<(OpenXmlElement, List<OpenXmlElement>)>();
         for (var index = 0; index < blocks.Count; index += 1)
         {
             if (blocks[index].Name != W.P || handled(blocks[index]) || !IsTitle(model, blocks[index])) continue;
-            var lines = new List<XElement>();
-            var pending = new List<XElement>();
+            var lines = new List<OpenXmlElement>();
+            var pending = new List<OpenXmlElement>();
             var count = 0;
             var cursor = index + 1;
             for (; cursor < blocks.Count; cursor += 1)
@@ -232,7 +231,7 @@ static class TocFixes
         return result;
     }
 
-    static Seam MakeSeam(DocumentModel model, List<XElement> blocks, int from, int end)
+    static Seam MakeSeam(DocumentModel model, List<OpenXmlElement> blocks, int from, int end)
     {
         var before = from - 1;
         while (before >= 0 && IsGap(blocks[before])) before -= 1;
@@ -262,15 +261,15 @@ static class TocFixes
     /// 和目录同页的空段落：目录前面到上一处换页之间、目录后面到下一处换页之间的空段落（没有分页符和分节符）。
     /// 目录和前后内容在同一页（中间没有换页）时，那一侧的空段落是正常的间隔，不算。
     /// </summary>
-    static List<XElement> Strays(DocumentModel model, List<XElement> blocks, int from, int end, int before, int after)
+    static List<OpenXmlElement> Strays(DocumentModel model, List<OpenXmlElement> blocks, int from, int end, int before, int after)
     {
-        var strays = new List<XElement>();
-        bool Separator(XElement block) => HasPageBreak(block) || PageSection(block);
+        var strays = new List<OpenXmlElement>();
+        bool Separator(OpenXmlElement block) => HasPageBreak(block) || PageSection(block);
 
         // 目录本身以段前分页开始时，前面的空段落在上一页，不算。
         if (!BreaksBefore(model, blocks[from]))
         {
-            var side = new List<XElement>();
+            var side = new List<OpenXmlElement>();
             var index = from - 1;
             for (; index > before; index -= 1)
             {
@@ -286,7 +285,7 @@ static class TocFixes
             if (paged) strays.AddRange(side);
         }
 
-        var tail = new List<XElement>();
+        var tail = new List<OpenXmlElement>();
         var cursor = end + 1;
         var ended = false;
         for (; cursor < after; cursor += 1)
@@ -300,7 +299,7 @@ static class TocFixes
         return strays;
     }
 
-    static bool IsVisibleElement(XElement element)
+    static bool IsVisibleElement(OpenXmlElement element)
     {
         if (element.Name == W.T) return element.Value.Trim().Length > 0;
         if (element.Name == W.Tab || element.Name == W.Sym) return element.Parent?.Name == W.R_;
@@ -309,24 +308,24 @@ static class TocFixes
     }
 
     /// <summary>段落里有可见内容：文字、图片、对象、制表符、换行或域。分页符不算。</summary>
-    internal static bool Visible(XElement paragraph) => paragraph.Descendants().Any(IsVisibleElement);
+    internal static bool Visible(OpenXmlElement paragraph) => paragraph.Descendants().Any(IsVisibleElement);
 
     /// <summary>接缝里的段落：没有可见内容，只可能带分页符或分节符。</summary>
-    static bool IsGap(XElement block) => block.Name == W.P && !Visible(block);
+    static bool IsGap(OpenXmlElement block) => block.Name == W.P && !Visible(block);
 
-    internal static XElement? SectionOf(XElement paragraph) => paragraph.Element(W.PPr)?.Element(W.SectPr);
+    internal static OpenXmlElement? SectionOf(OpenXmlElement paragraph) => paragraph.Element(W.PPr)?.Element(W.SectPr);
 
     /// <summary>带分节符且新节另起一页（连续分节不换页）。</summary>
-    static bool PageSection(XElement paragraph)
+    static bool PageSection(OpenXmlElement paragraph)
     {
         var section = SectionOf(paragraph);
         return section is not null && W.ValOf(section.Element(W.Type)) != "continuous";
     }
 
-    static bool HasPageBreak(XElement paragraph) => paragraph.Descendants(W.Br).Any(item => W.Attr(item, "type") == "page" && !item.Ancestors(W.TxbxContent).Any());
+    static bool HasPageBreak(OpenXmlElement paragraph) => paragraph.Descendants(W.Br).Any(item => W.Attr(item, "type") == "page" && !item.Ancestors(W.TxbxContent).Any());
 
     /// <summary>段落设置了段前分页（直接设置或来自样式）。</summary>
-    internal static bool BreaksBefore(DocumentModel model, XElement paragraph)
+    internal static bool BreaksBefore(DocumentModel model, OpenXmlElement paragraph)
     {
         var direct = paragraph.Element(W.PPr)?.Element(PageBreakBefore);
         if (direct is not null) return W.OnOff(direct) ?? true;
@@ -335,12 +334,12 @@ static class TocFixes
     }
 
     /// <summary>找分页符位置时的内容：可见内容里去掉域标记（域结果的文字仍算）。</summary>
-    static bool IsContent(XElement element) => element.Name != W.FldChar && IsVisibleElement(element);
+    static bool IsContent(OpenXmlElement element) => element.Name != W.FldChar && IsVisibleElement(element);
 
     /// <summary>段末的分页符：最后一处内容之后的分页符。</summary>
-    internal static List<XElement> TrailingBreaks(XElement paragraph)
+    internal static List<OpenXmlElement> TrailingBreaks(OpenXmlElement paragraph)
     {
-        var breaks = new List<XElement>();
+        var breaks = new List<OpenXmlElement>();
         foreach (var element in paragraph.Descendants().Reverse())
         {
             if (element.Name == W.Br && W.Attr(element, "type") == "page") breaks.Add(element);
@@ -351,9 +350,9 @@ static class TocFixes
     }
 
     /// <summary>段首的分页符：第一处内容之前的分页符（例如目录域结束后紧跟分页符和标题文字）。</summary>
-    internal static List<XElement> LeadingBreaks(XElement paragraph)
+    internal static List<OpenXmlElement> LeadingBreaks(OpenXmlElement paragraph)
     {
-        var breaks = new List<XElement>();
+        var breaks = new List<OpenXmlElement>();
         foreach (var element in paragraph.Descendants())
         {
             if (element.Name == W.Br && W.Attr(element, "type") == "page") breaks.Add(element);
@@ -363,35 +362,27 @@ static class TocFixes
         return breaks;
     }
 
-    static void RemoveBreaks(IEnumerable<XElement> breaks)
+    static void RemoveBreaks(IEnumerable<OpenXmlElement> breaks)
     {
         foreach (var item in breaks.ToList())
         {
             var run = item.Parent;
-            item.Remove();
+            WordStructure.Remove(item);
             PropertyWriter.RemoveIfEmptyRun(run);
         }
     }
 
-    /// <summary>删除段落；段内书签的另一端一起删掉，避免留下不成对的书签。</summary>
-    static void DeleteParagraph(XElement paragraph)
-    {
-        var root = paragraph.Document?.Root;
-        foreach (var mark in paragraph.Descendants().Where(item => item.Name == BookmarkStart || item.Name == BookmarkEnd).ToList())
-        {
-            var id = W.Attr(mark, "id");
-            var other = mark.Name == BookmarkStart ? BookmarkEnd : BookmarkStart;
-            root?.Descendants(other).Where(item => W.Attr(item, "id") == id && !item.Ancestors().Contains(paragraph)).ToList().ForEach(item => item.Remove());
-        }
+    /// <summary>删除段落（经结构层）：段内的书签、批注范围按结构规则移到相邻段落，不会只剩一半。</summary>
+    static void DeleteParagraph(OpenXmlElement paragraph) => WordStructure.Remove(paragraph);
 
-        paragraph.Remove();
-    }
+    /// <summary>只含一个分页符的文本块。</summary>
+    internal static Wp.Run PageBreakRun() => new(new Wp.Break { Type = Wp.BreakValues.Page });
 
     /// <summary>
     /// 清掉目录段落：带分节符或分页符的段落只留段落属性和分页符（去掉目录样式和段前分页），交给接缝整理决定去留；
     /// 其余整段删除。
     /// </summary>
-    static void Vacate(DocumentModel model, XElement paragraph)
+    static void Vacate(DocumentModel model, OpenXmlElement paragraph)
     {
         if (SectionOf(paragraph) is null && !HasPageBreak(paragraph))
         {
@@ -400,16 +391,17 @@ static class TocFixes
         }
 
         var pageBreaks = paragraph.Descendants(W.Br).Count(item => W.Attr(item, "type") == "page");
-        foreach (var node in paragraph.Nodes().Where(node => node is not XElement element || element.Name != W.PPr).ToList()) node.Remove();
-        for (var index = 0; index < pageBreaks; index += 1) paragraph.Add(new XElement(W.R_, new XElement(W.Br, new XAttribute(W.Type, "page"))));
+        WordStructure.ClearContent(paragraph);
+        for (var index = 0; index < pageBreaks; index += 1) paragraph.AppendChild(PageBreakRun());
         var properties = paragraph.Element(W.PPr);
         if (properties is null) return;
-        if (IsTocStyle(model, paragraph) || IsTitle(model, paragraph)) properties.Element(W.PStyle)?.Remove();
-        properties.Element(PageBreakBefore)?.Remove();
+        var obsolete = new List<OpenXmlElement?> { properties.Element(PageBreakBefore) };
+        if (IsTocStyle(model, paragraph) || IsTitle(model, paragraph)) obsolete.Add(properties.Element(W.PStyle));
+        WordStructure.RemoveRange(obsolete.OfType<OpenXmlElement>().ToList());
     }
 
     /// <summary>目录所在的内容控件：清空的去掉；Word 自动目录的内容控件（目录库）把剩下的段落移出来再去掉。</summary>
-    static void CleanSdts(HashSet<XElement> sdts)
+    static void CleanSdts(HashSet<OpenXmlElement> sdts)
     {
         foreach (var sdt in sdts.OrderByDescending(item => item.Ancestors().Count()))
         {
@@ -417,16 +409,13 @@ static class TocFixes
             var content = sdt.Element(W.SdtContent);
             if (content is null || !content.Elements().Any())
             {
-                sdt.Remove();
+                WordStructure.Remove(sdt);
                 continue;
             }
 
             var gallery = W.ValOf(sdt.Element(SdtPr)?.Descendants(DocPartGallery).FirstOrDefault());
             if (gallery is null || !(gallery.Contains("Table of Contents", StringComparison.OrdinalIgnoreCase) || gallery.Contains("目录"))) continue;
-            var nodes = content.Nodes().ToList();
-            foreach (var node in nodes) node.Remove();
-            sdt.AddBeforeSelf(nodes);
-            sdt.Remove();
+            WordStructure.Unwrap(sdt);
         }
     }
 
@@ -436,7 +425,7 @@ static class TocFixes
     /// 其余去掉，空出来的节并入下一节；原来换页、删完却不换页时在前一块内容末尾补一个分页符。
     /// 接缝在文档开头或末尾时不需要换页。
     /// </summary>
-    static void Mend(DocumentModel model, XElement body, Seam seam)
+    static void Mend(DocumentModel model, OpenXmlElement body, Seam seam)
     {
         foreach (var stray in seam.Strays)
         {
@@ -495,13 +484,13 @@ static class TocFixes
         }
         else if (seam.NeedsBreak && !(next.Name == W.P && BreaksBefore(model, next)))
         {
-            if (previousParagraph is not null) previousParagraph.Add(new XElement(W.R_, new XElement(W.Br, new XAttribute(W.Type, "page"))));
-            else next.AddBeforeSelf(new XElement(W.P, new XElement(W.R_, new XElement(W.Br, new XAttribute(W.Type, "page")))));
+            if (previousParagraph is not null) previousParagraph.AppendChild(PageBreakRun());
+            else next.InsertBeforeSelf(new Wp.Paragraph(PageBreakRun()));
         }
     }
 
     /// <summary>去掉分页符；只剩段落属性的段落删除（分节段落保留）。</summary>
-    static void StripBreaks(XElement paragraph)
+    static void StripBreaks(OpenXmlElement paragraph)
     {
         RemoveBreaks(paragraph.Descendants(W.Br).Where(item => W.Attr(item, "type") == "page"));
         if (SectionOf(paragraph) is null && !Visible(paragraph)) DeleteParagraph(paragraph);
@@ -511,22 +500,14 @@ static class TocFixes
     /// 把接缝里的分节符移到紧挨着的上一段（同一节的最后一段），分节段落本身没有内容时删除。
     /// 上一块是表格或已带分节符时保留原位。
     /// </summary>
-    static void MoveSectionUp(List<XElement> blocks, XElement paragraph)
+    static void MoveSectionUp(List<OpenXmlElement> blocks, OpenXmlElement paragraph)
     {
         var index = blocks.IndexOf(paragraph);
         var target = index > 0 ? blocks[index - 1] : null;
         if (target is null || target.Name != W.P || target.Parent is null || SectionOf(target) is not null) return;
-        var section = SectionOf(paragraph)!;
-        section.Remove();
-        var properties = target.Element(W.PPr);
-        if (properties is null)
-        {
-            properties = new XElement(W.PPr);
-            target.AddFirst(properties);
-        }
-
-        if (properties.Element(PPrChange) is { } change) change.AddBeforeSelf(section);
-        else properties.Add(section);
+        // SDK 按 schema 顺序把 sectPr 放进段落属性（在 pPrChange 之前）。
+        var section = WordStructure.Detach(SectionOf(paragraph)!);
+        PropertyWriter.Insert(PropertyWriter.ParagraphProperties(target), section);
         if (!Visible(paragraph) && !HasPageBreak(paragraph)) DeleteParagraph(paragraph);
     }
 
@@ -534,7 +515,7 @@ static class TocFixes
     /// 去掉空节：分节符所在段落没有内容时一起删除。下一节没有的页眉页脚引用从本节补过去，
     /// 原来沿用本节页眉页脚的后续各节保持不变。
     /// </summary>
-    static void DropSection(XElement body, XElement paragraph)
+    static void DropSection(OpenXmlElement body, OpenXmlElement paragraph)
     {
         var section = SectionOf(paragraph)!;
         var all = body.Descendants(W.SectPr).Where(item => item.Parent?.Name == W.PPr || item.Parent == body).ToList();
@@ -543,31 +524,31 @@ static class TocFixes
         {
             foreach (var reference in section.Elements().Where(item => item.Name == W.HeaderReference || item.Name == W.FooterReference).Reverse())
             {
-                if (!next.Elements(reference.Name).Any(item => W.Attr(item, "type") == W.Attr(reference, "type"))) next.AddFirst(new XElement(reference));
+                if (!next.Elements(reference.Name).Any(item => W.Attr(item, "type") == W.Attr(reference, "type"))) next.PrependChild(reference.CloneNode(true));
             }
         }
 
-        section.Remove();
+        WordStructure.Remove(section);
         if (!Visible(paragraph) && !HasPageBreak(paragraph)) DeleteParagraph(paragraph);
     }
 
-    static XElement? LastBlock(XElement body) => Blocks(body).LastOrDefault();
+    static OpenXmlElement? LastBlock(OpenXmlElement body) => Blocks(body).LastOrDefault();
 
-    static HashSet<XElement> AdjacentTables(XElement body)
+    static HashSet<OpenXmlElement> AdjacentTables(OpenXmlElement body)
     {
-        return new HashSet<XElement>(
+        return new HashSet<OpenXmlElement>(
             body.Descendants(W.Tbl).Where(table => table.ElementsAfterSelf().FirstOrDefault()?.Name == W.Tbl),
             ReferenceEqualityComparer.Instance);
     }
 
     /// <summary>删段后原本隔开的两个表格会并在一起，文档也不能以表格结尾：补一个空段落。</summary>
-    static void KeepTablesApart(XElement body, HashSet<XElement> pairs, bool endedWithTable)
+    static void KeepTablesApart(OpenXmlElement body, HashSet<OpenXmlElement> pairs, bool endedWithTable)
     {
         foreach (var table in body.Descendants(W.Tbl).ToList())
         {
-            if (table.ElementsAfterSelf().FirstOrDefault()?.Name == W.Tbl && !pairs.Contains(table)) table.AddAfterSelf(new XElement(W.P));
+            if (table.ElementsAfterSelf().FirstOrDefault()?.Name == W.Tbl && !pairs.Contains(table)) table.InsertAfterSelf(new Wp.Paragraph());
         }
 
-        if (!endedWithTable && LastBlock(body) is { } last && last.Name == W.Tbl) last.AddAfterSelf(new XElement(W.P));
+        if (!endedWithTable && LastBlock(body) is { } last && last.Name == W.Tbl) last.InsertAfterSelf(new Wp.Paragraph());
     }
 }

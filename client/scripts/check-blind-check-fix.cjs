@@ -175,7 +175,8 @@ test('结构修复：修订、批注、超链接、身份域、隐藏文字、�
   assert.doesNotMatch(xml(outputPath, 'docProps/core.xml'), /张三|李四/);
   const appXml = xml(outputPath, 'docProps/app.xml');
   assert.doesNotMatch(appXml, /华夏建设/);
-  assert.match(appXml, /<Template>Normal\.dotm<\/Template>/);
+  // 改过的 part 由 OpenXML SDK 写回，元素可能带 ap: 前缀。
+  assert.match(appXml, /<(?:ap:)?Template>Normal\.dotm<\/(?:ap:)?Template>/);
 });
 
 test('删除身份域：开始、结束标记与正文同在一个文本块时，只删域范围内的内容', async () => {
@@ -667,19 +668,20 @@ test('AI 复核：标书结构按段落编号导出，编辑按编号替换、�
   });
   assert.equal(hash(path.join(workspace, source)), before, '原始文档不改动');
   const outcomes = result.results.map((item) => [item.ok, item.message]);
-  assert.deepEqual(outcomes.map(([ok]) => ok), [true, true, true, false, false, false, true, false, false], JSON.stringify(outcomes));
+  assert.deepEqual(outcomes.map(([ok]) => ok), [true, true, true, false, false, true, true, false, false], JSON.stringify(outcomes));
   assert.match(outcomes[3][1], /分节符/);
   assert.match(outcomes[4][1], /标题段落不能删除/);
-  assert.match(outcomes[5][1], /单元格里唯一的段落/);
+  assert.match(outcomes[5][1], /单元格里仅剩的段落.*已清空文字、未删除段落/, '单元格仅剩的段落按结构规则降级为清空');
   assert.match(outcomes[7][1], /不支持的修改方式/);
   assert.match(outcomes[8][1], /含分页符/);
-  assert.equal(result.applied, 4);
+  assert.equal(result.applied, 5);
   assert.deepEqual(result.validation.new_errors, []);
   const texts = paragraphTexts(xml(path.join(workspace, output)));
   assert.ok(texts.includes('本工程为本工程，站点共18处。'), JSON.stringify(texts));
   assert.ok(!texts.includes('这一段整段删除。'));
   assert.doesNotMatch(xml(path.join(workspace, output)), /descr=/);
   assert.match(result.dump.text, /^\[p4\] ◇ 〔img1〕$/m, '删段后返回的新结构重新编号');
+  assert.match(result.dump.text, /^\[t1\.r1\.c1\] 〔空段〕$/m, '单元格保留一个清空的段落');
 
   const ambiguous = await service.runBlindCheckEdit({
     source: output, original: source, profile, sensitive_words: [], image_facts: [],

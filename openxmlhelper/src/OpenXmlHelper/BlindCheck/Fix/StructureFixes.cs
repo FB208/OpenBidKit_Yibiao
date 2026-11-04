@@ -1,4 +1,6 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
+using Wp = DocumentFormat.OpenXml.Wordprocessing;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Rules;
@@ -32,28 +34,15 @@ static class StructureFixes
         ["image.meta"] = PropertiesFixes.FixImageMetadata,
     };
 
-    static readonly XName CommentRangeStart = W.Ns + "commentRangeStart";
-    static readonly XName CommentRangeEnd = W.Ns + "commentRangeEnd";
-    static readonly XName CommentReference = W.Ns + "commentReference";
-    static readonly XName BookmarkStart = W.Ns + "bookmarkStart";
-    static readonly XName BookmarkEnd = W.Ns + "bookmarkEnd";
+    static readonly WName BookmarkStart = W.Ns + "bookmarkStart";
+    static readonly WName BookmarkEnd = W.Ns + "bookmarkEnd";
 
-    /// <summary>把元素换成它的子节点。先摘下子节点再插入，避免 LINQ to XML 复制节点导致元素身份变化。</summary>
-    public static void Unwrap(XElement element)
-    {
-        if (element.Parent is null) return;
-        var nodes = element.Nodes().ToList();
-        foreach (var node in nodes) node.Remove();
-        element.AddBeforeSelf(nodes);
-        element.Remove();
-    }
-
-    static IEnumerable<XElement> SectionElements(DocumentModel model)
+    static IEnumerable<OpenXmlElement> SectionElements(DocumentModel model)
     {
         return model.BodyElement.Descendants(W.P)
             .Select(paragraph => paragraph.Element(W.PPr)?.Element(W.SectPr))
             .Where(item => item is not null)
-            .Cast<XElement>()
+            .Cast<OpenXmlElement>()
             .Concat(model.BodyElement.Elements(W.SectPr))
             .ToList();
     }
@@ -120,7 +109,7 @@ static class StructureFixes
             if ((W.IntAttr(columns, "num") ?? 1) <= 1 || columns is null) continue;
             SetAttr(columns, "num", "1");
             SetAttr(columns, "equalWidth", null);
-            columns.Elements(W.Ns + "col").Remove();
+            WordStructure.RemoveRange(columns.Elements(W.Ns + "col").ToList());
             count += 1;
         }
 
@@ -133,7 +122,7 @@ static class StructureFixes
     {
         var background = fix.Model.BodyElement.Parent?.Element(W.Ns + "background");
         if (background is null) return 0;
-        background.Remove();
+        WordStructure.Remove(background);
         fix.Touch(fix.Model.DocumentPart);
         return 1;
     }
@@ -141,7 +130,7 @@ static class StructureFixes
     static int FixShading(FixContext fix)
     {
         var count = 0;
-        foreach (var shading in fix.Model.BodyElement.Descendants(W.Tc).Select(cell => cell.Element(W.TcPr)?.Element(W.Shd)).Where(item => item is not null).Cast<XElement>())
+        foreach (var shading in fix.Model.BodyElement.Descendants(W.Tc).Select(cell => cell.Element(W.TcPr)?.Element(W.Shd)).Where(item => item is not null).Cast<OpenXmlElement>())
         {
             var fill = W.Attr(shading, "fill")?.ToUpperInvariant();
             if (string.IsNullOrEmpty(fill) || fill is "AUTO" or "000000" or "FFFFFF") continue;
@@ -165,15 +154,14 @@ static class StructureFixes
     }
 
     /// <summary>
-    /// 空段落能否安全删除：不带编号；只含属性、空文本块、校对标记和 _GoBack 书签；
-    /// 内容控件里唯一的段落不删。分节符、分页符、表格间必需段落由调用方排除。
+    /// 空段落能否安全删除：不带编号；只含属性、空文本块、校对标记和 _GoBack 书签。
+    /// 分节符、分页符、表格间必需段落由调用方排除；Word 的结构要求（单元格须以段落结尾等）由结构层处理。
     /// 设了段前分页（直接设置或来自样式）的不删，删了后文会回到上一页，留给人工。
     /// </summary>
     static bool Deletable(FixContext fix, ParaRecord record)
     {
         var paragraph = record.Element;
-        if (paragraph.Parent is null || HasNumbering(fix, record) || TocFixes.BreaksBefore(fix.Model, paragraph)) return false;
-        if (paragraph.Parent.Name == W.SdtContent && paragraph.Parent.Elements(W.P).Count() == 1) return false;
+        if (!WordStructure.IsAttached(paragraph) || HasNumbering(fix, record) || TocFixes.BreaksBefore(fix.Model, paragraph)) return false;
         var goBack = paragraph.Elements(BookmarkStart).Where(item => W.Attr(item, "name") == "_GoBack").Select(item => W.Attr(item, "id")).ToHashSet();
         foreach (var child in paragraph.Elements())
         {
@@ -195,15 +183,13 @@ static class StructureFixes
         {
             var paragraphs = cell.Elements(W.P).Select(item => model.Records.GetValueOrDefault(item)).Where(item => item is not null).Cast<ParaRecord>().ToList();
             if (paragraphs.Count < 2 || paragraphs.Any(item => !item.IsEmpty)) continue;
-            foreach (var record in paragraphs.Skip(1).Where(item => Deletable(fix, item)))
-            {
-                record.Element.Remove();
-                count += 1;
-            }
+            // 整格空段一起交给结构层：单元格须以段落结尾，全删时保留一个（降级为清空），不计入删除数。
+            var targets = paragraphs.Where(item => Deletable(fix, item)).Select(item => item.Element).ToList();
+            count += targets.Count - WordStructure.RemoveRange(targets).Count;
         }
 
         var blocks = model.BodyBlocks;
-        var required = new HashSet<XElement>(ReferenceEqualityComparer.Instance);
+        var required = new HashSet<OpenXmlElement>(ReferenceEqualityComparer.Instance);
         for (var index = 0; index < blocks.Count; index += 1)
         {
             if (blocks[index].IsTable) continue;
@@ -212,13 +198,11 @@ static class StructureFixes
             if ((previousTable && nextTable) || index == blocks.Count - 1) required.Add(blocks[index].Element);
         }
 
-        foreach (var record in fix.Rules.Groups.Body)
-        {
-            if (!record.IsEmpty || record.HasSectionBreak || record.HasPageBreak || required.Contains(record.Element)) continue;
-            if (!Deletable(fix, record)) continue;
-            record.Element.Remove();
-            count += 1;
-        }
+        var empty = fix.Rules.Groups.Body
+            .Where(record => record.IsEmpty && !record.HasSectionBreak && !record.HasPageBreak && !required.Contains(record.Element) && Deletable(fix, record))
+            .Select(record => record.Element)
+            .ToList();
+        count += empty.Count - WordStructure.RemoveRange(empty).Count;
 
         count += MovePageBreaks(fix, required);
         if (count > 0) fix.Touch(model.DocumentPart);
@@ -230,7 +214,7 @@ static class StructureFixes
     /// 上一块是表格、目录、带分节符或已在段尾换页的段落时不动（连续几个分页段落是有意留的空白页，只挪第一个），留给人工。
     /// 在普通空段落删完后执行，上一段才是实际挨着的内容。
     /// </summary>
-    static int MovePageBreaks(FixContext fix, HashSet<XElement> required)
+    static int MovePageBreaks(FixContext fix, HashSet<OpenXmlElement> required)
     {
         var model = fix.Model;
         var count = 0;
@@ -244,9 +228,8 @@ static class StructureFixes
             var previous = paragraph.ElementsBeforeSelf().LastOrDefault(item => item.Name == W.P || item.Name == W.Tbl || item.Name == W.Sdt);
             if (previous?.Name != W.P || !TocFixes.Visible(previous) || TocFixes.SectionOf(previous) is not null
                 || TocFixes.TrailingBreaks(previous).Count > 0 || fix.Rules.Outline.IsToc(previous)) continue;
-            previous.Add(new XElement(W.R_, new XElement(W.Br, new XAttribute(W.Type, "page"))));
-            paragraph.Remove();
-            count += 1;
+            previous.AppendChild(TocFixes.PageBreakRun());
+            if (WordStructure.Remove(paragraph) == StructureResult.Removed) count += 1;
         }
 
         return count;
@@ -260,9 +243,7 @@ static class StructureFixes
         {
             var name = W.Attr(bookmark, "name");
             if (string.IsNullOrWhiteSpace(name) || name.StartsWith('_') || PrivacyRules.IdentityHits(fix.Rules, name).Count == 0) continue;
-            var id = W.Attr(bookmark, "id");
-            body.Descendants(BookmarkEnd).Where(item => W.Attr(item, "id") == id).ToList().ForEach(item => item.Remove());
-            bookmark.Remove();
+            WordStructure.RemoveBookmarks([bookmark]);
             count += 1;
         }
 
@@ -291,7 +272,7 @@ static class StructureFixes
             var hasContent = StructureRules.HeaderFooterMarks(model.Sheet, root, fields.Count > 0).Count > 0;
             if (StructureRules.ContentForbidden(profile, pageMode, isHeader) && (hasContent || (!pageAllowed && fields.Count > 0)))
             {
-                List<XElement> keep = pageAllowed && fields.Count > 0
+                List<OpenXmlElement> keep = pageAllowed && fields.Count > 0
                     ? root.Elements()
                         .Where(block => (block.Name == W.P || block.Name == W.Sdt)
                             && StructureRules.HeaderFooterTexts(block).Any()
@@ -319,7 +300,7 @@ static class StructureFixes
         return count;
     }
 
-    static HashSet<string> RelationshipIds(IEnumerable<XElement> elements)
+    static HashSet<string> RelationshipIds(IEnumerable<OpenXmlElement> elements)
     {
         return elements.DescendantsAndSelf()
             .SelectMany(element => element.Attributes())
@@ -328,50 +309,41 @@ static class StructureFixes
             .ToHashSet(StringComparer.Ordinal);
     }
 
-    /// <summary>清空页眉页脚，只留下 keep 中的顶层块并去掉它们的横线；一个都不留时补一个无边框的空段落。</summary>
-    static void ClearPart(FixContext fix, string part, XElement root, List<XElement> keep)
+    /// <summary>
+    /// 清空页眉页脚，只留下 keep 中的顶层块并去掉它们的横线；一个都不留时补一个无边框的空段落。
+    /// 清掉的内容引用的关系一并删除，图片等部件不再被任何关系引用时随之从包里去掉。
+    /// </summary>
+    static void ClearPart(FixContext fix, string part, OpenXmlElement root, List<OpenXmlElement> keep)
     {
-        var style = root.Descendants(W.P).FirstOrDefault()?.Element(W.PPr)?.Element(W.PStyle);
-        var removed = root.Nodes().Where(node => node is not XElement element || !keep.Contains(element)).ToList();
-        var kept = RelationshipIds(keep);
-        var relationshipIds = RelationshipIds(removed.OfType<XElement>());
-        relationshipIds.ExceptWith(kept);
-        var removedTargets = fix.Package.Relationships(part)
-            .Where(item => relationshipIds.Contains(item.Id) && !item.External && item.Type.EndsWith("/image", StringComparison.Ordinal))
-            .Select(item => DocxPackage.ResolveTarget(part, item.Target))
-            .ToList();
-
-        removed.ForEach(node => node.Remove());
+        var style = root.Descendants(W.P).FirstOrDefault()?.Element(W.PPr)?.Element(W.PStyle)?.CloneNode(true);
+        var removed = root.Elements().Where(element => !keep.Contains(element)).ToList();
+        var relationshipIds = RelationshipIds(removed);
+        relationshipIds.ExceptWith(RelationshipIds(keep));
+        WordStructure.RemoveRange(removed);
         // 边框写成显式的 nil 才能盖掉样式里的横线（如「页眉」样式自带的下边框）。
-        XElement[] NoBorders() => StructureRules.BorderSides.Select(side => new XElement(W.Ns + side, new XAttribute(W.Val, "nil"))).ToArray();
         if (keep.Count == 0)
         {
-            var properties = new XElement(W.PPr);
-            if (style is not null) properties.Add(new XElement(style));
-            properties.Add(new XElement(W.Ns + "pBdr", NoBorders()));
-            root.Add(new XElement(W.P, properties));
+            var paragraph = root.AppendChild(new Wp.Paragraph(new Wp.ParagraphProperties()));
+            if (style is not null) paragraph.ParagraphProperties!.AppendChild(style);
+            NoBorders(ParagraphChild(paragraph, "pBdr"));
         }
 
         foreach (var paragraph in keep.SelectMany(block => StructureRules.BorderedParagraphs(fix.Model.Sheet, block)).ToList())
         {
-            PropertyWriter.ParagraphChild(paragraph, "pBdr").ReplaceNodes(NoBorders());
+            NoBorders(ParagraphChild(paragraph, "pBdr"));
         }
 
-        foreach (var id in relationshipIds) fix.Writer.RemoveRelationship(part, id);
+        foreach (var id in relationshipIds) fix.Package.DeleteRelationship(part, id);
         fix.Touch(part);
-
-        foreach (var target in removedTargets.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            // 按修复后的关系判断：多个页眉共用一张标志图时，清空最后一个页眉时才删除图片。
-            var stillUsed = fix.Package.AllRelationships()
-                .Any(item => !fix.Writer.IsRelationshipRemoved(item.SourcePart, item.Relationship.Id)
-                    && !item.Relationship.External
-                    && string.Equals(DocxPackage.ResolveTarget(item.SourcePart, item.Relationship.Target), target, StringComparison.OrdinalIgnoreCase));
-            if (!stillUsed && !fix.Package.HasContentTypeOverride(target)) fix.Writer.RemovePart(target);
-        }
     }
 
-    static bool IsHyperlinkStyle(FixContext fix, XElement run)
+    /// <summary>把段落边框（w:pBdr）的各边都写成 nil。</summary>
+    static void NoBorders(OpenXmlElement borders)
+    {
+        WordStructure.ReplaceContent(borders, StructureRules.BorderSides.Select(side => W.New(borders, W.Ns + side, new WAttribute(W.Val, "nil"))).ToList());
+    }
+
+    static bool IsHyperlinkStyle(FixContext fix, OpenXmlElement run)
     {
         var styleId = W.ValOf(run.Element(W.RPr)?.Element(W.RStyle));
         if (styleId is null) return false;
@@ -388,14 +360,16 @@ static class StructureFixes
             if (document.Root is null) continue;
             var relationships = fix.Package.Relationships(part).ToDictionary(item => item.Id, StringComparer.Ordinal);
             var changed = false;
+            // 先全部去壳再删关系：几个超链接可以共用一条关系，删关系时结构层会把仍引用它的超链接一并去壳。
+            var removedIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var link in document.Root.Descendants(W.Hyperlink).ToList())
             {
                 var id = link.Attribute(W.RId)?.Value;
                 if (id is null || !relationships.TryGetValue(id, out var relationship)) continue;
                 if (!relationship.External && !StructureRules.IsExternalTarget(relationship.Target)) continue;
-                foreach (var run in link.Descendants(W.R_).Where(run => IsHyperlinkStyle(fix, run))) run.Element(W.RPr)!.Element(W.RStyle)!.Remove();
-                Unwrap(link);
-                fix.Writer.RemoveRelationship(part, id);
+                WordStructure.RemoveRange(link.Descendants(W.R_).Where(run => IsHyperlinkStyle(fix, run)).Select(run => run.Element(W.RPr)!.Element(W.RStyle)!).ToList());
+                WordStructure.Unwrap(link);
+                removedIds.Add(id);
                 count += 1;
                 changed = true;
             }
@@ -404,12 +378,13 @@ static class StructureFixes
             {
                 var target = StructureRules.QuotedTarget.Match(field.Instruction) is { Success: true } match ? match.Groups[1].Value : field.Instruction.Trim();
                 if (!StructureRules.IsExternalTarget(target)) continue;
-                foreach (var run in FieldEditor.ResultRuns(field).Where(run => IsHyperlinkStyle(fix, run)).ToList()) run.Element(W.RPr)!.Element(W.RStyle)!.Remove();
+                WordStructure.RemoveRange(FieldEditor.ResultRuns(field).Where(run => IsHyperlinkStyle(fix, run)).Select(run => run.Element(W.RPr)!.Element(W.RStyle)!).ToList());
                 FieldEditor.Unlink(field);
                 count += 1;
                 changed = true;
             }
 
+            foreach (var id in removedIds) fix.Package.DeleteRelationship(part, id);
             if (changed) fix.Touch(part);
         }
 
@@ -432,41 +407,15 @@ static class StructureFixes
         return count;
     }
 
-    /// <summary>删除批注：批注内容、正文中的批注锚点和引用、批注扩展信息与批注人列表一起清掉，避免留下悬空引用。</summary>
+    /// <summary>删除批注：批注内容、各部件里的批注锚点和引用、批注扩展信息与批注人列表一起清掉（经结构层），避免留下悬空引用。</summary>
     static int FixComments(FixContext fix)
     {
         var model = fix.Model;
-        if (model.CommentsPart is not { } commentsPart || model.Parts[commentsPart].Root is not { } commentsRoot) return 0;
-        var comments = commentsRoot.Elements(W.Comment).ToList();
-        comments.Remove();
-        fix.Touch(commentsPart);
-
-        foreach (var (part, document) in model.Parts)
-        {
-            if (part == commentsPart) continue;
-            var anchors = document.Descendants().Where(item => item.Name == CommentRangeStart || item.Name == CommentRangeEnd || item.Name == CommentReference).ToList();
-            if (anchors.Count == 0) continue;
-            foreach (var anchor in anchors)
-            {
-                var parent = anchor.Parent;
-                anchor.Remove();
-                RemoveIfEmptyRun(parent);
-            }
-
-            fix.Touch(part);
-        }
-
-        foreach (var suffix in new[] { "/commentsExtended", "/commentsIds", "/commentsExtensible", "/people" })
-        {
-            foreach (var part in fix.Package.RelatedParts(model.DocumentPart, suffix))
-            {
-                if (fix.Extra(part)?.Root is not { } root) continue;
-                root.RemoveNodes();
-                fix.Touch(part);
-            }
-        }
-
-        return comments.Count;
+        if (model.CommentsPart is not { } commentsPart || fix.Package.Document.MainDocumentPart is not { } main) return 0;
+        var count = model.Parts[commentsPart].Root.Elements(W.Comment).Count();
+        WordStructure.RemoveAllComments(main);
+        foreach (var part in model.Parts.Keys) fix.Touch(part);
+        return count;
     }
 
     static readonly HashSet<string> ChangeRecords =
@@ -491,35 +440,26 @@ static class StructureFixes
             if (elements.Count == 0) continue;
             foreach (var element in elements)
             {
-                if (element.Parent is null || element.Document is null) continue;
+                if (!WordStructure.IsAttached(element)) continue;
                 var name = element.Name.LocalName;
-                var parent = element.Parent.Name.LocalName;
+                var parent = element.Parent!.Name.LocalName;
                 var marker = parent is "rPr" or "trPr";
                 switch (name)
                 {
                     case "ins" or "moveTo":
-                        if (marker) element.Remove();
-                        else Unwrap(element);
+                        if (marker) WordStructure.Remove(element);
+                        else WordStructure.Unwrap(element);
                         accepted += 1;
                         break;
                     case "del" or "moveFrom":
-                        if (marker && parent == "rPr" && element.Parent.Parent?.Name == W.PPr)
+                        if (marker && parent == "rPr" && element.Parent?.Parent?.Name == W.PPr)
                         {
                             skipped += 1;
                             break;
                         }
 
-                        if (marker && parent == "trPr")
-                        {
-                            var row = element.Ancestors(W.Tr).First();
-                            var table = row.Parent;
-                            row.Remove();
-                            if (table?.Name == W.Tbl && !table.Elements(W.Tr).Any()) table.Remove();
-                        }
-                        else
-                        {
-                            element.Remove();
-                        }
+                        // 删除行的修订删整行；行删光时表格由结构层一并删除。
+                        WordStructure.Remove(marker && parent == "trPr" ? element.Ancestors(W.Tr).First() : element);
 
                         accepted += 1;
                         break;
@@ -527,7 +467,7 @@ static class StructureFixes
                         skipped += 1;
                         break;
                     default:
-                        element.Remove();
+                        WordStructure.Remove(element);
                         accepted += 1;
                         break;
                 }
