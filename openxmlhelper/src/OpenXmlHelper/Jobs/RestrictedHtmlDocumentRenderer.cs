@@ -1772,12 +1772,12 @@ static class RestrictedHtmlDocumentRenderer
         {
             if (pending.Count == 0) return;
             // 正文段落和业务表的行直接移入页框表格（不克隆），书签随原元素走；原表的行移完后由结构层删掉空表。
+            // 移动后原位置不再留有内容，不需要再清理：pending 里的段落此时已在页框单元格中，再删就会把页框清空。
             var previous = pending[0].PreviousSibling();
             var parent = pending[0].Parent!;
             var frame = CreateChapterBodyTable(pending, format, color, tableCaptions);
             if (previous is not null) previous.InsertAfterSelf(frame);
             else parent.PrependChild(frame);
-            WordStructure.RemoveRange(pending.Where(element => element.Parent is not null).ToList());
             pending.Clear();
         }
 

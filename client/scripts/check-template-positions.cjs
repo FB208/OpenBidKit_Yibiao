@@ -989,6 +989,24 @@ test('结构规则：单元格唯一段落整段是格式文字时，截章和�
   assertWordStructure(exported, '整本导出');
 });
 
+// 结构规则回归：章节页框把正文段落、配图段落和业务表的行直接移进页框表格，移完不能再被当成原位置的残留删掉。
+test('结构规则：开启章节页框时，正文文字、配图和表格内容都完整移进页框', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const html = '<h1>第一章 工程概况</h1><p>页框里的正文第一段。</p>'
+    + '<figure data-yb-size="wide"><img alt="示意图" data-yb-asset-ref="frame-figure.png"><figcaption>图 1 示意图</figcaption></figure>'
+    + '<table><tbody><tr><td>表格甲<td>表格乙</table><p>页框里的正文末段。</p>';
+  const exportFormat = { ...defaultExportFormat, heading_border: { ...defaultExportFormat.heading_border, enabled: true } };
+  const converted = await service.createRestrictedHtmlDocx(html, exportFormat, { copyAssets: true, assets: new Map([['frame-figure.png', png]]) });
+  const xml = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
+  const frame = [...xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map((match) => match[0]).find((item) => item.includes('页框里的正文第一段'));
+  assert.ok(frame, '正文进了页框表格');
+  const frameText = frame.replace(/<[^>]+>/g, '');
+  for (const text of ['页框里的正文第一段。', '图 1 示意图', '表格甲', '表格乙', '页框里的正文末段。']) assert.ok(frameText.includes(text), `页框里缺少「${text}」：${frameText}`);
+  assert.match(frame, /<w:drawing>/, '配图留在页框里');
+  assert.equal(xml.split('页框里的正文第一段。').length, 2, '正文只出现一次，没有留下原位置的副本');
+  assertWordStructure(xml, '章节页框');
+});
+
 test('结构规则：抽章只保留选中的块，跨章的书签补齐到章内、跨章的域退化为文字，整对在章外的书签不带进来', async () => {
   const name = 'extract-pairs-source';
   samples.buildDocx(planDir, `${name}.docx`, [
