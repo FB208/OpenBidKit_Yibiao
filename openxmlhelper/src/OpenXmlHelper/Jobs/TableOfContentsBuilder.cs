@@ -3,6 +3,7 @@ using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -53,8 +54,7 @@ static class TableOfContentsBuilder
                     new Wp.DocPartGallery { Val = "Table of Contents" },
                     new Wp.DocPartUnique())),
             new Wp.SdtContentBlock(new Wp.Paragraph()));
-        markers[0].InsertBeforeSelf(sdt);
-        markers[0].Remove();
+        WordStructure.Replace(markers[0], sdt);
         return sdt;
     }
 
@@ -71,7 +71,7 @@ static class TableOfContentsBuilder
 
         var entries = CollectEntries(mainPart, body, sdt);
         var content = sdt.SdtContentBlock ?? sdt.AppendChild(new Wp.SdtContentBlock());
-        content.RemoveAllChildren();
+        WordStructure.ClearContent(content);
         if (entries.Count == 0)
         {
             content.AppendChild(new Wp.Paragraph(
@@ -118,7 +118,7 @@ static class TableOfContentsBuilder
                 {
                     foreach (var text in run.Elements<Wp.Text>().ToList())
                     {
-                        if (written) text.Remove();
+                        if (written) WordStructure.Remove(text);
                         else text.Text = value;
                         written = true;
                     }
@@ -147,11 +147,8 @@ static class TableOfContentsBuilder
                 .FirstOrDefault(item => item is not null)
                 ?? body.Elements<Wp.SectionProperties>().Last();
             var finalSection = (Wp.SectionProperties)section.CloneNode(true);
-            for (var index = 0; index < blocks.Count; index += 1)
-            {
-                if (index < startBlock || index >= endBlock) blocks[index].Remove();
-            }
-            body.RemoveAllChildren<Wp.SectionProperties>();
+            WordStructure.RemoveRange(blocks.Where((_, index) => index < startBlock || index >= endBlock).ToList());
+            WordStructure.RemoveChildren<Wp.SectionProperties>(body);
             body.AppendChild(finalSection);
             if (blocks[startBlock] is Wp.Paragraph first)
             {
@@ -166,7 +163,7 @@ static class TableOfContentsBuilder
                 .ToHashSet(StringComparer.Ordinal);
             foreach (var image in mainPart.ImageParts.ToList())
             {
-                if (!referenced.Contains(mainPart.GetIdOfPart(image))) mainPart.DeletePart(image);
+                if (!referenced.Contains(mainPart.GetIdOfPart(image))) WordStructure.DeletePart(mainPart, image);
             }
             mainPart.Document!.Save();
         }
@@ -178,7 +175,7 @@ static class TableOfContentsBuilder
     {
         var styles = mainPart.StyleDefinitionsPart?.Styles ?? throw new InvalidOperationException("Word 缺少样式部件");
         var ids = Enumerable.Range(1, 9).Select(level => $"TOC{level}").Append(TitleStyleId).ToHashSet(StringComparer.Ordinal);
-        foreach (var style in styles.Elements<Wp.Style>().Where(item => ids.Contains(item.StyleId?.Value ?? "")).ToList()) style.Remove();
+        WordStructure.RemoveRange(styles.Elements<Wp.Style>().Where(item => ids.Contains(item.StyleId?.Value ?? "")).ToList());
 
         var halfPoints = spec.HalfPoints.ToString(CultureInfo.InvariantCulture);
         for (var level = 1; level <= 9; level += 1)

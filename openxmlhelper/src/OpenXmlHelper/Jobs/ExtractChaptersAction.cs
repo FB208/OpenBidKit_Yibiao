@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -105,7 +106,7 @@ static class ExtractChaptersAction
                 var destPart = dest.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
                 var destBody = destPart.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
                 var sectPr = destBody.Elements<Wp.SectionProperties>().LastOrDefault()?.CloneNode(true);
-                destBody.RemoveAllChildren();
+                WordStructure.ClearContent(destBody);
                 var importContexts = new Dictionary<string, CrossDocumentImportContext>(StringComparer.OrdinalIgnoreCase);
                 var chapterRanges = new List<TemplateChapterRange>();
 
@@ -155,6 +156,8 @@ static class ExtractChaptersAction
                     destBody.AppendChild(sectPr);
                 }
 
+                // 投标模版不保留招标原件的批注：清空壳文档时批注条目已随标记删除，再去掉各章带进来的批注标记，避免引用指向不存在的批注。
+                WordStructure.RemoveAllComments(destPart);
                 destPart.Document.Save();
                 var chapterRangeFile = new TemplateChapterRangeFile { Chapters = chapterRanges };
                 File.WriteAllText(
@@ -353,17 +356,14 @@ static class ExtractChaptersAction
 
         var cloned = (OpenXmlElement)block.Element.CloneNode(true);
         // 拼写语法检查标记（w:proofErr）不含内容，留着会让字段扫描把所在段落当作复杂段落整段跳过。
-        foreach (var proofError in cloned.Descendants<Wp.ProofError>().ToList())
-        {
-            proofError.Remove();
-        }
+        WordStructure.RemoveRange(cloned.Descendants<Wp.ProofError>().ToList());
 
         if (cloned is Wp.Paragraph paragraph)
         {
             var section = paragraph.ParagraphProperties?.SectionProperties;
             if (section is not null)
             {
-                section.Remove();
+                WordStructure.Remove(section);
                 if (!block.HasPageBreak)
                 {
                     EnsurePageBreak(paragraph);

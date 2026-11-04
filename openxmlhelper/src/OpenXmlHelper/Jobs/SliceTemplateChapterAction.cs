@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -50,10 +51,8 @@ static class SliceTemplateChapterAction
                     return JobResult.Fail("商务模版与字段清单不一致，请重新生成目录");
                 }
                 // 抽章已把内部分节改为分页，模版只有末尾 sectPr，删除区间外的块即可。
-                for (var index = 0; index < blocks.Count; index++)
-                {
-                    if (index < request.StartBlock || index >= request.EndBlock) blocks[index].Remove();
-                }
+                // 整批删除，跨区间的书签、域、批注由结构层按整批处理。
+                WordStructure.RemoveRange(blocks.Where((_, index) => index < request.StartBlock || index >= request.EndBlock).ToList());
                 // 与整本导出一致：先去掉 Agent 选定的格式文字和标为待删的条目，再去掉开头分页。
                 BusinessTemplateMerger.RemoveFormatText(body);
                 TemplateRepeats.RemoveIdle(body);

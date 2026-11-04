@@ -57,10 +57,13 @@ static class WordStructure
     }
 
     /// <summary>用 replacement 替换 old：先插入新元素再删除旧元素，旧元素里的书签移到新元素里。返回 old 的处理结果。</summary>
-    public static StructureResult Replace(OpenXmlElement old, OpenXmlElement replacement)
+    public static StructureResult Replace(OpenXmlElement old, OpenXmlElement replacement) => Replace(old, [replacement]);
+
+    /// <summary>用多个新元素依次替换 old。</summary>
+    public static StructureResult Replace(OpenXmlElement old, IReadOnlyList<OpenXmlElement> replacements)
     {
-        old.InsertBeforeSelf(replacement);
-        return RemoveCore([old], [replacement]).Contains(old) ? StructureResult.Cleared : StructureResult.Removed;
+        foreach (var item in replacements) old.InsertBeforeSelf(item);
+        return RemoveCore([old], replacements).Contains(old) ? StructureResult.Cleared : StructureResult.Removed;
     }
 
     /// <summary>去掉外壳（内容控件、超链接、智能标记、customXml、fldSimple、修订包装等），内容留在原位置。</summary>

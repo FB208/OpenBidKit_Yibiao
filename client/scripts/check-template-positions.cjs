@@ -935,6 +935,60 @@ test('制表符和分页段落可写入且保留断点；去掉的章末附件�
   assert.ok(sliced.includes('投标人名称：北京建设公司') && !sliced.includes('附件4'), sliced);
 });
 
+// 结构规则回归：单元格里唯一的段落整段是格式文字时，截章和整本导出都要留下这个段落（Word 要求单元格以段落结尾），书签不只剩一半。
+function assertWordStructure(xml, label) {
+  for (const [cellXml] of xml.matchAll(/<w:tc>(?:(?!<w:tc>)[\s\S])*?<\/w:tc>/g)) {
+    assert.match(cellXml, /<\/w:p>(?:\s*<w:bookmarkEnd [^>]*\/>)*\s*<\/w:tc>$/, `${label}：单元格须以段落结尾：${cellXml.slice(0, 200)}`);
+  }
+  const ids = (pattern) => new Set([...xml.matchAll(pattern)].map((match) => match[1]));
+  const starts = ids(/<w:bookmarkStart\b[^>]*\bw:id="([^"]+)"/g);
+  const ends = ids(/<w:bookmarkEnd\b[^>]*\bw:id="([^"]+)"/g);
+  assert.deepEqual([...starts].filter((id) => !ends.has(id)), [], `${label}：书签只有起点`);
+  assert.deepEqual([...ends].filter((id) => !starts.has(id)), [], `${label}：书签只有终点`);
+}
+
+test('结构规则：单元格唯一段落整段是格式文字时，截章和整本导出都保留空段落，书签不丢一半', async () => {
+  const name = 'cell-format-source';
+  const { candidates: list } = await scanFile(name, [
+    para('投标响应表', '<w:pStyle w:val="1"/>'),
+    table([[
+      cell(`<w:p><w:bookmarkStart w:id="5" w:name="_Toc500"/>${run('按招标文件规定填写')}<w:bookmarkEnd w:id="5"/></w:p>`),
+      cell(para('投标人：____')),
+    ]], 'TableGrid'),
+    para('表后说明'),
+    sectPr(),
+  ].join(''), [{ id: 'r1', title: '投标响应表', auto_fill: true, start_block: 0, end_block: 3 }]);
+  const blank = list.find((item) => item.context?.includes('投标人'));
+  await service.runJob({
+    action: 'apply-template-fields',
+    request: {
+      input: `technical-plan/${name}.docx`,
+      output: 'technical-plan/cell-format-template.docx',
+      fields_output: 'technical-plan/cell-format-fields.json',
+      fields: [{ candidate_id: blank.candidate_id, name: '投标人名称', subject: '投标人', fill_by: 'ai' }],
+      ignored_candidate_ids: list.filter((item) => item !== blank).map((item) => item.candidate_id),
+      removals: [{ at: 'b1.r1.c1.p1', text: '按招标文件规定填写' }],
+    },
+    timeoutMs: 60000,
+  });
+  const template = readJson('technical-plan/cell-format-fields.json');
+  const chapter = template.chapters[0];
+  const bytes = await service.createTemplateChapterDocx({ input: 'technical-plan/cell-format-template.docx', startBlock: chapter.start_block, endBlock: chapter.end_block });
+  const sliced = new AdmZip(Buffer.from(bytes)).readAsText('word/document.xml');
+  assert.ok(!sliced.includes('按招标文件规定填写'), '格式文字已去掉');
+  assertWordStructure(sliced, '截章');
+
+  const html = `<section data-yb-business-chapter="${chapter.id}" data-yb-business-level="1" data-yb-business-title="投标响应表" data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
+  const converted = await service.createRestrictedHtmlDocx(html, defaultExportFormat, {
+    copyAssets: true,
+    wholeDocument: true,
+    businessTemplate: { input: 'technical-plan/cell-format-template.docx', chapters: template.chapters },
+  });
+  const exported = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
+  assert.ok(!exported.includes('按招标文件规定填写') && exported.includes('表后说明'), '整本导出并入了商务章节并去掉格式文字');
+  assertWordStructure(exported, '整本导出');
+});
+
 // 页码引用：普通字段和规则表共用换算，Agent 按原句选数字或文字写法，助手按写法生成页码域并按域代码回填。
 const { convertAgentPageRefs, toAgentPageRefs, numberedNodes, createPageRefDisplay } = require('../electron/services/rulePageTables.cjs');
 

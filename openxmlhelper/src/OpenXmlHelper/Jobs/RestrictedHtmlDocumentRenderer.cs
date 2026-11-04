@@ -4,6 +4,7 @@ using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using PIC = DocumentFormat.OpenXml.Drawing.Pictures;
@@ -182,7 +183,7 @@ static class RestrictedHtmlDocumentRenderer
                 (merger ?? throw new InvalidOperationException("整本导出缺少商务模版")).ApplyPageSettings(section, pageTemplate && chrome.HasLayout);
             }
             AddEmptyChromeReferences(mainPart, section);
-            section.RemoveAllChildren<Wp.PageNumberType>();
+            WordStructure.RemoveChildren<Wp.PageNumberType>(section);
             if (result.Count == 0 && format.Bool(format.Section("page"), "page_number_enabled", false))
                 section.AddChild(new Wp.PageNumberType { Start = Math.Max(1, format.Integer(format.Section("page"), "page_number_start", 1)) }, true);
             var pageElements = new List<OpenXmlElement>();
@@ -230,7 +231,7 @@ static class RestrictedHtmlDocumentRenderer
                 afterChapter = false;
                 afterGenerated = false;
                 var rangeFormat = range.GetAttribute("data-yb-export-template") == "true" ? format : basic;
-                body.RemoveAllChildren();
+                WordStructure.ClearContent(body);
                 body.AppendChild(section.CloneNode(true));
                 var prepared = PrepareHtml(range.InnerHtml, rangeFormat, outlineOnly: true);
                 blockCount += RestrictedHtmlWordInserter.InsertIntoContent(assetRoot, mainPart, body,
@@ -246,13 +247,12 @@ static class RestrictedHtmlDocumentRenderer
                 ApplyFormatting(document, rangeFormat, prepared.Tables, rangeOnly: true);
                 foreach (var element in body.ChildElements.Where(item => item is not Wp.SectionProperties).ToList())
                 {
-                    element.Remove();
-                    pageElements.Add(element);
+                    pageElements.Add(WordStructure.Detach(element));
                 }
             }
             while (index < ranges.Count && (ranges[index].GetAttribute("data-yb-export-page-template") ?? "false") == pageKind);
 
-            body.RemoveAllChildren();
+            WordStructure.ClearContent(body);
             body.Append(pageElements);
             body.AppendChild(section);
             if (!businessPage && !ChapterFrameEnabled(pageFormat)) ApplyTwoColumnHeadingSections(mainPart, body, pageFormat);
@@ -261,14 +261,13 @@ static class RestrictedHtmlDocumentRenderer
             // 同一页面范围内的父标题和正文连续；仅在模板页面切换时另起一页。
             if (index < ranges.Count)
             {
-                section.Remove();
-                SetSingleChild(section, new Wp.SectionType { Val = Wp.SectionMarkValues.NextPage });
+                WordStructure.Detach(section);
+                WordStructure.SetSingleChild(section, new Wp.SectionType { Val = Wp.SectionMarkValues.NextPage });
                 body.AppendChild(new Wp.Paragraph(new Wp.ParagraphProperties(section)));
             }
             foreach (var element in body.ChildElements.ToList())
             {
-                element.Remove();
-                result.Add(element);
+                result.Add(WordStructure.Detach(element));
             }
         }
         body.Append(result);
@@ -310,7 +309,7 @@ static class RestrictedHtmlDocumentRenderer
             start = previous;
             level = parentLevel;
         }
-        if (!ReferenceEquals(start, toc.Title)) toc.Title.ParagraphProperties?.RemoveAllChildren<Wp.PageBreakBefore>();
+        if (!ReferenceEquals(start, toc.Title) && toc.Title.ParagraphProperties is { } titleProperties) WordStructure.RemoveChildren<Wp.PageBreakBefore>(titleProperties);
         if (start.PreviousSibling() is not null) EnsureParagraphProperties(start).PageBreakBefore = new Wp.PageBreakBefore();
         toc.StartBlock = start;
 
@@ -335,7 +334,7 @@ static class RestrictedHtmlDocumentRenderer
             && toc.RangeFormat.Bool(border, "include_headings", true)
             && !toc.RangeFormat.Bool(border, "heading_bottom_border_enabled", false))
         {
-            SetSingleChild(EnsureParagraphProperties(toc.Title), CreateChapterFrameBorders(
+            WordStructure.SetSingleChild(EnsureParagraphProperties(toc.Title), CreateChapterFrameBorders(
                 Color(toc.RangeFormat.Text(border, "border_color", "#cfd8ee"), "CFD8EE"),
                 topLine: true,
                 bottomLine: true,
@@ -396,7 +395,7 @@ static class RestrictedHtmlDocumentRenderer
             if (target.ParagraphProperties is { } properties) target.InsertAfter(start, properties);
             else target.PrependChild(start);
             target.InsertAfter(new Wp.BookmarkEnd { Id = id }, start);
-            marker.Remove();
+            WordStructure.Remove(marker);
         }
     }
 
@@ -908,7 +907,7 @@ static class RestrictedHtmlDocumentRenderer
     static Wp.Paragraph CreateChromeAnchor(IEnumerable<OpenXmlElement>? children = null)
     {
         var paragraph = CreateChromeParagraph("左对齐");
-        SetSingleChild(paragraph.ParagraphProperties!, new Wp.SpacingBetweenLines
+        WordStructure.SetSingleChild(paragraph.ParagraphProperties!, new Wp.SpacingBetweenLines
         {
             Before = "0", After = "0", Line = "1", LineRule = Wp.LineSpacingRuleValues.Exact,
         });
@@ -1070,8 +1069,7 @@ static class RestrictedHtmlDocumentRenderer
                 }
                 foreach (var run in pageParagraph.Elements<Wp.Run>().ToArray())
                 {
-                    run.Remove();
-                    paragraph.AppendChild(run);
+                    WordStructure.AppendTo(run, paragraph);
                 }
                 if (paragraph.Elements<Wp.Run>().Any())
                 {
@@ -1087,8 +1085,7 @@ static class RestrictedHtmlDocumentRenderer
         }
         foreach (var run in pageParagraph.Elements<Wp.Run>().ToArray())
         {
-            run.Remove();
-            paragraph.AppendChild(run);
+            WordStructure.AppendTo(run, paragraph);
         }
         paragraph.Append(decoration);
         if (!paragraph.Elements<Wp.Run>().Any()) paragraph.AppendChild(new Wp.Run(new Wp.Text("")));
@@ -1122,7 +1119,7 @@ static class RestrictedHtmlDocumentRenderer
         var codeText = codeRun.GetFirstChild<Wp.Text>();
         if (codeText is not null)
         {
-            codeText.Remove();
+            WordStructure.Remove(codeText);
             codeRun.AppendChild(new Wp.FieldCode($" PAGE{picture} ") { Space = SpaceProcessingModeValues.Preserve });
         }
         paragraph.AppendChild(codeRun);
@@ -1135,7 +1132,7 @@ static class RestrictedHtmlDocumentRenderer
     static Wp.Run CreateFieldRun(Wp.FieldCharValues type, string font, int size, string color, bool bold = false)
     {
         var run = CreateRun("", font, size, color, bold, false);
-        run.RemoveAllChildren<Wp.Text>();
+        WordStructure.RemoveChildren<Wp.Text>(run);
         run.AppendChild(new Wp.FieldChar { FieldCharType = type });
         return run;
     }
@@ -1209,16 +1206,16 @@ static class RestrictedHtmlDocumentRenderer
         var halfPoints = FontHalfPoints(format.Text(heading, "size", level == 1 ? "小二" : level == 2 ? "四号" : "小四"));
         ApplyHeadingLook(paragraph, format, level, CharsToTwips(format.Number(heading, "first_line_indent_chars", 0), halfPoints));
         var properties = EnsureParagraphProperties(paragraph);
-        SetSingleChild(properties, new Wp.ParagraphStyleId { Val = $"Heading{level}" });
-        SetSingleChild(properties, new Wp.KeepNext());
-        SetSingleChild(properties, new Wp.OutlineLevel { Val = level - 1 });
+        WordStructure.SetSingleChild(properties, new Wp.ParagraphStyleId { Val = $"Heading{level}" });
+        WordStructure.SetSingleChild(properties, new Wp.KeepNext());
+        WordStructure.SetSingleChild(properties, new Wp.OutlineLevel { Val = level - 1 });
         if (level == 1 && format.Bool(format.Root, "heading_level1_page_break_before", false))
         {
-            SetSingleChild(properties, new Wp.PageBreakBefore());
+            WordStructure.SetSingleChild(properties, new Wp.PageBreakBefore());
         }
         else
         {
-            properties.RemoveAllChildren<Wp.PageBreakBefore>();
+            WordStructure.RemoveChildren<Wp.PageBreakBefore>(properties);
         }
         ClearHeadingBorder(properties);
     }
@@ -1252,8 +1249,8 @@ static class RestrictedHtmlDocumentRenderer
     /// </summary>
     static void ClearHeadingBorder(Wp.ParagraphProperties properties)
     {
-        properties.RemoveAllChildren<Wp.ParagraphBorders>();
-        properties.RemoveAllChildren<Wp.Shading>();
+        WordStructure.RemoveChildren<Wp.ParagraphBorders>(properties);
+        WordStructure.RemoveChildren<Wp.Shading>(properties);
     }
 
     /// <summary>应用正文格式；列表保留编号缩进，不再使用首行缩进。</summary>
@@ -1287,7 +1284,7 @@ static class RestrictedHtmlDocumentRenderer
             format.Bool(style, "caption_bold", false),
             format.Bool(style, "caption_italic", false));
         var properties = EnsureParagraphProperties(paragraph);
-        properties.RemoveAllChildren<Wp.KeepNext>();
+        WordStructure.RemoveChildren<Wp.KeepNext>(properties);
         if (keepNext) properties.AddChild(new Wp.KeepNext(), throwOnError: true);
     }
 
@@ -1310,8 +1307,8 @@ static class RestrictedHtmlDocumentRenderer
                     ?? rows[rowIndex].PrependChild(new Wp.TableRowProperties());
                 // 只有表头行禁止跨页；正文行一律允许拆行，否则一行高过整页就再也排不下，
                 // 页框里的超长表格会整块被推走，在上一页留下大段空白。
-                rowProperties.RemoveAllChildren<Wp.CantSplit>();
-                rowProperties.RemoveAllChildren<Wp.TableHeader>();
+                WordStructure.RemoveChildren<Wp.CantSplit>(rowProperties);
+                WordStructure.RemoveChildren<Wp.TableHeader>(rowProperties);
                 if (spec is not null && rowIndex < spec.Rows.Count && spec.Rows[rowIndex].IsHeaderRow)
                 {
                     // 追加两项行属性，避免 AddChild 写入重复表头时覆盖不可拆分设置。
@@ -1336,7 +1333,7 @@ static class RestrictedHtmlDocumentRenderer
     {
         var style = format.Section("table");
         var properties = table.GetFirstChild<Wp.TableProperties>() ?? table.PrependChild(new Wp.TableProperties());
-        properties.RemoveAllChildren();
+        WordStructure.ClearContent(properties);
         var fullWidth = format.Bool(style, "full_width", true);
         // 满宽表格按栏宽 100%，用户在 Word 里改页边距或分栏后随之调整；嵌套表格相对父单元格。
         // 依赖 AddDocumentSettings 的兼容模式 15：外沿正好落在页边距上，不再外扩单元格边距。
@@ -1379,7 +1376,7 @@ static class RestrictedHtmlDocumentRenderer
             _ => "body_cell",
         });
         var properties = cell.GetFirstChild<Wp.TableCellProperties>() ?? cell.PrependChild(new Wp.TableCellProperties());
-        SetSingleChild(properties, new Wp.Shading
+        WordStructure.SetSingleChild(properties, new Wp.Shading
         {
             Val = Wp.ShadingPatternValues.Clear,
             Fill = Color(format.Text(style, "background_color", role == CellRole.Header ? "#eef5ff" : "#ffffff"), "FFFFFF"),
@@ -1452,7 +1449,7 @@ static class RestrictedHtmlDocumentRenderer
                 var indentation = new Wp.Indentation { Left = indent.Left.ToString(CultureInfo.InvariantCulture) };
                 if (indent.Hanging > 0) indentation.Hanging = indent.Hanging.ToString(CultureInfo.InvariantCulture);
                 if (indent.FirstLine > 0) indentation.FirstLine = indent.FirstLine.ToString(CultureInfo.InvariantCulture);
-                SetSingleChild(paragraphProperties, indentation);
+                WordStructure.SetSingleChild(paragraphProperties, indentation);
             }
         }
         numbering.Save();
@@ -1485,18 +1482,18 @@ static class RestrictedHtmlDocumentRenderer
             "sparkle" => ("✧", "Segoe UI Symbol", 0.9),
             _ => ("•", "Arial", 0.75),
         };
-        SetSingleChild(level, new Wp.NumberingFormat { Val = Wp.NumberFormatValues.Bullet });
-        SetSingleChild(level, new Wp.LevelText { Val = marker.Item1 });
+        WordStructure.SetSingleChild(level, new Wp.NumberingFormat { Val = Wp.NumberFormatValues.Bullet });
+        WordStructure.SetSingleChild(level, new Wp.LevelText { Val = marker.Item1 });
         var runProperties = level.GetFirstChild<Wp.NumberingSymbolRunProperties>()
             ?? AddChild(level, new Wp.NumberingSymbolRunProperties());
-        SetSingleChild(runProperties, new Wp.RunFonts
+        WordStructure.SetSingleChild(runProperties, new Wp.RunFonts
         {
             Ascii = marker.Item2,
             HighAnsi = marker.Item2,
             EastAsia = marker.Item2,
         });
         var markerSize = Math.Max(1, (int)Math.Round(halfPoints * marker.Item3));
-        SetSingleChild(runProperties, new Wp.FontSize { Val = markerSize.ToString(CultureInfo.InvariantCulture) });
+        WordStructure.SetSingleChild(runProperties, new Wp.FontSize { Val = markerSize.ToString(CultureInfo.InvariantCulture) });
     }
 
     /// <summary>设置有序列表的数字、中文、字母或罗马数字格式。</summary>
@@ -1515,8 +1512,8 @@ static class RestrictedHtmlDocumentRenderer
             "upper-roman" => (Wp.NumberFormatValues.UpperRoman, $"{placeholder}."),
             _ => (Wp.NumberFormatValues.Decimal, $"{placeholder}."),
         };
-        SetSingleChild(level, new Wp.NumberingFormat { Val = numberFormat });
-        SetSingleChild(level, new Wp.LevelText { Val = text });
+        WordStructure.SetSingleChild(level, new Wp.NumberingFormat { Val = numberFormat });
+        WordStructure.SetSingleChild(level, new Wp.LevelText { Val = text });
     }
 
     /// <summary>设置段落对齐、段前段后、行距和首行缩进。</summary>
@@ -1539,10 +1536,10 @@ static class RestrictedHtmlDocumentRenderer
         int firstLineTwips)
     {
         var properties = EnsureParagraphProperties(paragraph);
-        SetSingleChild(properties, new Wp.Justification { Val = alignment });
-        SetSingleChild(properties, spacing);
+        WordStructure.SetSingleChild(properties, new Wp.Justification { Val = alignment });
+        WordStructure.SetSingleChild(properties, spacing);
         if (firstLineTwips < 0) return;
-        properties.RemoveAllChildren<Wp.Indentation>();
+        WordStructure.RemoveChildren<Wp.Indentation>(properties);
         if (firstLineTwips > 0)
         {
             properties.AddChild(new Wp.Indentation
@@ -1564,20 +1561,20 @@ static class RestrictedHtmlDocumentRenderer
         foreach (var run in paragraph.Descendants<Wp.Run>())
         {
             var properties = run.RunProperties ?? run.PrependChild(new Wp.RunProperties());
-            SetSingleChild(properties, new Wp.RunFonts
+            WordStructure.SetSingleChild(properties, new Wp.RunFonts
             {
                 Ascii = font,
                 HighAnsi = font,
                 EastAsia = font,
                 ComplexScript = font,
             });
-            SetSingleChild(properties, new Wp.FontSize { Val = halfPoints.ToString(CultureInfo.InvariantCulture) });
-            SetSingleChild(properties, new Wp.FontSizeComplexScript { Val = halfPoints.ToString(CultureInfo.InvariantCulture) });
-            if (color is not null) SetSingleChild(properties, new Wp.Color { Val = color });
+            WordStructure.SetSingleChild(properties, new Wp.FontSize { Val = halfPoints.ToString(CultureInfo.InvariantCulture) });
+            WordStructure.SetSingleChild(properties, new Wp.FontSizeComplexScript { Val = halfPoints.ToString(CultureInfo.InvariantCulture) });
+            if (color is not null) WordStructure.SetSingleChild(properties, new Wp.Color { Val = color });
             if (bold.HasValue)
             {
-                properties.RemoveAllChildren<Wp.Bold>();
-                properties.RemoveAllChildren<Wp.BoldComplexScript>();
+                WordStructure.RemoveChildren<Wp.Bold>(properties);
+                WordStructure.RemoveChildren<Wp.BoldComplexScript>(properties);
                 if (bold.Value)
                 {
                     properties.AddChild(new Wp.Bold(), throwOnError: true);
@@ -1586,8 +1583,8 @@ static class RestrictedHtmlDocumentRenderer
             }
             if (italic.HasValue)
             {
-                properties.RemoveAllChildren<Wp.Italic>();
-                properties.RemoveAllChildren<Wp.ItalicComplexScript>();
+                WordStructure.RemoveChildren<Wp.Italic>(properties);
+                WordStructure.RemoveChildren<Wp.ItalicComplexScript>(properties);
                 if (italic.Value)
                 {
                     properties.AddChild(new Wp.Italic(), throwOnError: true);
@@ -1707,7 +1704,7 @@ static class RestrictedHtmlDocumentRenderer
     static void SetImageKeepWithCaption(Wp.Paragraph paragraph)
     {
         var properties = EnsureParagraphProperties(paragraph);
-        properties.RemoveAllChildren<Wp.KeepNext>();
+        WordStructure.RemoveChildren<Wp.KeepNext>(properties);
         var next = paragraph.NextSibling<Wp.Paragraph>();
         if (next?.InnerText.Contains(FigureCaptionMarker, StringComparison.Ordinal) == true)
         {
@@ -1774,8 +1771,13 @@ static class RestrictedHtmlDocumentRenderer
         void FlushContent()
         {
             if (pending.Count == 0) return;
-            pending[0].InsertBeforeSelf(CreateChapterBodyTable(pending, format, color, tableCaptions));
-            foreach (var element in pending) element.Remove();
+            // 正文段落和业务表的行直接移入页框表格（不克隆），书签随原元素走；原表的行移完后由结构层删掉空表。
+            var previous = pending[0].PreviousSibling();
+            var parent = pending[0].Parent!;
+            var frame = CreateChapterBodyTable(pending, format, color, tableCaptions);
+            if (previous is not null) previous.InsertAfterSelf(frame);
+            else parent.PrependChild(frame);
+            WordStructure.RemoveRange(pending.Where(element => element.Parent is not null).ToList());
             pending.Clear();
         }
 
@@ -1794,7 +1796,7 @@ static class RestrictedHtmlDocumentRenderer
                     bottomLine: headingBottomBorderEnabled,
                     topLineSpacePt: headingTopBorderSpacePt,
                     bottomLineSpacePt: headingBottomBorderSpacePt);
-                if (!includeHeadings) paragraph.ParagraphProperties!.RemoveAllChildren<Wp.ParagraphBorders>();
+                if (!includeHeadings) WordStructure.RemoveChildren<Wp.ParagraphBorders>(paragraph.ParagraphProperties!);
             }
             else if (element is Wp.Paragraph { ParagraphProperties.SectionProperties: not null }
                 || element is not (Wp.Paragraph or Wp.Table)) FlushContent();
@@ -1847,18 +1849,18 @@ static class RestrictedHtmlDocumentRenderer
 
         // 正文框独立收口，标题关闭边框时也不依赖相邻段落补画上下边线。
         foreach (var cell in result.Elements<Wp.TableRow>().First().Elements<Wp.TableCell>())
-            SetSingleChild(cell.TableCellProperties!.GetFirstChild<Wp.TableCellBorders>()!, CreateTableBorder<Wp.TopBorder>(color, 6));
+            WordStructure.SetSingleChild(cell.TableCellProperties!.GetFirstChild<Wp.TableCellBorders>()!, CreateTableBorder<Wp.TopBorder>(color, 6));
         foreach (var cell in result.Elements<Wp.TableRow>().Last().Elements<Wp.TableCell>())
-            SetSingleChild(cell.TableCellProperties!.GetFirstChild<Wp.TableCellBorders>()!, CreateTableBorder<Wp.BottomBorder>(color, 6));
+            WordStructure.SetSingleChild(cell.TableCellProperties!.GetFirstChild<Wp.TableCellBorders>()!, CreateTableBorder<Wp.BottomBorder>(color, 6));
         return result;
     }
 
     /// <summary>正文留白改由单元格承担，保留首行缩进、列表编号、图片与原有同页关联。</summary>
     static Wp.TableRow CreateChapterBodyRow(Wp.Paragraph source, int columns, string color, bool caption)
     {
-        var paragraph = (Wp.Paragraph)source.CloneNode(true);
+        var paragraph = WordStructure.Detach(source);
         var properties = EnsureParagraphProperties(paragraph);
-        properties.RemoveAllChildren<Wp.ParagraphBorders>();
+        WordStructure.RemoveChildren<Wp.ParagraphBorders>(properties);
         if (caption) properties.GetFirstChild<Wp.SpacingBetweenLines>()!.After = "0";
         var cellProperties = new Wp.TableCellProperties(
             new Wp.GridSpan { Val = columns },
@@ -1882,22 +1884,22 @@ static class RestrictedHtmlDocumentRenderer
         var rows = source.Elements<Wp.TableRow>().ToList();
         for (var rowIndex = 0; rowIndex < rows.Count; rowIndex += 1)
         {
-            var row = (Wp.TableRow)rows[rowIndex].CloneNode(true);
+            var row = WordStructure.Detach(rows[rowIndex]);
             // 取消跨页重复表头，保留表头行不可拆分；正文行仍可跨页。
-            row.TableRowProperties?.RemoveAllChildren<Wp.TableHeader>();
+            if (row.TableRowProperties is { } headerRowProperties) WordStructure.RemoveChildren<Wp.TableHeader>(headerRowProperties);
             var column = 0;
             foreach (var cell in row.Elements<Wp.TableCell>())
             {
                 var properties = cell.TableCellProperties ?? cell.PrependChild(new Wp.TableCellProperties());
                 var span = properties.GridSpan?.Val?.Value ?? 1;
                 var endColumn = column + span;
-                SetSingleChild(properties, new Wp.GridSpan { Val = Array.BinarySearch(grid, sourceGrid[endColumn]) - Array.BinarySearch(grid, sourceGrid[column]) });
-                properties.RemoveAllChildren<Wp.TableCellWidth>();
+                WordStructure.SetSingleChild(properties, new Wp.GridSpan { Val = Array.BinarySearch(grid, sourceGrid[endColumn]) - Array.BinarySearch(grid, sourceGrid[column]) });
+                WordStructure.RemoveChildren<Wp.TableCellWidth>(properties);
                 var borders = properties.GetFirstChild<Wp.TableCellBorders>() ?? AddChild(properties, new Wp.TableCellBorders());
-                SetSingleChild(borders, CopyChapterCellBorder<Wp.TopBorder>(borders.GetFirstChild<Wp.TopBorder>() ?? (rowIndex == 0 ? tableBorders.GetFirstChild<Wp.TopBorder>() : (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideHorizontalBorder>())));
-                SetSingleChild(borders, column == 0 ? CreateTableBorder<Wp.LeftBorder>(color, 6) : CopyChapterCellBorder<Wp.LeftBorder>(borders.GetFirstChild<Wp.LeftBorder>() ?? (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideVerticalBorder>()));
-                SetSingleChild(borders, CopyChapterCellBorder<Wp.BottomBorder>(borders.GetFirstChild<Wp.BottomBorder>() ?? (rowIndex == rows.Count - 1 ? tableBorders.GetFirstChild<Wp.BottomBorder>() : (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideHorizontalBorder>())));
-                SetSingleChild(borders, endColumn == sourceGrid.Length - 1 ? CreateTableBorder<Wp.RightBorder>(color, 6) : CopyChapterCellBorder<Wp.RightBorder>(borders.GetFirstChild<Wp.RightBorder>() ?? (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideVerticalBorder>()));
+                WordStructure.SetSingleChild(borders, CopyChapterCellBorder<Wp.TopBorder>(borders.GetFirstChild<Wp.TopBorder>() ?? (rowIndex == 0 ? tableBorders.GetFirstChild<Wp.TopBorder>() : (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideHorizontalBorder>())));
+                WordStructure.SetSingleChild(borders, column == 0 ? CreateTableBorder<Wp.LeftBorder>(color, 6) : CopyChapterCellBorder<Wp.LeftBorder>(borders.GetFirstChild<Wp.LeftBorder>() ?? (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideVerticalBorder>()));
+                WordStructure.SetSingleChild(borders, CopyChapterCellBorder<Wp.BottomBorder>(borders.GetFirstChild<Wp.BottomBorder>() ?? (rowIndex == rows.Count - 1 ? tableBorders.GetFirstChild<Wp.BottomBorder>() : (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideHorizontalBorder>())));
+                WordStructure.SetSingleChild(borders, endColumn == sourceGrid.Length - 1 ? CreateTableBorder<Wp.RightBorder>(color, 6) : CopyChapterCellBorder<Wp.RightBorder>(borders.GetFirstChild<Wp.RightBorder>() ?? (Wp.BorderType?)tableBorders.GetFirstChild<Wp.InsideVerticalBorder>()));
                 var margins = properties.GetFirstChild<Wp.TableCellMargin>() ?? AddChild(properties, new Wp.TableCellMargin());
                 SetMissingChapterMargin(margins, new Wp.TopMargin(), tableMargins.GetFirstChild<Wp.TopMargin>()!);
                 SetMissingChapterMargin(margins, new Wp.LeftMargin(), tableMargins.GetFirstChild<Wp.TableCellLeftMargin>()!);
@@ -1937,11 +1939,11 @@ static class RestrictedHtmlDocumentRenderer
         uint bottomLineSpacePt)
     {
         var properties = EnsureParagraphProperties(paragraph);
-        SetSingleChild(properties, CreateChapterFrameBorders(color, topLine, bottomLine, topLineSpacePt, bottomLineSpacePt));
+        WordStructure.SetSingleChild(properties, CreateChapterFrameBorders(color, topLine, bottomLine, topLineSpacePt, bottomLineSpacePt));
         if (bottomLine && fill is null) properties.GetFirstChild<Wp.SpacingBetweenLines>()!.After = "0";
 
-        if (fill is null) properties.RemoveAllChildren<Wp.Shading>();
-        else SetSingleChild(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = fill });
+        if (fill is null) WordStructure.RemoveChildren<Wp.Shading>(properties);
+        else WordStructure.SetSingleChild(properties, new Wp.Shading { Val = Wp.ShadingPatternValues.Clear, Fill = fill });
 
         var indentation = properties.GetFirstChild<Wp.Indentation>();
         if (indentation is null)
@@ -2013,12 +2015,12 @@ static class RestrictedHtmlDocumentRenderer
     {
         var properties = table.GetFirstChild<Wp.TableProperties>() ?? table.PrependChild(new Wp.TableProperties());
         var width = ContentWidthTwips(format);
-        SetSingleChild(properties, new Wp.TableWidth
+        WordStructure.SetSingleChild(properties, new Wp.TableWidth
         {
             Type = Wp.TableWidthUnitValues.Dxa,
             Width = width.ToString(CultureInfo.InvariantCulture),
         });
-        SetSingleChild(properties, new Wp.TableLayout { Type = Wp.TableLayoutValues.Fixed });
+        WordStructure.SetSingleChild(properties, new Wp.TableLayout { Type = Wp.TableLayoutValues.Fixed });
 
         // 与 exportService.cjs 的 tableColumnWidths 一致：均分逻辑列，余量补在末列。
         var columnCount = table.Elements<Wp.TableRow>().Max(row => row.Elements<Wp.TableCell>()
@@ -2033,11 +2035,11 @@ static class RestrictedHtmlDocumentRenderer
                     .ToString(CultureInfo.InvariantCulture),
             });
         }
-        SetSingleChild(table, grid);
+        WordStructure.SetSingleChild(table, grid);
         // 列宽由新网格统一，去掉转换器的旧首选宽度，保留跨列与跨行合并。
         foreach (var cell in table.Elements<Wp.TableRow>().SelectMany(row => row.Elements<Wp.TableCell>()))
         {
-            cell.TableCellProperties?.RemoveAllChildren<Wp.TableCellWidth>();
+            if (cell.TableCellProperties is { } cellProperties) WordStructure.RemoveChildren<Wp.TableCellWidth>(cellProperties);
         }
 
         var borders = properties.GetFirstChild<Wp.TableBorders>();
@@ -2047,10 +2049,10 @@ static class RestrictedHtmlDocumentRenderer
             properties.AddChild(borders, throwOnError: true);
         }
 
-        SetSingleChild(borders, CreateTableBorder<Wp.LeftBorder>(color, 6));
-        SetSingleChild(borders, CreateTableBorder<Wp.RightBorder>(color, 6));
+        WordStructure.SetSingleChild(borders, CreateTableBorder<Wp.LeftBorder>(color, 6));
+        WordStructure.SetSingleChild(borders, CreateTableBorder<Wp.RightBorder>(color, 6));
         // 表题下边线已经承担表格上沿，避免两条横线叠在一起。
-        if (captioned) SetSingleChild(borders, CreateTableBorder<Wp.TopBorder>(color, 0));
+        if (captioned) WordStructure.SetSingleChild(borders, CreateTableBorder<Wp.TopBorder>(color, 0));
     }
 
     /// <summary>双栏文档用连续分节把一级标题单独置于通栏。</summary>
@@ -2085,7 +2087,7 @@ static class RestrictedHtmlDocumentRenderer
             }
 
             var properties = EnsureParagraphProperties(heading);
-            properties.RemoveAllChildren<Wp.SectionProperties>();
+            WordStructure.RemoveChildren<Wp.SectionProperties>(properties);
             properties.AppendChild(CreateContinuousSection(
                 finalSection,
                 columnCount: 1,
@@ -2095,9 +2097,9 @@ static class RestrictedHtmlDocumentRenderer
 
         if (headings.Count == 0) return;
         // 一级标题之后的双栏正文仍属于连续分节，默认 nextPage 会将最后一章正文推到下一页。
-        SetSingleChild(finalSection, new Wp.SectionType { Val = Wp.SectionMarkValues.Continuous });
-        finalSection.RemoveAllChildren<Wp.TitlePage>();
-        finalSection.RemoveAllChildren<Wp.PageNumberType>();
+        WordStructure.SetSingleChild(finalSection, new Wp.SectionType { Val = Wp.SectionMarkValues.Continuous });
+        WordStructure.RemoveChildren<Wp.TitlePage>(finalSection);
+        WordStructure.RemoveChildren<Wp.PageNumberType>(finalSection);
     }
 
     /// <summary>复制页面和页眉页脚，仅替换连续分节的栏数。</summary>
@@ -2107,12 +2109,12 @@ static class RestrictedHtmlDocumentRenderer
         bool includeDocumentStart)
     {
         var section = (Wp.SectionProperties)source.CloneNode(true);
-        section.RemoveAllChildren<Wp.SectionType>();
-        section.RemoveAllChildren<Wp.Columns>();
+        WordStructure.RemoveChildren<Wp.SectionType>(section);
+        WordStructure.RemoveChildren<Wp.Columns>(section);
         if (!includeDocumentStart)
         {
-            section.RemoveAllChildren<Wp.TitlePage>();
-            section.RemoveAllChildren<Wp.PageNumberType>();
+            WordStructure.RemoveChildren<Wp.TitlePage>(section);
+            WordStructure.RemoveChildren<Wp.PageNumberType>(section);
         }
 
         var pageSize = section.GetFirstChild<Wp.PageSize>();
@@ -2164,12 +2166,6 @@ static class RestrictedHtmlDocumentRenderer
             Color = color,
             Size = size,
         };
-    }
-
-    static void SetSingleChild<T>(OpenXmlCompositeElement parent, T child) where T : OpenXmlElement
-    {
-        parent.RemoveAllChildren<T>();
-        parent.AddChild(child, throwOnError: true);
     }
 
     static T AddChild<T>(OpenXmlCompositeElement parent, T child) where T : OpenXmlElement

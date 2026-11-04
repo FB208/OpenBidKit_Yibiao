@@ -1,4 +1,5 @@
 using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -198,61 +199,27 @@ static class TemplateRepeats
     }
 
     /// <summary>
-    /// 删除标为待删的条目，并去掉全部条目书签。范围内有分节属性时保留该条。
-    /// 与 RemoveFormatText 一致：范围内的其他书签移到下一段，首段的段前分页移到下一段；单元格须以段落结尾，删空时补一个空段落。
-    /// 整本导出并入章节和正文页单章预览都调用。
+    /// 删除标为待删的条目，并去掉全部条目书签。范围内有分节属性时保留该条；首段的段前分页移到下一段。
+    /// 删除经结构层：范围内的其他书签保留并移到相邻段落，单元格仍以段落结尾。整本导出并入章节和正文页单章预览都调用。
     /// </summary>
     public static void RemoveIdle(OpenXmlElement container)
     {
         foreach (var (_, elements) in Ranges(container, IdleBookmarkPrefix))
         {
             if (elements.Any(element => element.Descendants<Wp.SectionProperties>().Any())) continue;
-            var parent = elements[0].Parent;
             var firstParagraph = elements[0] as Wp.Paragraph ?? elements[0].Descendants<Wp.Paragraph>().FirstOrDefault();
-            if (elements[^1].NextSibling() is Wp.Paragraph next)
+            if (elements[^1].NextSibling() is Wp.Paragraph next
+                && firstParagraph?.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
             {
-                var anchor = (OpenXmlElement?)next.ParagraphProperties;
-                foreach (var bookmark in elements
-                    .SelectMany(element => element.Descendants())
-                    .Where(node => node is Wp.BookmarkStart start ? !IsRepeatBookmark(start) : node is Wp.BookmarkEnd)
-                    .ToList())
-                {
-                    if (bookmark is Wp.BookmarkEnd end && IsRepeatEnd(container, end)) continue;
-                    bookmark.Remove();
-                    anchor = anchor is null ? next.PrependChild(bookmark) : next.InsertAfter(bookmark, anchor);
-                }
-                if (firstParagraph?.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
-                {
-                    (next.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
-                }
+                (next.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
             }
-            foreach (var element in elements) element.Remove();
-            if (parent is Wp.TableCell cell && cell.LastChild is not Wp.Paragraph) cell.AppendChild(EmptyParagraph(firstParagraph));
+            WordStructure.RemoveRange(elements);
         }
-        var starts = container.Descendants<Wp.BookmarkStart>().Where(IsRepeatBookmark).ToList();
-        var ids = starts.Select(item => item.Id?.Value).ToHashSet(StringComparer.Ordinal);
-        foreach (var end in container.Descendants<Wp.BookmarkEnd>().Where(item => ids.Contains(item.Id?.Value)).ToList()) end.Remove();
-        foreach (var start in starts) start.Remove();
-    }
-
-    /// <summary>沿用原段落格式的空段落，去掉编号和段前分页。</summary>
-    static Wp.Paragraph EmptyParagraph(Wp.Paragraph? source)
-    {
-        var paragraph = new Wp.Paragraph();
-        if (source?.ParagraphProperties?.CloneNode(true) is Wp.ParagraphProperties properties)
-        {
-            properties.NumberingProperties = null;
-            properties.PageBreakBefore = null;
-            paragraph.AppendChild(properties);
-        }
-        return paragraph;
+        WordStructure.RemoveBookmarks(container.Descendants<Wp.BookmarkStart>().Where(IsRepeatBookmark).ToList());
     }
 
     static bool IsRepeatBookmark(Wp.BookmarkStart start) =>
         start.Name?.Value is { } name && (name.StartsWith(BookmarkPrefix, StringComparison.Ordinal) || name.StartsWith(IdleBookmarkPrefix, StringComparison.Ordinal));
-
-    static bool IsRepeatEnd(OpenXmlElement container, Wp.BookmarkEnd end) =>
-        container.Descendants<Wp.BookmarkStart>().Any(start => start.Id?.Value == end.Id?.Value && IsRepeatBookmark(start));
 
     /// <summary>名称以 prefix 开头的条目书签各自覆盖的元素：起止段落在共同父元素下的兄弟区间，整个控件内容都在区间内时取控件本身。</summary>
     static List<(Wp.BookmarkStart Start, List<OpenXmlElement> Elements)> Ranges(OpenXmlElement container, string prefix)

@@ -1,5 +1,6 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -14,23 +15,23 @@ static class CrossDocumentImport
     {
         foreach (var style in cloned.Descendants<Wp.ParagraphStyleId>().ToList())
         {
-            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, style.Remove);
+            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, () => WordStructure.Remove(style));
         }
         foreach (var style in cloned.Descendants<Wp.RunStyle>().ToList())
         {
-            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, style.Remove);
+            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, () => WordStructure.Remove(style));
         }
         foreach (var style in cloned.Descendants<Wp.TableStyle>().ToList())
         {
-            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, style.Remove);
+            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, () => WordStructure.Remove(style));
         }
         foreach (var style in cloned.Descendants<Wp.StyleLink>().ToList())
         {
-            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, style.Remove);
+            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, () => WordStructure.Remove(style));
         }
         foreach (var style in cloned.Descendants<Wp.NumberingStyleLink>().ToList())
         {
-            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, style.Remove);
+            ApplyStyleMap(style.Val?.Value, styleIds, value => style.Val = value, () => WordStructure.Remove(style));
         }
     }
 
@@ -65,7 +66,7 @@ static class CrossDocumentImport
             var targetNumberId = ImportNumbering(sourceNumberId.Value, sourcePart, destPart, context);
             if (targetNumberId is null)
             {
-                properties.Remove();
+                WordStructure.Remove(properties);
                 continue;
             }
             properties.NumberingId!.Val = targetNumberId.Value;
@@ -131,7 +132,7 @@ static class CrossDocumentImport
             var sourceId = reference.Val?.Value;
             if (sourceId is null) continue;
             var targetId = ImportPictureBullet(sourceId.Value, sourcePart, destPart, context);
-            if (targetId is null) reference.Remove();
+            if (targetId is null) WordStructure.Remove(reference);
             else reference.Val = targetId.Value;
         }
     }
