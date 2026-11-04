@@ -12,6 +12,7 @@ const {
   emitAiHttpErrorToWindows,
 } = require('../../utils/aiHttpError.cjs');
 const { normalizeTokenUsage } = require('../textTokenStatsStore.cjs');
+const { markPiRetryableErrorMessage } = require('../pi/piRetryErrorNormalizer.cjs');
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_NORMAL_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
@@ -640,6 +641,57 @@ function createSseResponseCollector() {
   };
 }
 
+// 与 OpenAI SDK 取 APIError 文案的方式一致，保证 Pi 看到的错误以重试标记开头。
+function markRetryableUpstreamError(error) {
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const message = error.message
+      ? (typeof error.message === 'string' ? error.message : JSON.stringify(error.message))
+      : JSON.stringify(error);
+    return { ...error, message: markPiRetryableErrorMessage(message) };
+  }
+  return { message: markPiRetryableErrorMessage(typeof error === 'string' ? error : JSON.stringify(error)) };
+}
+
+function markRetryableStreamErrorLine(line) {
+  if (!line.includes('"error"')) return line;
+  const lineEnd = line.endsWith('\r') ? '\r' : '';
+  const trimmed = (lineEnd ? line.slice(0, -1) : line).trim();
+  if (!trimmed.startsWith('data:')) return line;
+
+  let payload = null;
+  try {
+    payload = JSON.parse(trimmed.slice(5).trim());
+  } catch {
+    return line;
+  }
+  if (!payload || typeof payload !== 'object' || !payload.error) return line;
+  return `data: ${JSON.stringify({ ...payload, error: markRetryableUpstreamError(payload.error) })}${lineEnd}`;
+}
+
+// 上游在 HTTP 200 流中途返回的 error 事件是上游故障：转发给 Pi 前标为可重试，由 Pi 丢弃该轮后自动重试；
+// 界面和任务状态由 restorePiErrorMessage() 还原原文，用量与日志采集仍读取上游原始数据。
+function createRetryableStreamErrorRewriter() {
+  const encoder = new TextEncoder();
+  let pending = '';
+  const rewrite = (text) => encoder.encode(text.split('\n').map(markRetryableStreamErrorLine).join('\n'));
+
+  return {
+    push(text) {
+      pending += text;
+      const end = pending.lastIndexOf('\n');
+      if (end < 0) return null;
+      const complete = pending.slice(0, end + 1);
+      pending = pending.slice(end + 1);
+      return rewrite(complete);
+    },
+    flush() {
+      const rest = pending;
+      pending = '';
+      return rest ? rewrite(rest) : null;
+    },
+  };
+}
+
 function createUsageCapturingStream(source, onDone, options = {}) {
   if (!source?.getReader) return source;
   // ReadableStream 可由不同异步链拉取，创建时固定这条模型请求的归属。
@@ -648,20 +700,28 @@ function createUsageCapturingStream(source, onDone, options = {}) {
   const reader = source.getReader();
   const decoder = new TextDecoder('utf-8');
   const collector = createSseResponseCollector();
+  const rewriter = createRetryableStreamErrorRewriter();
 
   return new ReadableStream({
     async pull(controller) {
       try {
-        const { done, value } = await reader.read();
-        if (done) {
-          collector.push(decoder.decode());
-          await Promise.resolve(onDone(collector.flush()));
-          options.onDone?.();
-          controller.close();
-          return;
-        }
+        // 按行转发时上游块可能不含完整行；本次 pull 未入队时不会被再次调用，须读到可转发的数据或流结束。
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            const tail = decoder.decode();
+            collector.push(tail);
+            const downstreamTail = rewriter.push(tail);
+            if (downstreamTail) controller.enqueue(downstreamTail);
+            const downstreamRest = rewriter.flush();
+            if (downstreamRest) controller.enqueue(downstreamRest);
+            await Promise.resolve(onDone(collector.flush()));
+            options.onDone?.();
+            controller.close();
+            return;
+          }
 
-        if (value) {
+          if (!value) continue;
           options.onChunk?.(value);
           if (value.byteLength) notifyAiResponse(aiActivity);
           options.onActivity?.({
@@ -672,8 +732,13 @@ function createUsageCapturingStream(source, onDone, options = {}) {
             activity: false,
             meta: { bytes: value.byteLength || value.length || 0 },
           });
-          collector.push(decoder.decode(value, { stream: true }));
-          controller.enqueue(value);
+          const text = decoder.decode(value, { stream: true });
+          collector.push(text);
+          const downstream = rewriter.push(text);
+          if (downstream) {
+            controller.enqueue(downstream);
+            return;
+          }
         }
       } catch (error) {
         collector.push(decoder.decode());
@@ -842,7 +907,11 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
         createStreamFailure(capture, safeErrorMessage(reason || 'AI 流式响应在完成前被取消')),
         capture,
       ),
-      onError: (error, capture) => finalizeStreamFailure(error, capture),
+      // 流中已收到上游报错时，Pi 随后断开连接造成的中止不是失败原因，日志记录上游报错。
+      onError: (error, capture) => finalizeStreamFailure(
+        capture?.streamError ? createStreamFailure(capture, safeErrorMessage(error)) : error,
+        capture,
+      ),
     });
 
     return {
