@@ -85,7 +85,7 @@ static class BlindCheckEditAction
             var applied = 0;
             // 在副本上读写打开并修改，只保存改过的部件；校验通过后再覆盖原位置。
             tempPath = sourcePath + ".edit.docx";
-            File.Copy(sourcePath, tempPath, overwrite: true);
+            WordWorkspace.CopyToWritable(sourcePath, tempPath);
             using (var session = BlindCheckSession.Open(tempPath, request, new ProgressRange(progress, 0, 0.35), writable: true))
             {
                 var model = session.Context.Model;
@@ -134,7 +134,7 @@ static class BlindCheckEditAction
                 }
                 else
                 {
-                    File.Move(tempPath, sourcePath, overwrite: true);
+                    WordWorkspace.MoveOverWritable(tempPath, sourcePath);
                 }
 
                 tempPath = null;

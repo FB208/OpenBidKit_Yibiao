@@ -71,7 +71,7 @@ static class BlindCheckFixAction
             // 先把原文复制成副本，在副本上读写打开并修复，只保存改过的部件；原文件不改动。
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             var tempPath = outputPath + ".tmp";
-            File.Copy(sourcePath, tempPath, overwrite: true);
+            WordWorkspace.CopyToWritable(sourcePath, tempPath);
             try
             {
                 using (var session = BlindCheckSession.Open(tempPath, request, new ProgressRange(progress, 0, 0.3), writable: true))
@@ -86,7 +86,7 @@ static class BlindCheckFixAction
                     if (fixes.ContainsKey("struct.toc") && session.Context.Outline.UsedToc) request.HeadingFallback = false;
                 }
 
-                File.Move(tempPath, outputPath, overwrite: true);
+                WordWorkspace.MoveOverWritable(tempPath, outputPath);
             }
             finally
             {

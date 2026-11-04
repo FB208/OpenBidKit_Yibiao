@@ -90,6 +90,13 @@ static class WordWorkspace
         ClearReadOnly(destPath);
     }
 
+    /// <summary>用临时文件覆盖目标；目标是只读文件时先去掉只读属性，否则 File.Move 覆盖会被拒绝。</summary>
+    public static void MoveOverWritable(string tempPath, string destPath)
+    {
+        ClearReadOnly(destPath);
+        File.Move(tempPath, destPath, overwrite: true);
+    }
+
     static void ClearReadOnly(string path)
     {
         if (!File.Exists(path)) return;

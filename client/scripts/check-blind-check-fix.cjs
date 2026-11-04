@@ -690,3 +690,26 @@ test('AI 复核：标书结构按段落编号导出，编辑按编号替换、�
   assert.match(ambiguous.results[0].message, /出现 2 次/);
   assert.equal(ambiguous.applied, 0);
 });
+
+test('只读文件：原件只读时能修复，修复副本只读时 AI 编辑也能写回', async () => {
+  // 工作区原件由 Main 复制而来，Windows 上会带上用户原件的只读属性；没勾选修复项时副本也是直接复制的原件。
+  const source = buildDocx('只读原件.docx', [para('只读原件的正文段落。'), para('第二段内容。'), sectPr()].join(''));
+  const sourcePath = path.join(workspace, source);
+  const outputPath = sourcePath.replace(`${path.sep}source${path.sep}`, `${path.sep}fixed${path.sep}`);
+  fs.chmodSync(sourcePath, 0o444);
+  try {
+    const { report } = await fix(source);
+    assert.ok(report.output, '只读原件也能写出修复副本');
+
+    fs.chmodSync(outputPath, 0o444);
+    const output = source.replace('/source/', '/fixed/');
+    const result = await service.runBlindCheckEdit({
+      source: output, original: source, profile: normalizeProfile({}), sensitive_words: [], image_facts: [],
+      edits: [{ op: 'replace', target: 'p1', find: '正文段落', replace: '内容' }],
+    });
+    assert.equal(result.applied, 1, JSON.stringify(result.results));
+    assert.ok(paragraphTexts(xml(outputPath)).includes('只读原件的内容。'), '修改写回了只读的修复副本');
+  } finally {
+    for (const file of [sourcePath, outputPath]) if (fs.existsSync(file)) fs.chmodSync(file, 0o666);
+  }
+});
