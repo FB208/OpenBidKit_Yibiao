@@ -2883,6 +2883,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       const resultIds = new Set(result.sections.map(section => section.section_id));
       contentStats.word_conversion_completed = contentRuntime.html_output.word_sections.filter(section => resultIds.has(section.section_id)).length;
       updateContentAgentState({ task_key: CONTENT_GENERATION_AGENT_TASK_KEY, status: 'success', agent_connection: 'idle' }, false);
+      // Agent 持久状态同步记录完成，运行时在会话结束时只写 running/idle。
+      if (agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
+        agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, { status: 'success', phase: 'completed', agent_connection: 'idle', error: null });
+      }
       checkpointTask({ status: 'running', logs, stats: statsSnapshot() }, { contentGenerationRuntime: syncRuntime() });
       abortOnPause();
       signal.throwIfAborted();

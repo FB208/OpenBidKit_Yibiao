@@ -199,13 +199,16 @@ static class TemplateRepeats
 
     /// <summary>
     /// 删除标为待删的条目，并去掉全部条目书签。范围内有分节属性时保留该条。
-    /// 与 RemoveFormatText 一致：范围内的其他书签移到下一段，首段的段前分页移到下一段。整本导出并入章节和正文页单章预览都调用。
+    /// 与 RemoveFormatText 一致：范围内的其他书签移到下一段，首段的段前分页移到下一段；单元格须以段落结尾，删空时补一个空段落。
+    /// 整本导出并入章节和正文页单章预览都调用。
     /// </summary>
     public static void RemoveIdle(OpenXmlElement container)
     {
         foreach (var (_, elements) in Ranges(container, IdleBookmarkPrefix))
         {
             if (elements.Any(element => element.Descendants<Wp.SectionProperties>().Any())) continue;
+            var parent = elements[0].Parent;
+            var firstParagraph = elements[0] as Wp.Paragraph ?? elements[0].Descendants<Wp.Paragraph>().FirstOrDefault();
             if (elements[^1].NextSibling() is Wp.Paragraph next)
             {
                 var anchor = (OpenXmlElement?)next.ParagraphProperties;
@@ -218,18 +221,31 @@ static class TemplateRepeats
                     bookmark.Remove();
                     anchor = anchor is null ? next.PrependChild(bookmark) : next.InsertAfter(bookmark, anchor);
                 }
-                var firstParagraph = elements[0] as Wp.Paragraph ?? elements[0].Descendants<Wp.Paragraph>().FirstOrDefault();
                 if (firstParagraph?.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
                 {
                     (next.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
                 }
             }
             foreach (var element in elements) element.Remove();
+            if (parent is Wp.TableCell cell && cell.LastChild is not Wp.Paragraph) cell.AppendChild(EmptyParagraph(firstParagraph));
         }
         var starts = container.Descendants<Wp.BookmarkStart>().Where(IsRepeatBookmark).ToList();
         var ids = starts.Select(item => item.Id?.Value).ToHashSet(StringComparer.Ordinal);
         foreach (var end in container.Descendants<Wp.BookmarkEnd>().Where(item => ids.Contains(item.Id?.Value)).ToList()) end.Remove();
         foreach (var start in starts) start.Remove();
+    }
+
+    /// <summary>沿用原段落格式的空段落，去掉编号和段前分页。</summary>
+    static Wp.Paragraph EmptyParagraph(Wp.Paragraph? source)
+    {
+        var paragraph = new Wp.Paragraph();
+        if (source?.ParagraphProperties?.CloneNode(true) is Wp.ParagraphProperties properties)
+        {
+            properties.NumberingProperties = null;
+            properties.PageBreakBefore = null;
+            paragraph.AppendChild(properties);
+        }
+        return paragraph;
     }
 
     static bool IsRepeatBookmark(Wp.BookmarkStart start) =>

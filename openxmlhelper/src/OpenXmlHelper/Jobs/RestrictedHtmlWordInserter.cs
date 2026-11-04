@@ -814,7 +814,8 @@ static partial class RestrictedHtmlWordInserter
 
     static ImageDimensions ReadJpegDimensions(Stream stream)
     {
-        using var reader = new BinaryReader(stream);
+        // 调用方读完尺寸后可能用同一个流嵌入图片，不随读取器关闭。
+        using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         if (reader.ReadByte() != 0xFF || reader.ReadByte() != 0xD8)
         {
             throw new InvalidOperationException("JPEG 图片格式无效");

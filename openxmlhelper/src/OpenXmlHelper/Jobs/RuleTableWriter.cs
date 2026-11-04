@@ -57,6 +57,7 @@ static class RuleTableWriter
     /// <summary>
     /// 按结果顺序处理：from 行原地填写（须按行号递增）；like 行克隆该行，接在上一结果行之后，
     /// 所照的行位于上一结果行之后时放到所照行前面，使新增条目落在所照行所在的分段。克隆行去掉纵向合并。
+    /// 只返回写入的文字，行和格子沿用模版原有标记，不交给校验。
     /// </summary>
     static IReadOnlyList<OpenXmlElement> FillListTable(HashSet<string> ids, Wp.Table tableElement, RuleTableFill table)
     {
@@ -85,17 +86,16 @@ static class RuleTableWriter
                 lastFrom = index;
                 used.Add(index);
                 var target = rows[index - 1];
-                WriteCells(target, ids, row.Cells, inPlace: true);
+                WriteCells(target, ids, row.Cells, inPlace: true, written);
                 cursor = target;
                 cursorOrder = index;
-                written.Add(target);
                 continue;
             }
             var clone = (Wp.TableRow)templates[index - 1].CloneNode(true);
             RemoveRevisionIds(clone);
             // 样板行若参与纵向合并，克隆会让合并错位，新增行一律不合并。
             foreach (var cell in clone.Elements<Wp.TableCell>()) cell.TableCellProperties?.RemoveAllChildren<Wp.VerticalMerge>();
-            WriteCells(clone, ids, row.Cells, inPlace: false);
+            WriteCells(clone, ids, row.Cells, inPlace: false, written);
             if (cursor is null || index > cursorOrder)
             {
                 rows[index - 1].InsertBeforeSelf(clone);
@@ -106,7 +106,6 @@ static class RuleTableWriter
                 cursor.InsertAfterSelf(clone);
             }
             cursor = clone;
-            written.Add(clone);
         }
         // 没被原地填写的行：带规则格、除规则格外没有原文（序号除外）的空行删除，印有内容的保留占位，交给用户处理。
         for (var index = 1; index <= rows.Count; index += 1)
@@ -136,7 +135,7 @@ static class RuleTableWriter
     /// 按网格列写入格子：格内有规则控件时换成文字（多个控件时写入第一个，其余清空）；
     /// 没有规则控件的格子，原地填写时不动，新增行整格换成给定文字。
     /// </summary>
-    static void WriteCells(Wp.TableRow row, HashSet<string> ids, IReadOnlyList<RuleTableCell> cells, bool inPlace)
+    static void WriteCells(Wp.TableRow row, HashSet<string> ids, IReadOnlyList<RuleTableCell> cells, bool inPlace, List<OpenXmlElement> written)
     {
         var cellsByColumn = new Dictionary<int, Wp.TableCell>();
         var column = row.TableRowProperties?.GetFirstChild<Wp.GridBefore>()?.Val?.Value ?? 0;
@@ -154,18 +153,18 @@ static class RuleTableWriter
             var controls = cell.Descendants<Wp.SdtElement>().Where(control => ids.Contains(FieldId(control))).ToList();
             if (controls.Count > 0)
             {
-                ReplaceControl(controls[0], item.Value);
-                foreach (var extra in controls.Skip(1)) ReplaceControl(extra, "");
+                ReplaceControl(controls[0], item.Value, written);
+                foreach (var extra in controls.Skip(1)) ReplaceControl(extra, "", written);
             }
             else if (!inPlace)
             {
-                SetCellText(cell, item.Value);
+                written.Add(SetCellText(cell, item.Value));
             }
         }
     }
 
     /// <summary>把单元格文字换成给定内容：沿用第一个文字所在 run 的格式，多行用换行；空单元格补一个 run。只保留第一段。</summary>
-    static void SetCellText(Wp.TableCell cell, string value)
+    static Wp.Run SetCellText(Wp.TableCell cell, string value)
     {
         var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
         var paragraph = paragraphs.FirstOrDefault() ?? cell.AppendChild(new Wp.Paragraph());
@@ -175,7 +174,7 @@ static class RuleTableWriter
         if (sourceRun?.RunProperties is not null) run.AppendChild((Wp.RunProperties)sourceRun.RunProperties.CloneNode(true));
         AppendLines(run, value);
         foreach (var child in paragraph.ChildElements.Where(item => item is not Wp.ParagraphProperties).ToList()) child.Remove();
-        paragraph.AppendChild(run);
+        return paragraph.AppendChild(run);
     }
 
     /// <summary>按 columns 和 rows 新建表格（表格位置和重建共用）：首行为表头，分组行整行合并。</summary>
@@ -229,7 +228,7 @@ static class RuleTableWriter
     }
 
     /// <summary>规则字段换成文字：行内控件沿用占位格式（去掉淡红底），块级控件每行一段。</summary>
-    static void ReplaceControl(Wp.SdtElement control, string value)
+    static void ReplaceControl(Wp.SdtElement control, string value, List<OpenXmlElement> written)
     {
         var lines = SplitLines(value);
         var sourceRun = control.Descendants<Wp.Run>().FirstOrDefault();
@@ -243,13 +242,13 @@ static class RuleTableWriter
                 {
                     paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
                 }
-                paragraph.AppendChild(TemplateFieldSdtWriter.CreateValueRun([line], sourceRun));
+                written.Add(paragraph.AppendChild(TemplateFieldSdtWriter.CreateValueRun([line], sourceRun)));
                 control.InsertBeforeSelf(paragraph);
             }
         }
         else
         {
-            control.InsertBeforeSelf(TemplateFieldSdtWriter.CreateValueRun(lines, sourceRun));
+            written.Add(control.InsertBeforeSelf(TemplateFieldSdtWriter.CreateValueRun(lines, sourceRun)));
         }
         control.Remove();
     }

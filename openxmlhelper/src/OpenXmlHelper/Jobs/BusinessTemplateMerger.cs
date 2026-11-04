@@ -550,7 +550,8 @@ sealed class BusinessTemplateMerger : IDisposable
 
     /// <summary>
     /// 去掉模版提取时 Agent 选定的格式文字（表单编号、格式名称、格式说明，见 TemplateFieldScanner.AddFormatTexts）。
-    /// 因此变空的段落一并删除：段内书签移到下一段，段前分页移到下一段。整本导出并入章节和正文页单章预览都最先调用。
+    /// 因此变空的段落一并删除：段内书签移到下一段，段前分页移到下一段。单元格须以段落结尾，删去会破坏这一点的段落只清空不删。
+    /// 整本导出并入章节和正文页单章预览都最先调用。
     /// </summary>
     internal static void RemoveFormatText(Wp.Body container)
     {
@@ -565,6 +566,7 @@ sealed class BusinessTemplateMerger : IDisposable
         foreach (var paragraph in touched)
         {
             if (paragraph.Parent is null
+                || paragraph.Parent is Wp.TableCell cell && ReferenceEquals(cell.LastChild, paragraph) && paragraph.PreviousSibling() is not Wp.Paragraph
                 || paragraph.ParagraphProperties?.SectionProperties is not null
                 || paragraph.Descendants<Wp.Text>().Any(text => text.Text.Trim().Length > 0)
                 || paragraph.Descendants().Any(item => item is Wp.Drawing or Wp.Picture or Wp.EmbeddedObject or Wp.Break or Wp.FieldChar or Wp.SdtElement or Wp.TabChar))
