@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -47,7 +48,7 @@ static class PageReferenceBuilder
             var target = start ? FirstParagraph(Sibling(marker, next: true)) : LastParagraph(Sibling(marker, next: false));
             if (target is null) throw new InvalidOperationException("页码锚点缺少对应正文块");
             AddBookmark(target, BookmarkName(start, parts[1]), nextId(), atStart: start);
-            marker.Remove();
+            WordStructure.Remove(marker);
         }
     }
 
@@ -106,11 +107,12 @@ static class PageReferenceBuilder
             .ToList())
         {
             var replacement = new List<Wp.Run>();
-            foreach (var child in run.ChildElements.Where(item => item is not Wp.RunProperties))
+            foreach (var child in run.ChildElements.Where(item => item is not Wp.RunProperties).ToList())
             {
                 if (child is not Wp.Text text || !TokenPattern.IsMatch(text.Text))
                 {
-                    replacement.Add(CreateRun(run.RunProperties, child.CloneNode(true)));
+                    // 非标记内容（域字符、制表符等）移入新 run，原 run 只剩标记文字再删，避免被当成删掉了一半的域。
+                    replacement.Add(CreateRun(run.RunProperties, WordStructure.Detach(child)));
                     continue;
                 }
                 var position = 0;
@@ -134,7 +136,7 @@ static class PageReferenceBuilder
                 if (position < text.Text.Length) replacement.Add(TextRun(run.RunProperties, text.Text[position..]));
             }
             foreach (var item in replacement) run.InsertBeforeSelf(item);
-            run.Remove();
+            WordStructure.Remove(run);
         }
 
         var anchors = new List<PageAnchor>();
@@ -251,7 +253,7 @@ static class PageReferenceBuilder
         var written = false;
         foreach (var text in runs.SelectMany(run => run.Elements<Wp.Text>()).ToList())
         {
-            if (written) text.Remove();
+            if (written) WordStructure.Remove(text);
             else text.Text = value;
             written = true;
         }

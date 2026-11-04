@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -13,13 +13,13 @@ sealed class StyleInfo
     public List<string> Aliases { get; init; } = [];
     public string? BasedOn { get; init; }
     public bool IsDefault { get; init; }
-    public XElement? PPr { get; init; }
-    public XElement? RPr { get; init; }
+    public OpenXmlElement? PPr { get; init; }
+    public OpenXmlElement? RPr { get; init; }
     public int? HeadingLevel { get; init; }
 
     public string DisplayName => Name.Length > 0 ? Name : Id;
 
-    public static StyleInfo From(XElement element)
+    public static StyleInfo From(OpenXmlElement element)
     {
         var type = W.Attr(element, "type") ?? "paragraph";
         var name = W.ValOf(element.Element(W.Name)) ?? "";
@@ -64,12 +64,12 @@ sealed class StyleSheet
 {
     readonly Dictionary<string, List<StyleInfo>> _chainCache = new(StringComparer.Ordinal);
 
-    public XElement? DocDefaultRPr { get; private set; }
-    public XElement? DocDefaultPPr { get; private set; }
+    public OpenXmlElement? DocDefaultRPr { get; private set; }
+    public OpenXmlElement? DocDefaultPPr { get; private set; }
     public Dictionary<string, StyleInfo> ById { get; } = new(StringComparer.Ordinal);
     public StyleInfo? DefaultParagraphStyle { get; private set; }
 
-    public static StyleSheet Parse(XDocument? document)
+    public static StyleSheet Parse(PartXml? document)
     {
         var sheet = new StyleSheet();
         var root = document?.Root;

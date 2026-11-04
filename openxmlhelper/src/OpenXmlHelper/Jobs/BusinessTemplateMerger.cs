@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using A = DocumentFormat.OpenXml.Drawing;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
@@ -154,7 +155,7 @@ sealed class BusinessTemplateMerger : IDisposable
                 anchors.EndNodeIds,
                 anchors.NextId);
         }
-        foreach (var block in blocks) block.Remove();
+        foreach (var block in blocks) WordStructure.Detach(block);
         return blocks;
     }
 
@@ -164,11 +165,11 @@ sealed class BusinessTemplateMerger : IDisposable
     /// </summary>
     public void ApplyPageSettings(Wp.SectionProperties section, bool keepChromeMargins)
     {
-        section.RemoveAllChildren<Wp.Columns>();
+        WordStructure.RemoveChildren<Wp.Columns>(section);
         if (_section is null) return;
         if (_section.GetFirstChild<Wp.PageSize>() is { } size)
         {
-            section.RemoveAllChildren<Wp.PageSize>();
+            WordStructure.RemoveChildren<Wp.PageSize>(section);
             section.AddChild(size.CloneNode(true), true);
         }
         if (_section.GetFirstChild<Wp.PageMargin>() is { } margin)
@@ -181,10 +182,10 @@ sealed class BusinessTemplateMerger : IDisposable
                 if (current.Header is not null) copy.Header = current.Header.Value;
                 if (current.Footer is not null) copy.Footer = current.Footer.Value;
             }
-            section.RemoveAllChildren<Wp.PageMargin>();
+            WordStructure.RemoveChildren<Wp.PageMargin>(section);
             section.AddChild(copy, true);
         }
-        section.RemoveAllChildren<Wp.DocGrid>();
+        WordStructure.RemoveChildren<Wp.DocGrid>(section);
         if (_section.GetFirstChild<Wp.DocGrid>() is { } grid) section.AddChild(grid.CloneNode(true), true);
     }
 
@@ -266,13 +267,7 @@ sealed class BusinessTemplateMerger : IDisposable
             var tag = control.SdtProperties?.GetFirstChild<Wp.Tag>()?.Val?.Value;
             if (tag is null || !tag.StartsWith(TemplateFieldSdtWriter.TagPrefix, StringComparison.Ordinal)) continue;
             fieldIds.Add(tag[TemplateFieldSdtWriter.TagPrefix.Length..]);
-            var content = control.ChildElements.FirstOrDefault(item => item is Wp.SdtContentRun or Wp.SdtContentBlock or Wp.SdtContentCell or Wp.SdtContentRow);
-            foreach (var child in content?.ChildElements.ToList() ?? [])
-            {
-                child.Remove();
-                control.InsertBeforeSelf(child);
-            }
-            control.Remove();
+            WordStructure.Unwrap(control);
         }
         fieldIds.Reverse();
         foreach (var id in fieldIds)
@@ -284,14 +279,11 @@ sealed class BusinessTemplateMerger : IDisposable
     /// <summary>批注不随模版导出；脚注尾注暂不迁移，去掉引用并提示。分节由导出统一安排。</summary>
     void RemoveUnsupported(Wp.Body container, string title)
     {
-        foreach (var element in container.Descendants().Where(item => item is Wp.CommentRangeStart or Wp.CommentRangeEnd or Wp.CommentReference).ToList())
-        {
-            element.Remove();
-        }
+        WordStructure.RemoveAllComments(container);
         var notes = container.Descendants().Where(item => item is Wp.FootnoteReference or Wp.EndnoteReference).ToList();
-        foreach (var note in notes) note.Remove();
+        WordStructure.RemoveRange(notes);
         if (notes.Count > 0) _warnings.Add($"商务模版“{title}”中的 {notes.Count} 处脚注或尾注未导出，请在 Word 中补充");
-        foreach (var section in container.Descendants<Wp.SectionProperties>().ToList()) section.Remove();
+        WordStructure.RemoveRange(container.Descendants<Wp.SectionProperties>().ToList());
     }
 
     /// <summary>主题字体换成模版主题中的具体字体，导出文档没有模版的主题部件。</summary>
@@ -405,12 +397,12 @@ sealed class BusinessTemplateMerger : IDisposable
                 if (element is Wp.Text { Text.Length: > 0 } or Wp.Drawing or Wp.Picture or Wp.EmbeddedObject or Wp.TabChar) break;
                 if (element is Wp.Break pageBreak && pageBreak.Type?.Value == Wp.BreakValues.Page)
                 {
-                    pageBreak.Remove();
+                    WordStructure.Remove(pageBreak);
                     removed = true;
                 }
             }
             if (paragraph.InnerText.Trim().Length > 0 || paragraph.Descendants<Wp.Drawing>().Any()) return;
-            if (removed) paragraph.Remove();
+            if (removed) WordStructure.Remove(paragraph);
         }
     }
 
@@ -444,23 +436,14 @@ sealed class BusinessTemplateMerger : IDisposable
             && last.Descendants<Wp.Text>().All(text => text.Text.Trim().Length == 0)
             && !last.Descendants().Any(item => item is Wp.Drawing or Wp.Picture or Wp.EmbeddedObject or Wp.SdtElement or Wp.FieldChar))
         {
-            var bookmarks = last.Descendants().Where(item => item is Wp.BookmarkStart or Wp.BookmarkEnd).ToList();
-            if (bookmarks.Count > 0)
-            {
-                if (last.PreviousSibling() is not Wp.Paragraph previous) break;
-                foreach (var bookmark in bookmarks)
-                {
-                    bookmark.Remove();
-                    previous.AppendChild(bookmark);
-                }
-            }
-            last.Remove();
+            // 段内书签由结构层移到上一段末尾。
+            WordStructure.Remove(last);
         }
         if (container.ChildElements.LastOrDefault(item => item is not Wp.SectionProperties) is not Wp.Paragraph tail) return;
         var content = tail.Descendants().LastOrDefault(item => item is Wp.Text { Text.Length: > 0 } or Wp.Drawing or Wp.Picture or Wp.EmbeddedObject);
         foreach (var pageBreak in tail.Descendants<Wp.Break>().Where(item => item.Type?.Value == Wp.BreakValues.Page).ToList())
         {
-            if (content is null || content.IsBefore(pageBreak)) pageBreak.Remove();
+            if (content is null || content.IsBefore(pageBreak)) WordStructure.Remove(pageBreak);
         }
     }
 
@@ -503,15 +486,11 @@ sealed class BusinessTemplateMerger : IDisposable
     /// </summary>
     static Wp.Paragraph? TakeHeading(Wp.Body container, bool? heading, string title)
     {
-        Wp.Paragraph? found = null;
-        foreach (var start in container.Descendants<Wp.BookmarkStart>()
+        var starts = container.Descendants<Wp.BookmarkStart>()
             .Where(item => item.Name?.Value?.StartsWith(TemplateHeadings.BookmarkPrefix, StringComparison.Ordinal) == true)
-            .ToList())
-        {
-            found ??= start.Ancestors<Wp.Paragraph>().FirstOrDefault();
-            foreach (var end in container.Descendants<Wp.BookmarkEnd>().Where(item => item.Id?.Value == start.Id?.Value).ToList()) end.Remove();
-            start.Remove();
-        }
+            .ToList();
+        var found = starts.Select(start => start.Ancestors<Wp.Paragraph>().FirstOrDefault()).FirstOrDefault(item => item is not null);
+        WordStructure.RemoveBookmarks(starts);
         if (heading != false) return found is not null && ReferenceEquals(found.Parent, container) ? found : null;
 
         var paragraph = new Wp.Paragraph(
@@ -524,7 +503,7 @@ sealed class BusinessTemplateMerger : IDisposable
         else anchor.InsertBeforeSelf(paragraph);
         if (anchor is Wp.Paragraph next && next.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
         {
-            pageBreak.Remove();
+            WordStructure.Remove(pageBreak);
             paragraph.ParagraphProperties!.PageBreakBefore = new Wp.PageBreakBefore();
         }
         return paragraph;
@@ -550,43 +529,37 @@ sealed class BusinessTemplateMerger : IDisposable
 
     /// <summary>
     /// 去掉模版提取时 Agent 选定的格式文字（表单编号、格式名称、格式说明，见 TemplateFieldScanner.AddFormatTexts）。
-    /// 因此变空的段落一并删除：段内书签移到下一段，段前分页移到下一段。单元格须以段落结尾，删去会破坏这一点的段落只清空不删。
+    /// 因此变空的段落一并删除，段前分页移到下一段；删除经结构层，段内书签保留并移到相邻段落，单元格仍以段落结尾。
     /// 整本导出并入章节和正文页单章预览都最先调用。
     /// </summary>
     internal static void RemoveFormatText(Wp.Body container)
     {
         var touched = new List<Wp.Paragraph>();
+        var controls = new List<OpenXmlElement>();
         foreach (var control in container.Descendants<Wp.SdtRun>().ToList())
         {
             var tag = control.SdtProperties?.GetFirstChild<Wp.Tag>()?.Val?.Value ?? "";
             if (!tag.StartsWith(TemplateFieldSdtWriter.FormatTagPrefix, StringComparison.Ordinal)) continue;
             if (control.Ancestors<Wp.Paragraph>().FirstOrDefault() is { } owner && !touched.Contains(owner)) touched.Add(owner);
-            control.Remove();
+            controls.Add(control);
         }
+        WordStructure.RemoveRange(controls);
         foreach (var paragraph in touched)
         {
             if (paragraph.Parent is null
-                || paragraph.Parent is Wp.TableCell cell && ReferenceEquals(cell.LastChild, paragraph) && paragraph.PreviousSibling() is not Wp.Paragraph
                 || paragraph.ParagraphProperties?.SectionProperties is not null
                 || paragraph.Descendants<Wp.Text>().Any(text => text.Text.Trim().Length > 0)
                 || paragraph.Descendants().Any(item => item is Wp.Drawing or Wp.Picture or Wp.EmbeddedObject or Wp.Break or Wp.FieldChar or Wp.SdtElement or Wp.TabChar))
             {
                 continue;
             }
-            if (paragraph.NextSibling() is Wp.Paragraph next)
+            var next = paragraph.NextSibling() as Wp.Paragraph;
+            var pageBreak = paragraph.ParagraphProperties?.PageBreakBefore is { } value && (value.Val is null || value.Val.Value);
+            // 降级为清空（单元格末尾段落）时段落还在，段前分页不转给下一段。
+            if (WordStructure.Remove(paragraph) == StructureResult.Removed && next is not null && pageBreak)
             {
-                var anchor = (OpenXmlElement?)next.ParagraphProperties;
-                foreach (var bookmark in paragraph.Descendants().Where(item => item is Wp.BookmarkStart or Wp.BookmarkEnd).ToList())
-                {
-                    bookmark.Remove();
-                    anchor = anchor is null ? next.PrependChild(bookmark) : next.InsertAfter(bookmark, anchor);
-                }
-                if (paragraph.ParagraphProperties?.PageBreakBefore is { } pageBreak && (pageBreak.Val is null || pageBreak.Val.Value))
-                {
-                    (next.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
-                }
+                (next.ParagraphProperties ??= new Wp.ParagraphProperties()).PageBreakBefore = new Wp.PageBreakBefore();
             }
-            paragraph.Remove();
         }
     }
 }

@@ -11,5 +11,11 @@
   <ItemGroup>
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
     <PackageReference Include="HtmlToOpenXml.dll" Version="3.5.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 删除元素、部件、关系须经结构层；开发验证工具需要访问结构层。 -->
+    <AdditionalFiles Include="BannedSymbols.txt" />
+    <InternalsVisibleTo Include="WordStructureCheck" />
   </ItemGroup>
 </Project>

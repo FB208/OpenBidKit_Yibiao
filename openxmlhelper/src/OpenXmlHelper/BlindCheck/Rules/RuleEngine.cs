@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
@@ -47,9 +47,9 @@ sealed class ParaGroups
     public List<ParaRecord> Toc { get; } = [];
     /// <summary>封面段落：不参与正文格式规则，身份信息照常检查。</summary>
     public List<ParaRecord> Cover { get; } = [];
-    public HashSet<XElement> CoverElements { get; } = new(ReferenceEqualityComparer.Instance);
+    public HashSet<OpenXmlElement> CoverElements { get; } = new(ReferenceEqualityComparer.Instance);
     /// <summary>图名、表名：不按正文的对齐和首行缩进检查，也不参与正文一致性比较；字体、字号、行距照常检查。</summary>
-    public HashSet<XElement> Captions { get; } = new(ReferenceEqualityComparer.Instance);
+    public HashSet<OpenXmlElement> Captions { get; } = new(ReferenceEqualityComparer.Instance);
 }
 
 sealed class RuleContext

@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Model;
@@ -35,9 +35,6 @@ sealed class ImageInfo
 static class ImageCatalog
 {
     const string ImageRelationship = "/image";
-    static readonly XName Embed = W.R + "embed";
-    static readonly XName Link = W.R + "link";
-    static readonly XName Id = W.R + "id";
 
     public static List<ImageInfo> Collect(DocumentModel model)
     {
@@ -52,9 +49,7 @@ static class ImageCatalog
 
             foreach (var element in document.Root.Descendants())
             {
-                var id = element.Attribute(Embed)?.Value
-                    ?? element.Attribute(Link)?.Value
-                    ?? (element.Name.Namespace == W.V ? element.Attribute(Id)?.Value : null);
+                var id = ImageReference(element);
                 if (id is null || !targets.TryGetValue(id, out var target)) continue;
                 // 兼容内容的 VML 回退副本与 DrawingML 主副本是同一张图，只计一次。
                 if (element.Ancestors(W.McFallback).Any()) continue;
@@ -83,5 +78,34 @@ static class ImageCatalog
         }
 
         return images.Values.ToList();
+    }
+
+    /// <summary>
+    /// 元素引用的图片关系：r:embed，其次 r:link，VML 元素再看 r:id。正文里绝大多数是 w 命名空间的元素，
+    /// 它们的 schema 不定义 r:embed / r:link，有也只会是扩展属性，只查扩展属性即可，免得逐个复制全部属性。
+    /// </summary>
+    static string? ImageReference(OpenXmlElement element)
+    {
+        if (!element.HasAttributes) return null;
+        var attributes = element.NamespaceUri == W.Ns.Uri ? element.ExtendedAttributes : W.AttributesOf(element);
+        string? embed = null, link = null, id = null;
+        foreach (var attribute in attributes)
+        {
+            if (attribute.NamespaceUri != W.R.Uri) continue;
+            switch (attribute.LocalName)
+            {
+                case "embed":
+                    embed ??= attribute.Value;
+                    break;
+                case "link":
+                    link ??= attribute.Value;
+                    break;
+                case "id":
+                    id ??= attribute.Value;
+                    break;
+            }
+        }
+
+        return embed ?? link ?? (element.NamespaceUri == W.V.Uri ? id : null);
     }
 }

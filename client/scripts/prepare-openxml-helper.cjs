@@ -62,6 +62,8 @@ function publishTarget(platform, arch) {
     '-p:PublishSingleFile=true',
     '-p:IncludeNativeLibrariesForSelfExtract=true',
     '-p:PublishTrimmed=false',
+    // 预编译 OpenXML SDK 等程序集，减少每次启动助手进程时的 JIT（暗标检查每次都新开进程）。
+    '-p:PublishReadyToRun=true',
     '-o', outputDir,
   ], {
     cwd: REPO_ROOT,

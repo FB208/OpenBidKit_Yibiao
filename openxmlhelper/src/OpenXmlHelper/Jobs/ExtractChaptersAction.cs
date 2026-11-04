@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -105,26 +106,30 @@ static class ExtractChaptersAction
                 var destPart = dest.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
                 var destBody = destPart.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
                 var sectPr = destBody.Elements<Wp.SectionProperties>().LastOrDefault()?.CloneNode(true);
-                destBody.RemoveAllChildren();
+                WordStructure.ClearContent(destBody);
                 var importContexts = new Dictionary<string, CrossDocumentImportContext>(StringComparer.OrdinalIgnoreCase);
                 var chapterRanges = new List<TemplateChapterRange>();
 
-                foreach (var match in matches)
+                var ranges = matches.Select(match =>
                 {
                     var hit = match.Hit!;
-                    var source = session[hit.SourcePath];
                     var otherStarts = matches
                         .Where(item => WordWorkspace.PathsEqual(item.Hit!.SourcePath, hit.SourcePath))
                         .Select(item => item.Hit!.BlockIndex)
                         .ToHashSet();
-                    var range = ExtendRange(
-                        source.Blocks,
-                        match.Range ?? GetRange(source.Blocks, hit.BlockIndex, otherStarts),
-                        otherStarts);
+                    var blocks = session[hit.SourcePath].Blocks;
+                    return (Match: match, Range: ExtendRange(blocks, match.Range ?? GetRange(blocks, hit.BlockIndex, otherStarts), otherStarts));
+                }).ToList();
+                var kept = KeepSelectedBlocks(session, ranges);
+
+                foreach (var (match, range) in ranges)
+                {
+                    var hit = match.Hit!;
+                    var source = session[hit.SourcePath];
                     var startBlock = destBody.ChildElements.Count;
                     foreach (var block in range)
                     {
-                        var cloned = CloneLayoutBlock(block);
+                        var cloned = TakeLayoutBlock(block, kept[hit.SourcePath]);
                         if (!WordWorkspace.PathsEqual(hit.SourcePath, shellPath))
                         {
                             if (!importContexts.TryGetValue(hit.SourcePath, out var importContext))
@@ -155,6 +160,8 @@ static class ExtractChaptersAction
                     destBody.AppendChild(sectPr);
                 }
 
+                // 投标模版不保留招标原件的批注：清空壳文档时批注条目已随标记删除，再去掉各章带进来的批注标记，避免引用指向不存在的批注。
+                WordStructure.RemoveAllComments(destPart);
                 destPart.Document.Save();
                 var chapterRangeFile = new TemplateChapterRangeFile { Chapters = chapterRanges };
                 File.WriteAllText(
@@ -343,27 +350,48 @@ static class ExtractChaptersAction
         return extended;
     }
 
-    /// <summary>克隆块；中间分节改为分页符，避免打乱整份模版只保留一个节。</summary>
-    static OpenXmlElement CloneLayoutBlock(BlockInfo block)
+    /// <summary>一份来源去掉未选中块之后剩下的克隆：容器和按块号索引的元素。</summary>
+    sealed record KeptBlocks(Wp.Body Container, IReadOnlyDictionary<int, OpenXmlElement> Elements);
+
+    /// <summary>
+    /// 抽章即“只保留选中的块”：每份来源克隆整份正文，按全部选中范围的并集一次删掉其余的块。删除经结构层（取子集方式），
+    /// 跨范围的书签、域、批注不会只剩一半；整对都在未选中部分的书签随之删除，不挪进章节。
+    /// </summary>
+    static Dictionary<string, KeptBlocks> KeepSelectedBlocks(
+        Dictionary<string, SourceDocument> session,
+        IEnumerable<(ChapterMatch Match, List<BlockInfo> Range)> ranges)
+    {
+        var result = new Dictionary<string, KeptBlocks>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in ranges.GroupBy(item => item.Match.Hit!.SourcePath, StringComparer.OrdinalIgnoreCase))
+        {
+            var selected = group.SelectMany(item => item.Range).Select(block => block.BlockIndex).ToHashSet();
+            var clones = session[group.Key].Blocks.Select(block => block.Element.CloneNode(true)).ToList();
+            var container = new Wp.Body(clones);
+            WordStructure.RemoveRange(clones.Where((_, index) => !selected.Contains(index)).ToList(), keepEnclosedBookmarks: false);
+            result[group.Key] = new KeptBlocks(container, selected.ToDictionary(index => index, index => clones[index]));
+        }
+        return result;
+    }
+
+    /// <summary>取出保留下来的块；中间分节改为分页符，避免打乱整份模版只保留一个节。同一块被取用两次时第二次用克隆。</summary>
+    static OpenXmlElement TakeLayoutBlock(BlockInfo block, KeptBlocks kept)
     {
         if (block.Kind == "section-break")
         {
             return CreatePageBreakParagraph();
         }
 
-        var cloned = (OpenXmlElement)block.Element.CloneNode(true);
+        var element = kept.Elements[block.BlockIndex];
+        var cloned = ReferenceEquals(element.Parent, kept.Container) ? WordStructure.Detach(element) : element.CloneNode(true);
         // 拼写语法检查标记（w:proofErr）不含内容，留着会让字段扫描把所在段落当作复杂段落整段跳过。
-        foreach (var proofError in cloned.Descendants<Wp.ProofError>().ToList())
-        {
-            proofError.Remove();
-        }
+        WordStructure.RemoveRange(cloned.Descendants<Wp.ProofError>().ToList());
 
         if (cloned is Wp.Paragraph paragraph)
         {
             var section = paragraph.ParagraphProperties?.SectionProperties;
             if (section is not null)
             {
-                section.Remove();
+                WordStructure.Remove(section);
                 if (!block.HasPageBreak)
                 {
                     EnsurePageBreak(paragraph);

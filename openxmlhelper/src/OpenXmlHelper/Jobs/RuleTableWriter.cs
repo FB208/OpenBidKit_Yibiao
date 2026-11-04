@@ -1,4 +1,5 @@
 using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -28,15 +29,13 @@ static class RuleTableWriter
             }
             var created = BuildTable(body, table);
             var content = block.SdtContentBlock ?? block.AppendChild(new Wp.SdtContentBlock());
-            content.RemoveAllChildren();
-            content.AppendChild(created);
+            WordStructure.ReplaceContent(content, [created]);
             return [created];
         }
         var (ids, tableElement) = FindTable(controls, table);
         if (!table.Rebuild) return FillListTable(ids, tableElement, table);
         var rebuilt = BuildTable(body, table);
-        tableElement.InsertBeforeSelf(rebuilt);
-        tableElement.Remove();
+        WordStructure.Replace(tableElement, rebuilt);
         return [rebuilt];
     }
 
@@ -93,8 +92,13 @@ static class RuleTableWriter
             }
             var clone = (Wp.TableRow)templates[index - 1].CloneNode(true);
             RemoveRevisionIds(clone);
+            // 克隆行里的书签会与样板行重名，去掉。
+            WordStructure.RemoveBookmarks(clone.Descendants<Wp.BookmarkStart>().ToList());
             // 样板行若参与纵向合并，克隆会让合并错位，新增行一律不合并。
-            foreach (var cell in clone.Elements<Wp.TableCell>()) cell.TableCellProperties?.RemoveAllChildren<Wp.VerticalMerge>();
+            foreach (var properties in clone.Elements<Wp.TableCell>().Select(cell => cell.TableCellProperties).OfType<Wp.TableCellProperties>())
+            {
+                WordStructure.RemoveChildren<Wp.VerticalMerge>(properties);
+            }
             WriteCells(clone, ids, row.Cells, inPlace: false, written);
             if (cursor is null || index > cursorOrder)
             {
@@ -116,7 +120,7 @@ static class RuleTableWriter
                 && IsBlankDataRow(row, ids)
                 && !row.Descendants<Wp.VerticalMerge>().Any())
             {
-                row.Remove();
+                WordStructure.Remove(row);
             }
         }
         return written;
@@ -168,12 +172,12 @@ static class RuleTableWriter
     {
         var paragraphs = cell.Elements<Wp.Paragraph>().ToList();
         var paragraph = paragraphs.FirstOrDefault() ?? cell.AppendChild(new Wp.Paragraph());
-        foreach (var extra in paragraphs.Skip(1)) extra.Remove();
+        WordStructure.RemoveRange(paragraphs.Skip(1).ToList());
         var sourceRun = paragraph.Descendants<Wp.Run>().FirstOrDefault(run => run.Elements<Wp.Text>().Any()) ?? paragraph.Descendants<Wp.Run>().FirstOrDefault();
         var run = new Wp.Run();
         if (sourceRun?.RunProperties is not null) run.AppendChild((Wp.RunProperties)sourceRun.RunProperties.CloneNode(true));
         AppendLines(run, value);
-        foreach (var child in paragraph.ChildElements.Where(item => item is not Wp.ParagraphProperties).ToList()) child.Remove();
+        WordStructure.ClearContent(paragraph);
         return paragraph.AppendChild(run);
     }
 
@@ -232,6 +236,7 @@ static class RuleTableWriter
     {
         var lines = SplitLines(value);
         var sourceRun = control.Descendants<Wp.Run>().FirstOrDefault();
+        var replacements = new List<OpenXmlElement>();
         if (control is Wp.SdtBlock block)
         {
             var sourceParagraph = block.Descendants<Wp.Paragraph>().FirstOrDefault();
@@ -243,14 +248,16 @@ static class RuleTableWriter
                     paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
                 }
                 written.Add(paragraph.AppendChild(TemplateFieldSdtWriter.CreateValueRun([line], sourceRun)));
-                control.InsertBeforeSelf(paragraph);
+                replacements.Add(paragraph);
             }
         }
         else
         {
-            written.Add(control.InsertBeforeSelf(TemplateFieldSdtWriter.CreateValueRun(lines, sourceRun)));
+            var run = TemplateFieldSdtWriter.CreateValueRun(lines, sourceRun);
+            written.Add(run);
+            replacements.Add(run);
         }
-        control.Remove();
+        WordStructure.Replace(control, replacements);
     }
 
     static void AppendLines(Wp.Run run, string value)

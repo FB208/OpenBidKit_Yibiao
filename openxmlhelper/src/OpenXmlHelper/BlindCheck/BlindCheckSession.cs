@@ -43,7 +43,7 @@ sealed class ProgressRange(ProgressWriter writer, double from, double to)
 
 /// <summary>
 /// 一次检查会话：打开文档、建立格式模型、识别目录标题与封面、收集图片，得到规则上下文。
-/// 检查动作直接出报告；修复动作在同一个模型上改 XML，再对写出的副本重新开一个会话复查。
+/// 检查动作只读打开、直接出报告；修复和编辑在副本上读写打开，直接改模型里的元素树并保存改过的部件，再对副本重新开一个会话复查。
 /// </summary>
 sealed class BlindCheckSession : IDisposable
 {
@@ -59,11 +59,11 @@ sealed class BlindCheckSession : IDisposable
         _stopwatch = stopwatch;
     }
 
-    public static BlindCheckSession Open(string path, BlindCheckInspectRequest request, ProgressRange progress)
+    public static BlindCheckSession Open(string path, BlindCheckInspectRequest request, ProgressRange progress, bool writable = false)
     {
         var stopwatch = Stopwatch.StartNew();
         progress.Report(0.04, "正在读取文档");
-        var package = DocxPackage.Open(path);
+        var package = DocxPackage.Open(path, writable);
         try
         {
             progress.Report(0.13, "正在解析样式与主题");

@@ -1,124 +1,157 @@
-using System.IO.Compression;
+using System.Text;
 using System.Xml;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
 sealed record PackageRelationship(string Id, string Type, string Target, bool External);
 
 /// <summary>
-/// 只读打开 docx 包。直接按 zip 条目和关系文件定位 part，
-/// 不经过 SDK 的强类型包装，畸形超链接等关系不会让整份文档打不开。
+/// 一个 XML 部件：部件名（与 zip 条目名一致，如 word/document.xml）、SDK 部件和根元素。
+/// 有强类型根元素的部件直接用 SDK 的根元素；没有的（如 docProps/core.xml）按原文解析成未知元素树。
+/// </summary>
+sealed class PartXml(string name, OpenXmlPart part, OpenXmlElement root)
+{
+    static readonly XmlWriterSettings WriterSettings = new() { Encoding = new UTF8Encoding(false), Indent = false };
+
+    public string Name => name;
+    public OpenXmlPart Part => part;
+    public OpenXmlElement Root => root;
+
+    /// <summary>根元素及其全部后代（对应 XDocument.Descendants）。</summary>
+    public IEnumerable<OpenXmlElement> Descendants() => root.DescendantsAndSelf();
+
+    public IEnumerable<OpenXmlElement> Descendants(WName name) => root.DescendantsAndSelf(name);
+
+    /// <summary>把根元素写回部件；只对改过的部件调用，未改动的部件保持原字节。</summary>
+    public void Save()
+    {
+        if (root is OpenXmlPartRootElement typed)
+        {
+            typed.Save();
+            return;
+        }
+
+        using var stream = part.GetStream(FileMode.Create, FileAccess.Write);
+        using var writer = XmlWriter.Create(stream, WriterSettings);
+        writer.WriteStartDocument(true);
+        root.WriteTo(writer);
+    }
+}
+
+/// <summary>
+/// 用 OpenXML SDK 打开 docx 包。检查、导出只读打开；修复、编辑在副本上读写打开（AutoSave=false），
+/// 只有调用了 <see cref="PartXml.Save"/> 的部件会重新序列化，其余部件保持原字节。
+/// 部件按 zip 条目名定位，模型、定位编号和结果里的 part 字段都用这个名称。
 /// </summary>
 sealed class DocxPackage : IDisposable
 {
-    const string OfficeDocumentType = "/officeDocument";
+    const string UnreadableMessage = "无法读取文档：文件不是有效的 .docx，可能已加密、损坏或是 .doc 改了扩展名，请在 Word / WPS 中另存为 .docx 后重试";
 
-    static readonly XmlReaderSettings ReaderSettings = new()
-    {
-        DtdProcessing = DtdProcessing.Ignore,
-        XmlResolver = null,
-        CheckCharacters = false,
-    };
-
-    readonly ZipArchive _zip;
-    readonly Dictionary<string, ZipArchiveEntry> _entries;
+    readonly WordprocessingDocument _document;
+    readonly Dictionary<string, OpenXmlPart> _parts = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, PartXml> _loaded = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, IReadOnlyList<PackageRelationship>> _relationships = new(StringComparer.OrdinalIgnoreCase);
 
     public string DocumentPart { get; }
 
-    DocxPackage(ZipArchive zip)
-    {
-        _zip = zip;
-        _entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in zip.Entries)
-        {
-            if (entry.FullName.EndsWith('/')) continue;
-            _entries[entry.FullName.Replace('\\', '/').TrimStart('/')] = entry;
-        }
+    public WordprocessingDocument Document => _document;
 
-        DocumentPart = Relationships("")
-            .Where(item => item.Type.EndsWith(OfficeDocumentType, StringComparison.Ordinal) && !item.External)
-            .Select(item => ResolveTarget("", item.Target))
-            .FirstOrDefault(Has)
-            ?? "word/document.xml";
+    DocxPackage(WordprocessingDocument document)
+    {
+        _document = document;
+        IndexParts();
+        DocumentPart = document.MainDocumentPart is { } main ? NameOf(main) : "word/document.xml";
     }
 
-    public static DocxPackage Open(string path)
+    void IndexParts()
     {
-        FileStream? stream = null;
+        _parts.Clear();
+        foreach (var part in _document.GetAllParts()) _parts.TryAdd(NameOf(part), part);
+    }
+
+    public static DocxPackage Open(string path, bool writable = false)
+    {
         try
         {
-            stream = File.OpenRead(path);
-            return new DocxPackage(new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false));
+            return new DocxPackage(WordprocessingDocument.Open(path, writable, new OpenSettings { AutoSave = false }));
         }
-        catch (InvalidDataException)
+        catch (Exception exception) when (exception is OpenXmlPackageException or FileFormatException or InvalidDataException)
         {
-            stream?.Dispose();
-            throw new InvalidOperationException("无法读取文档：文件不是有效的 .docx，可能已加密、损坏或是 .doc 改了扩展名，请在 Word / WPS 中另存为 .docx 后重试");
+            throw new InvalidOperationException(UnreadableMessage);
         }
     }
 
-    public bool Has(string name) => _entries.ContainsKey(name);
+    /// <summary>SDK 部件的名称，与 zip 条目名逐字一致（不带开头的 /）。</summary>
+    public static string NameOf(OpenXmlPart part) => part.Uri.OriginalString.TrimStart('/');
 
-    /// <summary>按 zip 内原顺序列出全部条目名（不含目录）。</summary>
-    public IEnumerable<string> EntryNames => _zip.Entries.Where(entry => !entry.FullName.EndsWith('/')).Select(entry => entry.FullName);
+    public bool Has(string name) => _parts.ContainsKey(name);
 
-    /// <summary>打开原条目的数据流，用于原样复制未改动的 part。</summary>
-    public Stream OpenEntry(string fullName) => _zip.GetEntry(fullName)!.Open();
+    public OpenXmlPart? Part(string name) => _parts.GetValueOrDefault(name);
 
-    public DateTimeOffset LastWriteTime(string fullName) => _zip.GetEntry(fullName)?.LastWriteTime ?? DateTimeOffset.Now;
-
-    public long SizeOf(string name) => _entries.TryGetValue(name, out var entry) ? entry.Length : 0;
+    /// <summary>关系的源：空字符串表示包本身，否则是该名称的部件。</summary>
+    public OpenXmlPartContainer? Container(string name) => name.Length == 0 ? _document : Part(name);
 
     /// <summary>读取 part 的原始字节；不存在时返回 null。</summary>
     public byte[]? ReadBytes(string name)
     {
-        if (!_entries.TryGetValue(name, out var entry)) return null;
-        using var stream = entry.Open();
+        if (Part(name) is not { } part) return null;
+        using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         return buffer.ToArray();
     }
 
-    /// <summary>读取 part 的 XML；不存在时返回 null。</summary>
-    public XDocument? Load(string name)
+    /// <summary>替换 part 的字节（如去掉元数据后的图片）。</summary>
+    public void SetBytes(string name, byte[] data)
     {
-        if (!_entries.TryGetValue(name, out var entry)) return null;
-        using var stream = entry.Open();
-        using var reader = XmlReader.Create(stream, ReaderSettings);
-        return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
+        if (Part(name) is not { } part) return;
+        using var stream = new MemoryStream(data, writable: false);
+        part.FeedData(stream);
+    }
+
+    /// <summary>读取 XML 部件；不存在时返回 null。同一部件只解析一次，修改直接作用在返回的元素树上。</summary>
+    public PartXml? Load(string name)
+    {
+        if (_loaded.TryGetValue(name, out var cached)) return cached;
+        if (Part(name) is not { } part) return null;
+        var xml = new PartXml(name, part, part.RootElement ?? W.LoadUntyped(part));
+        _loaded[name] = xml;
+        return xml;
     }
 
     /// <summary>可选 part 解析失败时按缺失处理，单个附属 part 损坏不阻断整份检查。</summary>
-    public XDocument? TryLoad(string name)
+    public PartXml? TryLoad(string name)
     {
         try
         {
             return Load(name);
         }
-        catch (XmlException)
+        catch (Exception exception) when (exception is XmlException or InvalidDataException or OpenXmlPackageException)
         {
             return null;
         }
     }
 
-    /// <summary>读取 part 的关系；part 为空字符串表示包根关系。</summary>
+    /// <summary>part 的关系；part 为空字符串表示包根关系。部件关系在前（按关系文件顺序），外部关系、超链接、数据部件引用在后。</summary>
     public IReadOnlyList<PackageRelationship> Relationships(string part)
     {
         if (_relationships.TryGetValue(part, out var cached)) return cached;
         var list = new List<PackageRelationship>();
-        var relsName = RelsNameFor(part);
-        var document = TryLoad(relsName);
-        if (document?.Root is not null)
+        if (Container(part) is { } container)
         {
-            foreach (var element in document.Root.Elements(W.PackageRel + "Relationship"))
+            foreach (var pair in container.Parts)
             {
-                var id = element.Attribute("Id")?.Value ?? "";
-                var type = element.Attribute("Type")?.Value ?? "";
-                var target = element.Attribute("Target")?.Value ?? "";
-                var external = string.Equals(element.Attribute("TargetMode")?.Value, "External", StringComparison.OrdinalIgnoreCase);
-                if (id.Length > 0) list.Add(new PackageRelationship(id, type, target, external));
+                list.Add(new PackageRelationship(pair.RelationshipId, pair.OpenXmlPart.RelationshipType, "/" + NameOf(pair.OpenXmlPart), false));
+            }
+
+            foreach (var item in container.ExternalRelationships) list.Add(new PackageRelationship(item.Id, item.RelationshipType, item.Uri.OriginalString, item.IsExternal));
+            foreach (var item in container.HyperlinkRelationships) list.Add(new PackageRelationship(item.Id, item.RelationshipType, item.Uri.OriginalString, item.IsExternal));
+            foreach (var item in container.DataPartReferenceRelationships)
+            {
+                list.Add(new PackageRelationship(item.Id, item.RelationshipType, "/" + item.DataPart.Uri.OriginalString.TrimStart('/'), false));
             }
         }
 
@@ -126,24 +159,13 @@ sealed class DocxPackage : IDisposable
         return list;
     }
 
-    /// <summary>包内全部关系，附带关系所属的源 part（包根关系的源 part 为空字符串）。</summary>
-    public IEnumerable<(string SourcePart, PackageRelationship Relationship)> AllRelationships()
+    /// <summary>删除 part 的一条关系，经结构层先处理指向它的引用；内部部件不再被引用时随之删除。</summary>
+    public void DeleteRelationship(string part, string id)
     {
-        foreach (var name in _entries.Keys.Where(item => item.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)).ToList())
-        {
-            var slash = name.LastIndexOf("_rels/", StringComparison.Ordinal);
-            if (slash < 0) continue;
-            var source = name[..slash] + name[(slash + "_rels/".Length)..^".rels".Length];
-            foreach (var relationship in Relationships(source)) yield return (source, relationship);
-        }
-    }
-
-    /// <summary>[Content_Types].xml 里是否为该 part 单独声明了类型；有单独声明的 part 不能直接从包里删掉。</summary>
-    public bool HasContentTypeOverride(string part)
-    {
-        var types = TryLoad("[Content_Types].xml")?.Root;
-        return types is not null && types.Elements()
-            .Any(item => item.Name.LocalName == "Override" && string.Equals(item.Attribute("PartName")?.Value?.TrimStart('/'), part, StringComparison.OrdinalIgnoreCase));
+        if (Container(part) is not { } container) return;
+        WordStructure.DeleteRelationship(container, id);
+        _relationships.Remove(part);
+        IndexParts();
     }
 
     /// <summary>按关系类型后缀查找内部 part，例如 "/styles"。</summary>
@@ -189,14 +211,5 @@ sealed class DocxPackage : IDisposable
         return string.Join('/', stack);
     }
 
-    public static string RelsNameFor(string part)
-    {
-        if (string.IsNullOrEmpty(part)) return "_rels/.rels";
-        var slash = part.LastIndexOf('/');
-        return slash >= 0
-            ? part[..slash] + "/_rels/" + part[(slash + 1)..] + ".rels"
-            : "_rels/" + part + ".rels";
-    }
-
-    public void Dispose() => _zip.Dispose();
+    public void Dispose() => _document.Dispose();
 }

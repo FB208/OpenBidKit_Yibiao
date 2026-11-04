@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -32,7 +33,7 @@ static class ListRowRemover
                 .Where(text => !text.Ancestors<Wp.SdtElement>().Any(control => FieldId(control) is not null))
                 .Select(text => text.Text));
             if (!SerialOnly.IsMatch(outside) || row.Descendants<Wp.VerticalMerge>().Any()) continue;
-            row.Remove();
+            WordStructure.Remove(row);
             removed += 1;
         }
         return removed;

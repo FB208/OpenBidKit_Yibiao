@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace Yibiao.OpenXmlHelper.Jobs;
@@ -104,7 +105,7 @@ static class TemplateFieldSdtWriter
         var written = new List<OpenXmlElement>();
         var properties = control.GetFirstChild<Wp.SdtProperties>();
         // 原件自带控件处于占位显示时，Word 会把写入内容当作灰色占位，点击即清空。
-        properties?.RemoveAllChildren<Wp.ShowingPlaceholder>();
+        if (properties is not null) WordStructure.RemoveChildren<Wp.ShowingPlaceholder>(properties);
         var name = properties?.GetFirstChild<Wp.SdtAlias>()?.Val?.Value ?? value.Id;
         if (value.Selected is { } selected)
         {
@@ -135,8 +136,9 @@ static class TemplateFieldSdtWriter
                 if (!blank) lines = FitFollowingText(lines, FollowingText(run));
                 var content = run.SdtContentRun ?? run.AppendChild(new Wp.SdtContentRun());
                 var sourceRun = content.Descendants<Wp.Run>().FirstOrDefault();
-                content.RemoveAllChildren();
-                written.Add(content.AppendChild(CreateValueRun(lines, sourceRun)));
+                var valueRun = CreateValueRun(lines, sourceRun);
+                WordStructure.ReplaceContent(content, [valueRun]);
+                written.Add(valueRun);
                 break;
             }
             case Wp.SdtBlock block:
@@ -144,7 +146,7 @@ static class TemplateFieldSdtWriter
                 var content = block.SdtContentBlock ?? block.AppendChild(new Wp.SdtContentBlock());
                 var sourceParagraph = content.Descendants<Wp.Paragraph>().FirstOrDefault();
                 var sourceRun = sourceParagraph?.Descendants<Wp.Run>().FirstOrDefault();
-                content.RemoveAllChildren();
+                var paragraphs = new List<OpenXmlElement>();
                 foreach (var line in lines)
                 {
                     var paragraph = new Wp.Paragraph();
@@ -153,8 +155,10 @@ static class TemplateFieldSdtWriter
                         paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
                     }
                     paragraph.AppendChild(CreateValueRun([line], sourceRun));
-                    written.Add(content.AppendChild(paragraph));
+                    paragraphs.Add(paragraph);
                 }
+                WordStructure.ReplaceContent(content, paragraphs);
+                written.AddRange(paragraphs);
                 break;
             }
             default:
@@ -213,10 +217,11 @@ static class TemplateFieldSdtWriter
             throw new InvalidOperationException($"择一“{name}”中找不到选项：{option}");
         }
         var sourceRun = content.Descendants<Wp.Run>().FirstOrDefault();
-        content.RemoveAllChildren();
-        written.Add(content.AppendChild(sourceRun is null
+        var chosen = sourceRun is null
             ? new Wp.Run(new Wp.Text(option) { Space = SpaceProcessingModeValues.Preserve })
-            : CreateTextRun(option, sourceRun)));
+            : CreateTextRun(option, sourceRun);
+        WordStructure.ReplaceContent(content, [chosen]);
+        written.Add(chosen);
     }
 
     /// <summary>附件写入内嵌图片：等比缩放且不放大原图，宽不超过所在单元格或版心，高不超过版心；文本框兼容显示写入字段名称。</summary>
@@ -247,22 +252,23 @@ static class TemplateFieldSdtWriter
             case Wp.SdtRun run:
             {
                 var content = run.SdtContentRun ?? run.AppendChild(new Wp.SdtContentRun());
-                content.RemoveAllChildren();
-                written.Add(content.AppendChild(new Wp.Run(drawing)));
+                var imageRun = new Wp.Run(drawing);
+                WordStructure.ReplaceContent(content, [imageRun]);
+                written.Add(imageRun);
                 break;
             }
             case Wp.SdtBlock block:
             {
                 var content = block.SdtContentBlock ?? block.AppendChild(new Wp.SdtContentBlock());
                 var sourceParagraph = content.Descendants<Wp.Paragraph>().FirstOrDefault();
-                content.RemoveAllChildren();
                 var paragraph = new Wp.Paragraph();
                 if (sourceParagraph?.ParagraphProperties is not null)
                 {
                     paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
                 }
                 paragraph.AppendChild(new Wp.Run(drawing));
-                written.Add(content.AppendChild(paragraph));
+                WordStructure.ReplaceContent(content, [paragraph]);
+                written.Add(paragraph);
                 break;
             }
             default:
@@ -341,8 +347,7 @@ static class TemplateFieldSdtWriter
         var placeholder = PlaceholderText(name);
         var runs = fallback.Descendants<Wp.Run>().Where(item => ReadRunText(item) == placeholder).ToList();
         if (index < 0 || index >= runs.Count) return;
-        runs[index].InsertBeforeSelf(CreateValueRun(lines, runs[index]));
-        runs[index].Remove();
+        WordStructure.Replace(runs[index], CreateValueRun(lines, runs[index]));
     }
 
     /// <summary>沿用占位格式并去掉淡红底，多行值用换行符分隔。</summary>
@@ -351,8 +356,8 @@ static class TemplateFieldSdtWriter
         var properties = sourceRun?.RunProperties is null
             ? new Wp.RunProperties()
             : (Wp.RunProperties)sourceRun.RunProperties.CloneNode(true);
-        properties.RemoveAllChildren<Wp.Shading>();
-        if (properties.RunStyle?.Val?.Value == "PlaceholderText") properties.RunStyle.Remove();
+        WordStructure.RemoveChildren<Wp.Shading>(properties);
+        if (properties.RunStyle?.Val?.Value == "PlaceholderText") WordStructure.Remove(properties.RunStyle);
         var run = new Wp.Run(properties);
         for (var index = 0; index < lines.Count; index += 1)
         {
@@ -372,8 +377,9 @@ static class TemplateFieldSdtWriter
 
         var content = control.SdtContentRun ?? control.AppendChild(new Wp.SdtContentRun());
         var sourceRun = content.Elements<Wp.Run>().FirstOrDefault();
-        content.RemoveAllChildren();
-        written.Add(content.AppendChild(CreatePlaceholderRun(field, sourceRun)));
+        var placeholder = CreatePlaceholderRun(field, sourceRun);
+        WordStructure.ReplaceContent(content, [placeholder]);
+        written.Add(placeholder);
     }
 
     static void UpdateExistingBlockControl(Wp.SdtBlock control, TemplateFieldDefinition field, int wordId, List<OpenXmlElement> written)
@@ -390,17 +396,17 @@ static class TemplateFieldSdtWriter
             paragraph.AppendChild((Wp.ParagraphProperties)sourceParagraph.ParagraphProperties.CloneNode(true));
         }
         paragraph.AppendChild(CreatePlaceholderRun(field, sourceRun));
-        content.RemoveAllChildren();
-        written.Add(content.AppendChild(paragraph));
+        WordStructure.ReplaceContent(content, [paragraph]);
+        written.Add(paragraph);
     }
 
     // 已有内容控件只替换字段标识，其余属性保持原样。
     // sdtPr 在 SDK 中是选择结构，AddChild 会清空其他子元素，因此按位置插到 rPr 之后。
     static void WriteIdentity(Wp.SdtProperties properties, TemplateFieldDefinition field, int wordId, List<OpenXmlElement> written)
     {
-        properties.RemoveAllChildren<Wp.SdtAlias>();
-        properties.RemoveAllChildren<Wp.SdtId>();
-        properties.RemoveAllChildren<Wp.Tag>();
+        WordStructure.RemoveChildren<Wp.SdtAlias>(properties);
+        WordStructure.RemoveChildren<Wp.SdtId>(properties);
+        WordStructure.RemoveChildren<Wp.Tag>(properties);
         OpenXmlElement[] identity =
         [
             new Wp.SdtAlias { Val = field.Name },
@@ -562,11 +568,7 @@ static class TemplateFieldSdtWriter
         written.AddRange(identity);
         var content = new Wp.SdtContentBlock();
         first.InsertBeforeSelf(new Wp.SdtBlock(new Wp.SdtProperties(identity), content));
-        foreach (var paragraph in paragraphs)
-        {
-            paragraph.Remove();
-            content.AppendChild(paragraph);
-        }
+        foreach (var paragraph in paragraphs) WordStructure.AppendTo(paragraph, content);
     }
 
     /// <summary>
@@ -590,8 +592,7 @@ static class TemplateFieldSdtWriter
             paragraph.InsertAfterSelf(control);
             return;
         }
-        paragraph.InsertBeforeSelf(control);
-        paragraph.Remove();
+        WordStructure.Replace(paragraph, control);
     }
 
     /// <summary>附件说明保持原文，在其后插入一段附件占位；文本框兼容显示同步插入纯文字占位。返回新插入的段落，供后续部分继续向后插入。</summary>
@@ -617,9 +618,9 @@ static class TemplateFieldSdtWriter
         var slot = new Wp.Paragraph();
         if (source.ParagraphProperties?.CloneNode(true) is Wp.ParagraphProperties properties)
         {
-            properties.RemoveAllChildren<Wp.SectionProperties>();
-            properties.RemoveAllChildren<Wp.NumberingProperties>();
-            properties.RemoveAllChildren<Wp.PageBreakBefore>();
+            WordStructure.RemoveChildren<Wp.SectionProperties>(properties);
+            WordStructure.RemoveChildren<Wp.NumberingProperties>(properties);
+            WordStructure.RemoveChildren<Wp.PageBreakBefore>(properties);
             slot.AppendChild(properties);
         }
         slot.AppendChild(content);
@@ -677,10 +678,7 @@ static class TemplateFieldSdtWriter
         foreach (var run in befores) AddWritten(written, anchor.InsertBeforeSelf(run));
         foreach (var element in middle) anchor.InsertBeforeSelf(element);
         foreach (var run in afters) AddWritten(written, anchor.InsertBeforeSelf(run));
-        for (var index = firstIndex; index <= lastIndex; index += 1)
-        {
-            runs[index].Remove();
-        }
+        WordStructure.RemoveRange(runs.Skip(firstIndex).Take(lastIndex - firstIndex + 1).ToList());
     }
 
     /// <summary>切出 run 中满足判断的内容，沿用原 run 属性；渲染缓存的分页标记丢弃；没有内容时返回 null。</summary>
@@ -787,8 +785,8 @@ static class TemplateFieldSdtWriter
         var properties = sourceRun?.RunProperties is null
             ? new Wp.RunProperties()
             : (Wp.RunProperties)sourceRun.RunProperties.CloneNode(true);
-        properties.RemoveAllChildren<Wp.Color>();
-        properties.RemoveAllChildren<Wp.Shading>();
+        WordStructure.RemoveChildren<Wp.Color>(properties);
+        WordStructure.RemoveChildren<Wp.Shading>(properties);
         properties.AddChild(new Wp.Color { Val = PlaceholderTextColor }, throwOnError: true);
         properties.AddChild(
             new Wp.Shading

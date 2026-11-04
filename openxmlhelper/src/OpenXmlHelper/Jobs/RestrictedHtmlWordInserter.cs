@@ -6,6 +6,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using HtmlToOpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using PIC = DocumentFormat.OpenXml.Drawing.Pictures;
@@ -162,8 +163,7 @@ static partial class RestrictedHtmlWordInserter
         var converter = new HtmlConverter(mainPart) { ContinueNumbering = false };
         var blocks = converter.Parse(prepared.Html);
         var section = content.GetFirstChild<Wp.SectionProperties>();
-        content.RemoveAllChildren();
-        content.Append(blocks);
+        WordStructure.ReplaceContent(content, blocks);
         if (!content.ChildElements.Any()) content.AppendChild(new Wp.Paragraph());
         if (section is not null) content.AppendChild(section);
         InsertFigures(mainPart, content, prepared.Figures);
@@ -387,7 +387,7 @@ static partial class RestrictedHtmlWordInserter
             if (!specs.TryGetValue(token, out var spec)) continue;
             paragraph.InsertBeforeSelf(CreateImageParagraph(mainPart, spec, contentWidth, nextDrawingId++));
             if (spec.Caption.Length > 0) paragraph.InsertBeforeSelf(CreateCaptionParagraph(spec.Caption));
-            paragraph.Remove();
+            WordStructure.Remove(paragraph);
             inserted += 1;
         }
 

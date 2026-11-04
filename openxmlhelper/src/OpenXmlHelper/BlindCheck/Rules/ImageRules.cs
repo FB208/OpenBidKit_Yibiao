@@ -1,5 +1,5 @@
 using System.Globalization;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
@@ -11,9 +11,9 @@ namespace Yibiao.OpenXmlHelper.BlindCheck.Rules;
 /// </summary>
 static class ImageRules
 {
-    static readonly XNamespace ChartNs = "http://schemas.openxmlformats.org/drawingml/2006/chart";
-    static readonly XNamespace DiagramNs = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
-    static readonly XNamespace WpsNs = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+    static readonly WNamespace ChartNs = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+    static readonly WNamespace DiagramNs = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+    static readonly WNamespace WpsNs = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
     static readonly HashSet<string> VmlShapes = ["shape", "rect", "roundrect", "oval", "line", "polyline", "arc", "curve"];
     static readonly HashSet<string> NeutralNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -65,7 +65,7 @@ static class ImageRules
         {
             if (part == model.CommentsPart || document.Root is null) continue;
             var relationships = model.Package.Relationships(part).Where(item => !item.External).ToDictionary(item => item.Id, item => DocxPackage.ResolveTarget(part, item.Target), StringComparer.Ordinal);
-            string? Target(XElement element, string attribute) => element.Attribute(W.R + attribute)?.Value is { } id ? relationships.GetValueOrDefault(id) : null;
+            string? Target(OpenXmlElement element, string attribute) => element.Attribute(W.R + attribute)?.Value is { } id ? relationships.GetValueOrDefault(id) : null;
 
             foreach (var element in document.Root.Descendants())
             {
@@ -106,14 +106,14 @@ static class ImageRules
         }
     }
 
-    static bool IsColorElement(XElement element) =>
+    static bool IsColorElement(OpenXmlElement element) =>
         element.Name.Namespace == W.A && element.Name.LocalName is "srgbClr" or "schemeClr" or "sysClr" or "prstClr";
 
-    static bool HasFill(XElement? container) =>
+    static bool HasFill(OpenXmlElement? container) =>
         container?.Elements().Any(item => item.Name.LocalName is "noFill" or "solidFill" or "gradFill" or "pattFill" or "blipFill" or "grpFill") ?? false;
 
     /// <summary>容器（spPr 或线条 ln）里显式写的填充颜色元素，含线条的填充；阴影等效果的颜色不算。</summary>
-    static IEnumerable<XElement> FillColors(XElement? container)
+    static IEnumerable<OpenXmlElement> FillColors(OpenXmlElement? container)
     {
         if (container is null) return [];
         var fills = container.Elements()
@@ -123,7 +123,7 @@ static class ImageRules
     }
 
     /// <summary>颜色元素是彩色时返回说明文字（如"#4472C4""主题色 accent1（#4472C4）"），否则 null。</summary>
-    static string? Colorful(XElement color, ThemeInfo theme)
+    static string? Colorful(OpenXmlElement color, ThemeInfo theme)
     {
         var value = color.Attribute("val")?.Value;
         switch (color.Name.LocalName)
@@ -153,15 +153,15 @@ static class ImageRules
         return Math.Max(red, Math.Max(green, blue)) - Math.Min(red, Math.Min(green, blue));
     }
 
-    static string? FirstColorful(IEnumerable<XElement> elements, ThemeInfo theme) =>
+    static string? FirstColorful(IEnumerable<OpenXmlElement> elements, ThemeInfo theme) =>
         elements.Where(IsColorElement).Select(item => Colorful(item, theme)).FirstOrDefault(item => item is not null);
 
     /// <summary>形状：spPr 里显式的填充和线条颜色；没写填充或线条时按 wps:style 的默认色（idx 为 0 表示无）。</summary>
-    static string? ShapeColor(XElement shape, ThemeInfo theme)
+    static string? ShapeColor(OpenXmlElement shape, ThemeInfo theme)
     {
         var properties = shape.Element(WpsNs + "spPr");
         var style = shape.Element(WpsNs + "style");
-        IEnumerable<XElement> StyleColors(string name) =>
+        IEnumerable<OpenXmlElement> StyleColors(string name) =>
             style?.Element(W.A + name) is { } reference && int.TryParse(reference.Attribute("idx")?.Value, out var index) && index > 0 ? reference.Elements() : [];
         var colors = FillColors(properties);
         if (!HasFill(properties)) colors = colors.Concat(StyleColors("fillRef"));
@@ -200,7 +200,7 @@ static class ImageRules
     }
 
     /// <summary>VML 形状：fillcolor / strokecolor（未写时 Word 默认白色填充、黑色线条）。</summary>
-    static string? VmlColor(XElement shape)
+    static string? VmlColor(OpenXmlElement shape)
     {
         static bool Off(string? value) => value is "f" or "false";
         foreach (var (name, toggle) in new[] { ("fillcolor", "filled"), ("strokecolor", "stroked") })

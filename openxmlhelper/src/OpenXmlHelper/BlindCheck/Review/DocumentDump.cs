@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Text;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Rules;
@@ -23,7 +23,7 @@ sealed class DumpImage
 
     /// <summary>DrawingML 的 wp:docPr 或 VML 的 v:shape，编辑替代文字时用；不输出。</summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public XElement? Element { get; init; }
+    public OpenXmlElement? Element { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string SourcePart { get; init; } = "";
 }
@@ -45,8 +45,8 @@ static class DocumentDump
     public const char TabMark = '⇥';
     public const char ObjectMark = '◇';
 
-    static readonly XNamespace Wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
-    static readonly XNamespace O = "urn:schemas-microsoft-com:office:office";
+    static readonly WNamespace Wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    static readonly WNamespace O = "urn:schemas-microsoft-com:office:office";
     const double EmuPerCm = 360000;
     const double TwipsPerCm = 566.929;
 
@@ -113,7 +113,7 @@ static class DocumentDump
         return images;
     }
 
-    static string LocatorOf(DocumentModel model, XElement element)
+    static string LocatorOf(DocumentModel model, OpenXmlElement element)
     {
         foreach (var paragraph in element.Ancestors(W.P))
         {
@@ -197,7 +197,7 @@ static class DocumentDump
         var sectionElements = model.BodyElement.Descendants(W.P)
             .Select(paragraph => paragraph.Element(W.PPr)?.Element(W.SectPr))
             .Where(item => item is not null)
-            .Cast<XElement>()
+            .Cast<OpenXmlElement>()
             .ToList();
         if (model.BodyElement.Element(W.SectPr) is { } last) sectionElements.Add(last);
         var footerIds = model.FooterParts.Select((part, index) => (part, id: $"ftr{index + 1}")).ToDictionary(item => item.part, item => item.id, StringComparer.OrdinalIgnoreCase);
@@ -312,7 +312,7 @@ static class DocumentDump
         var text = DisplayText(record.Text);
         var tail = new StringBuilder();
         // 只标本段自己的域，文本框里的域标在文本框内的段落上。
-        bool Own(XElement item) => item.Ancestors(W.P).FirstOrDefault() == record.Element;
+        bool Own(OpenXmlElement item) => item.Ancestors(W.P).FirstOrDefault() == record.Element;
         var fields = record.Element.Descendants(W.InstrText).Where(Own).Select(item => item.Value.Trim()).Where(item => item.Length > 0)
             .Concat(record.Element.Descendants(W.FldSimple).Where(Own).Select(item => (W.Attr(item, "instr") ?? "").Trim()))
             .Where(item => item.Length > 0)

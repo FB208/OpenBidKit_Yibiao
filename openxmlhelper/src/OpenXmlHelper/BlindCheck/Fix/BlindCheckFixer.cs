@@ -1,20 +1,18 @@
-using System.Xml.Linq;
+using Yibiao.OpenXmlHelper.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Rules;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Fix;
 
-/// <summary>一次修复的上下文：检查会话、写出器、每条规则的修改处数、跳过说明，以及改过的 part。</summary>
-sealed class FixContext(BlindCheckSession session, DocxWriter writer)
+/// <summary>一次修复的上下文：检查会话（在修复副本上读写打开）、每条规则的修改处数、跳过说明，以及改过的 part。</summary>
+sealed class FixContext(BlindCheckSession session)
 {
     readonly HashSet<string> _touched = new(StringComparer.OrdinalIgnoreCase);
-    readonly Dictionary<string, XDocument?> _extra = new(StringComparer.OrdinalIgnoreCase);
 
     public RuleContext Rules => session.Context;
     public DocumentModel Model => session.Context.Model;
     public DocxPackage Package => session.Package;
-    public DocxWriter Writer => writer;
     public Dictionary<string, int> Counts { get; } = new(StringComparer.Ordinal);
     public List<string> Notes { get; } = [];
 
@@ -32,26 +30,15 @@ sealed class FixContext(BlindCheckSession session, DocxWriter writer)
 
     public void Touch(ParaRecord record) => _touched.Add(record.Container.Part);
 
-    /// <summary>模型之外的 part（文档属性、批注扩展等），首次访问时读取并缓存。</summary>
-    public XDocument? Extra(string? part)
-    {
-        if (string.IsNullOrEmpty(part)) return null;
-        if (!_extra.TryGetValue(part, out var document))
-        {
-            document = Package.TryLoad(part);
-            _extra[part] = document;
-        }
+    /// <summary>模型之外的 part（文档属性、批注扩展等），首次访问时读取，同一部件只解析一次。</summary>
+    public PartXml? Extra(string? part) => string.IsNullOrEmpty(part) ? null : Package.TryLoad(part);
 
-        return document;
-    }
-
-    /// <summary>把改过的 XML part 交给写出器；未改动的 part 由写出器原样复制。</summary>
+    /// <summary>把改过的 XML part 写回包；未改动的 part 保持原字节。</summary>
     public void Commit()
     {
         foreach (var part in _touched)
         {
-            var document = Model.Parts.GetValueOrDefault(part) ?? _extra.GetValueOrDefault(part);
-            if (document is not null) Writer.SetXml(part, document);
+            if (Package.TryLoad(part) is { } document && Package.Has(part)) document.Save();
         }
     }
 }
@@ -114,7 +101,7 @@ static class BlindCheckFixer
                 if (run.Text.Length == 0) continue;
                 foreach (var rule in runRules)
                 {
-                    if (!Applies(rule) || run.Element.Parent is null || !rule.PerRun!(context, rule, record, run).Any()) continue;
+                    if (!Applies(rule) || !WordStructure.IsAttached(run.Element) || !rule.PerRun!(context, rule, record, run).Any()) continue;
                     if (!FormatFixes.CanFixRun(rule.Id, run)) continue;
                     FormatFixes.Run[rule.Id](fix, record, run);
                     fix.Count(rule.Id);

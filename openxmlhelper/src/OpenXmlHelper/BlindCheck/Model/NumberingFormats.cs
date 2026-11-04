@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Model;
@@ -12,7 +12,7 @@ sealed record AutoNumber(string Format, string Text, IReadOnlyList<string> Forma
 }
 
 /// <summary>段落用到的编号级别：numId、所属抽象编号、级别序号，以及生效的级别定义（lvlOverride 里的优先）。</summary>
-sealed record NumberingLevel(string NumId, string AbstractId, int Index, XElement Level);
+sealed record NumberingLevel(string NumId, string AbstractId, int Index, OpenXmlElement Level);
 
 /// <summary>
 /// numbering.xml 的最小读取：num → abstractNum（含 lvlOverride 里的级别定义）→ 各级 numFmt / lvlText。
@@ -22,7 +22,7 @@ sealed class NumberingFormats
 {
     static readonly Regex Placeholder = new(@"%(\d)");
 
-    readonly Dictionary<string, (string AbstractId, Dictionary<int, XElement> Levels)> _nums = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (string AbstractId, Dictionary<int, OpenXmlElement> Levels)> _nums = new(StringComparer.Ordinal);
     readonly StyleSheet _sheet;
 
     NumberingFormats(StyleSheet sheet) => _sheet = sheet;
@@ -31,7 +31,7 @@ sealed class NumberingFormats
     public string? Part { get; private set; }
 
     /// <summary>load 指定读取 part 的方式：修复时传入修复上下文的读取，改动的就是要写回的那份 XML。</summary>
-    public static NumberingFormats Load(DocumentModel model, Func<string, XDocument?>? load = null)
+    public static NumberingFormats Load(DocumentModel model, Func<string, PartXml?>? load = null)
     {
         var formats = new NumberingFormats(model.Sheet);
         var part = model.Package.RelatedPart(model.DocumentPart, "/numbering", "word/numbering.xml");
@@ -47,7 +47,7 @@ sealed class NumberingFormats
             var numId = W.Attr(num, "numId");
             var abstractId = W.ValOf(num.Element(W.Ns + "abstractNumId"));
             if (numId is null || abstractId is null || !abstracts.TryGetValue(abstractId, out var baseLevels)) continue;
-            var levels = new Dictionary<int, XElement>(baseLevels);
+            var levels = new Dictionary<int, OpenXmlElement>(baseLevels);
             foreach (var overrideLevel in num.Elements(W.Ns + "lvlOverride"))
             {
                 if (overrideLevel.Element(W.Ns + "lvl") is { } level && W.IntAttr(overrideLevel, "ilvl") is { } index) levels[index] = level;
@@ -59,9 +59,9 @@ sealed class NumberingFormats
         return formats;
     }
 
-    static Dictionary<int, XElement> Levels(XElement abstractNum)
+    static Dictionary<int, OpenXmlElement> Levels(OpenXmlElement abstractNum)
     {
-        var result = new Dictionary<int, XElement>();
+        var result = new Dictionary<int, OpenXmlElement>();
         foreach (var level in abstractNum.Elements(W.Ns + "lvl"))
         {
             if (W.IntAttr(level, "ilvl") is { } index) result.TryAdd(index, level);
@@ -93,7 +93,7 @@ sealed class NumberingFormats
     }
 
     /// <summary>numId 下某一级生效的级别定义。</summary>
-    public XElement? Level(string numId, int index)
+    public OpenXmlElement? Level(string numId, int index)
     {
         return _nums.TryGetValue(numId, out var num) ? num.Levels.GetValueOrDefault(index) : null;
     }

@@ -68,18 +68,29 @@ static class BlindCheckFixAction
 
             Dictionary<string, int> fixes;
             List<string> notes;
-            using (var session = BlindCheckSession.Open(sourcePath, request, new ProgressRange(progress, 0, 0.3)))
+            // 先把原文复制成副本，在副本上读写打开并修复，只保存改过的部件；原文件不改动。
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            var tempPath = outputPath + ".tmp";
+            WordWorkspace.CopyToWritable(sourcePath, tempPath);
+            try
             {
-                var writer = new DocxWriter(session.Package);
-                var fix = new FixContext(session, writer);
-                BlindCheckFixer.Run(fix, request.FixRules.ToHashSet(StringComparer.Ordinal), new ProgressRange(progress, 0.3, 0.45));
-                fix.Commit();
-                progress.Report(0.46, "正在写出修复副本");
-                writer.Save(outputPath);
-                fixes = fix.Counts;
-                notes = fix.Notes;
-                // 原文按目录认标题，目录删掉后复查若改按编号兜底，正文里的编号短句会被当成标题，报出并非修复引入的问题。
-                if (fixes.ContainsKey("struct.toc") && session.Context.Outline.UsedToc) request.HeadingFallback = false;
+                using (var session = BlindCheckSession.Open(tempPath, request, new ProgressRange(progress, 0, 0.3), writable: true))
+                {
+                    var fix = new FixContext(session);
+                    BlindCheckFixer.Run(fix, request.FixRules.ToHashSet(StringComparer.Ordinal), new ProgressRange(progress, 0.3, 0.45));
+                    progress.Report(0.46, "正在写出修复副本");
+                    fix.Commit();
+                    fixes = fix.Counts;
+                    notes = fix.Notes;
+                    // 原文按目录认标题，目录删掉后复查若改按编号兜底，正文里的编号短句会被当成标题，报出并非修复引入的问题。
+                    if (fixes.ContainsKey("struct.toc") && session.Context.Outline.UsedToc) request.HeadingFallback = false;
+                }
+
+                WordWorkspace.MoveOverWritable(tempPath, outputPath);
+            }
+            finally
+            {
+                TryDelete(tempPath);
             }
 
             progress.Report(0.5, "正在校验修复副本");

@@ -1,5 +1,5 @@
 using System.Text;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Model;
@@ -35,7 +35,7 @@ sealed class Container
 
 sealed class RunRecord
 {
-    public required XElement Element { get; init; }
+    public required OpenXmlElement Element { get; init; }
     public required RunFormat Format { get; init; }
     public required string Text { get; init; }
     public TextKind Kind { get; init; }
@@ -43,7 +43,7 @@ sealed class RunRecord
 
 sealed class ParaRecord
 {
-    public required XElement Element { get; init; }
+    public required OpenXmlElement Element { get; init; }
     public required Container Container { get; init; }
     public required ParaFormat Format { get; init; }
     public required List<RunRecord> Runs { get; init; }
@@ -77,7 +77,7 @@ sealed class SectionInfo
     public List<(string Type, string RelationshipId)> FooterReferences { get; init; } = [];
 }
 
-sealed record BodyBlock(XElement Element, bool IsTable);
+sealed record BodyBlock(OpenXmlElement Element, bool IsTable);
 
 /// <summary>
 /// 一份 docx 的可检查模型：每个段落带容器类别、生效格式和文本块；
@@ -87,16 +87,16 @@ sealed class DocumentModel
 {
     public const char ObjectPlaceholder = '\uFFFC';
 
-    static readonly HashSet<XName> TransparentRunContainers =
+    static readonly HashSet<WName> TransparentRunContainers =
     [
         W.Hyperlink, W.SmartTag, W.Sdt, W.SdtContent, W.Bdo, W.Dir, W.FldSimple, W.CustomXml,
     ];
 
     public required DocxPackage Package { get; init; }
-    public required XElement BodyElement { get; init; }
+    public required OpenXmlElement BodyElement { get; init; }
     public required StyleSheet Sheet { get; init; }
     public required FormatResolver Resolver { get; init; }
-    public Dictionary<string, XDocument> Parts { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, PartXml> Parts { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> HeaderParts { get; } = [];
     public List<string> FooterParts { get; } = [];
     public string? FootnotesPart { get; set; }
@@ -104,7 +104,7 @@ sealed class DocumentModel
     public string? CommentsPart { get; set; }
     public List<SectionInfo> Sections { get; } = [];
     public List<BodyBlock> BodyBlocks { get; } = [];
-    public Dictionary<XElement, ParaRecord> Records { get; } = new(ReferenceEqualityComparer.Instance);
+    public Dictionary<OpenXmlElement, ParaRecord> Records { get; } = new(ReferenceEqualityComparer.Instance);
     public List<ParaRecord> BodyParagraphs { get; } = [];
     public List<ParaRecord> TableParagraphs { get; } = [];
     public List<ParaRecord> HeaderParagraphs { get; } = [];
@@ -118,7 +118,7 @@ sealed class DocumentModel
     /// 页眉页脚 hdr{n}.{k} / ftr{n}.{k}；脚注尾注 fn.{k} / en.{k}；文本框 tb{k}。
     /// 同一份文件每次建模得到的编号相同，检查结果、标书结构导出和 Agent 编辑都按它定位。
     /// </summary>
-    public Dictionary<XElement, string> Locators { get; } = new(ReferenceEqualityComparer.Instance);
+    public Dictionary<OpenXmlElement, string> Locators { get; } = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>header/footer part -> 引用它的 (节序号, 类型)，用于结果定位。</summary>
     public Dictionary<string, (int Section, string Type)> HeaderFooterOwners { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -275,7 +275,7 @@ sealed class DocumentModel
     }
 
     /// <summary>文本框内容：VML 回退副本与 DrawingML 主副本只取一份，避免重复计数。</summary>
-    public static IEnumerable<XElement> TextboxContents(XElement root)
+    public static IEnumerable<OpenXmlElement> TextboxContents(OpenXmlElement root)
     {
         return root.Descendants()
             .Where(element => element.Name == W.TxbxContent || element.Name == W.VTxbxContent)
@@ -288,7 +288,7 @@ sealed class DocumentModel
         var sectionElements = BodyElement.Descendants(W.P)
             .Select(paragraph => paragraph.Element(W.PPr)?.Element(W.SectPr))
             .Where(item => item is not null)
-            .Cast<XElement>()
+            .Cast<OpenXmlElement>()
             .ToList();
         if (BodyElement.Element(W.SectPr) is { } last) sectionElements.Add(last);
 
@@ -327,7 +327,7 @@ sealed class DocumentModel
     }
 
     /// <summary>按文档顺序收集正文顶层段落与表格，穿过内容控件和自定义 XML 包装。</summary>
-    void CollectBodyBlocks(XElement parent, List<BodyBlock> blocks)
+    void CollectBodyBlocks(OpenXmlElement parent, List<BodyBlock> blocks)
     {
         foreach (var child in parent.Elements())
         {
@@ -338,7 +338,7 @@ sealed class DocumentModel
         }
     }
 
-    IEnumerable<ParaRecord> TableParagraphRecords(XElement table, int tableIndex)
+    IEnumerable<ParaRecord> TableParagraphRecords(OpenXmlElement table, int tableIndex)
     {
         var styleId = W.ValOf(table.Element(W.TblPr)?.Element(W.TblStyle));
         var row = 0;
@@ -368,7 +368,7 @@ sealed class DocumentModel
         }
     }
 
-    IEnumerable<ParaRecord> CellParagraphRecords(XElement parent, Container container, int tableIndex)
+    IEnumerable<ParaRecord> CellParagraphRecords(OpenXmlElement parent, Container container, int tableIndex)
     {
         foreach (var child in parent.Elements())
         {
@@ -391,7 +391,7 @@ sealed class DocumentModel
     }
 
     /// <summary>取 parent 下的 name 元素，穿过内容控件与自定义 XML 包装。</summary>
-    static IEnumerable<XElement> Unwrap(XElement parent, XName name)
+    static IEnumerable<OpenXmlElement> Unwrap(OpenXmlElement parent, WName name)
     {
         foreach (var child in parent.Elements())
         {
@@ -403,7 +403,7 @@ sealed class DocumentModel
         }
     }
 
-    ParaRecord CreateRecord(XElement paragraph, Container container)
+    ParaRecord CreateRecord(OpenXmlElement paragraph, Container container)
     {
         if (Records.TryGetValue(paragraph, out var cached)) return cached;
         var format = Resolver.ResolveParagraph(paragraph, container.TableStyleId);
@@ -443,7 +443,7 @@ sealed class DocumentModel
     /// 按文档顺序产出参与渲染的文本块：穿过超链接、内容控件、域等包装，
     /// 修订插入照常显示，修订删除不显示，段内文本框不属于本段。
     /// </summary>
-    public static IEnumerable<XElement> RenderedRuns(XElement paragraph)
+    public static IEnumerable<OpenXmlElement> RenderedRuns(OpenXmlElement paragraph)
     {
         foreach (var child in paragraph.Elements())
         {
@@ -459,7 +459,7 @@ sealed class DocumentModel
     }
 
     /// <summary>不建格式记录、只取文本的快速路径，供目录识别遍历全部段落使用。</summary>
-    public static string ParagraphText(XElement paragraph)
+    public static string ParagraphText(OpenXmlElement paragraph)
     {
         var builder = new StringBuilder();
         var ignored = false;
@@ -471,7 +471,7 @@ sealed class DocumentModel
         return builder.ToString();
     }
 
-    static string RunText(XElement run, ref bool hasPageBreak)
+    static string RunText(OpenXmlElement run, ref bool hasPageBreak)
     {
         var builder = new StringBuilder();
         foreach (var child in run.Elements())
@@ -485,7 +485,7 @@ sealed class DocumentModel
     }
 
     /// <summary>文本块中单个子元素贡献的渲染文字；修复时按它把整段文字的位置对应回各个 w:t。</summary>
-    public static string PieceText(XElement child)
+    public static string PieceText(OpenXmlElement child)
     {
         var name = child.Name;
         if (name == W.T) return child.Value;

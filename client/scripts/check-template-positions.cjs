@@ -935,6 +935,108 @@ test('制表符和分页段落可写入且保留断点；去掉的章末附件�
   assert.ok(sliced.includes('投标人名称：北京建设公司') && !sliced.includes('附件4'), sliced);
 });
 
+// 结构规则回归：单元格里唯一的段落整段是格式文字时，截章和整本导出都要留下这个段落（Word 要求单元格以段落结尾），书签不只剩一半。
+function assertWordStructure(xml, label) {
+  for (const [cellXml] of xml.matchAll(/<w:tc>(?:(?!<w:tc>)[\s\S])*?<\/w:tc>/g)) {
+    assert.match(cellXml, /<\/w:p>(?:\s*<w:bookmarkEnd [^>]*\/>)*\s*<\/w:tc>$/, `${label}：单元格须以段落结尾：${cellXml.slice(0, 200)}`);
+  }
+  const ids = (pattern) => new Set([...xml.matchAll(pattern)].map((match) => match[1]));
+  const starts = ids(/<w:bookmarkStart\b[^>]*\bw:id="([^"]+)"/g);
+  const ends = ids(/<w:bookmarkEnd\b[^>]*\bw:id="([^"]+)"/g);
+  assert.deepEqual([...starts].filter((id) => !ends.has(id)), [], `${label}：书签只有起点`);
+  assert.deepEqual([...ends].filter((id) => !starts.has(id)), [], `${label}：书签只有终点`);
+}
+
+test('结构规则：单元格唯一段落整段是格式文字时，截章和整本导出都保留空段落，书签不丢一半', async () => {
+  const name = 'cell-format-source';
+  const { candidates: list } = await scanFile(name, [
+    para('投标响应表', '<w:pStyle w:val="1"/>'),
+    table([[
+      cell(`<w:p><w:bookmarkStart w:id="5" w:name="_Toc500"/>${run('按招标文件规定填写')}<w:bookmarkEnd w:id="5"/></w:p>`),
+      cell(para('投标人：____')),
+    ]], 'TableGrid'),
+    para('表后说明'),
+    sectPr(),
+  ].join(''), [{ id: 'r1', title: '投标响应表', auto_fill: true, start_block: 0, end_block: 3 }]);
+  const blank = list.find((item) => item.context?.includes('投标人'));
+  await service.runJob({
+    action: 'apply-template-fields',
+    request: {
+      input: `technical-plan/${name}.docx`,
+      output: 'technical-plan/cell-format-template.docx',
+      fields_output: 'technical-plan/cell-format-fields.json',
+      fields: [{ candidate_id: blank.candidate_id, name: '投标人名称', subject: '投标人', fill_by: 'ai' }],
+      ignored_candidate_ids: list.filter((item) => item !== blank).map((item) => item.candidate_id),
+      removals: [{ at: 'b1.r1.c1.p1', text: '按招标文件规定填写' }],
+    },
+    timeoutMs: 60000,
+  });
+  const template = readJson('technical-plan/cell-format-fields.json');
+  const chapter = template.chapters[0];
+  const bytes = await service.createTemplateChapterDocx({ input: 'technical-plan/cell-format-template.docx', startBlock: chapter.start_block, endBlock: chapter.end_block });
+  const sliced = new AdmZip(Buffer.from(bytes)).readAsText('word/document.xml');
+  assert.ok(!sliced.includes('按招标文件规定填写'), '格式文字已去掉');
+  assertWordStructure(sliced, '截章');
+
+  const html = `<section data-yb-business-chapter="${chapter.id}" data-yb-business-level="1" data-yb-business-title="投标响应表" data-yb-anchor-start="" data-yb-anchor-end="" data-yb-export-template="false" data-yb-export-page-template="business"></section>`;
+  const converted = await service.createRestrictedHtmlDocx(html, defaultExportFormat, {
+    copyAssets: true,
+    wholeDocument: true,
+    businessTemplate: { input: 'technical-plan/cell-format-template.docx', chapters: template.chapters },
+  });
+  const exported = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
+  assert.ok(!exported.includes('按招标文件规定填写') && exported.includes('表后说明'), '整本导出并入了商务章节并去掉格式文字');
+  assertWordStructure(exported, '整本导出');
+});
+
+// 结构规则回归：章节页框把正文段落、配图段落和业务表的行直接移进页框表格，移完不能再被当成原位置的残留删掉。
+test('结构规则：开启章节页框时，正文文字、配图和表格内容都完整移进页框', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const html = '<h1>第一章 工程概况</h1><p>页框里的正文第一段。</p>'
+    + '<figure data-yb-size="wide"><img alt="示意图" data-yb-asset-ref="frame-figure.png"><figcaption>图 1 示意图</figcaption></figure>'
+    + '<table><tbody><tr><td>表格甲<td>表格乙</table><p>页框里的正文末段。</p>';
+  const exportFormat = { ...defaultExportFormat, heading_border: { ...defaultExportFormat.heading_border, enabled: true } };
+  const converted = await service.createRestrictedHtmlDocx(html, exportFormat, { copyAssets: true, assets: new Map([['frame-figure.png', png]]) });
+  const xml = new AdmZip(Buffer.from(converted.bytes)).readAsText('word/document.xml');
+  const frame = [...xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map((match) => match[0]).find((item) => item.includes('页框里的正文第一段'));
+  assert.ok(frame, '正文进了页框表格');
+  const frameText = frame.replace(/<[^>]+>/g, '');
+  for (const text of ['页框里的正文第一段。', '图 1 示意图', '表格甲', '表格乙', '页框里的正文末段。']) assert.ok(frameText.includes(text), `页框里缺少「${text}」：${frameText}`);
+  assert.match(frame, /<w:drawing>/, '配图留在页框里');
+  assert.equal(xml.split('页框里的正文第一段。').length, 2, '正文只出现一次，没有留下原位置的副本');
+  assertWordStructure(xml, '章节页框');
+});
+
+test('结构规则：抽章只保留选中的块，跨章的书签补齐到章内、跨章的域退化为文字，整对在章外的书签不带进来', async () => {
+  const name = 'extract-pairs-source';
+  samples.buildDocx(planDir, `${name}.docx`, [
+    para('第一章 投标函'),
+    `<w:p><w:bookmarkStart w:id="7" w:name="_Toc700"/>${run('跨章书签起点')}</w:p>`,
+    para('第二章 开标一览表'),
+    `<w:p>${run('跨章书签终点')}<w:bookmarkEnd w:id="7"/></w:p>`,
+    `<w:p>${run('页码')}<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${run('1')}</w:p>`,
+    `<w:p>${run('2')}<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`,
+    `<w:p><w:bookmarkStart w:id="8" w:name="_Toc800"/>${run('第三章')}<w:bookmarkEnd w:id="8"/></w:p>`,
+    sectPr(),
+  ].join(''));
+  await service.runJob({
+    action: 'extract-chapters',
+    request: {
+      sources: [`technical-plan/${name}.docx`],
+      chapters: [{ id: 'x1', title: '开标一览表', startBlock: 2, endBlock: 5 }],
+      output: 'technical-plan/extract-pairs.docx',
+    },
+    timeoutMs: 60000,
+  });
+  const xml = documentXml('technical-plan/extract-pairs.docx');
+  assertWordStructure(xml, '抽章');
+  const text = xml.replace(/<[^>]+>/g, '');
+  assert.ok(text.includes('第二章 开标一览表') && text.includes('页码1') && !text.includes('第三章'), text);
+  assert.match(xml, /<w:bookmarkStart\b[^>]*w:name="_Toc700"/, '跨章书签的起点补到章内');
+  assert.doesNotMatch(xml, /_Toc800/, '整对在章外的书签不带进来');
+  assert.doesNotMatch(xml, /<w:fldChar\b/, '只抽到一半的域退化为普通文字');
+});
+
 // 页码引用：普通字段和规则表共用换算，Agent 按原句选数字或文字写法，助手按写法生成页码域并按域代码回填。
 const { convertAgentPageRefs, toAgentPageRefs, numberedNodes, createPageRefDisplay } = require('../electron/services/rulePageTables.cjs');
 

@@ -57,7 +57,8 @@ function toolResult(value) {
 function readDocumentPageCount(docxPath) {
   try {
     const xml = new AdmZip(docxPath).getEntry('docProps/app.xml')?.getData().toString('utf8') || '';
-    const pages = Number(xml.match(/<Pages>(\d+)<\/Pages>/)?.[1]);
+    // 修复副本的 app.xml 由 OpenXML SDK 写回时元素带 ap: 前缀，匹配时允许前缀。
+    const pages = Number(xml.match(/<(?:[\w.-]+:)?Pages>(\d+)<\/(?:[\w.-]+:)?Pages>/)?.[1]);
     return Number.isFinite(pages) && pages > 0 ? pages : null;
   } catch {
     return null;

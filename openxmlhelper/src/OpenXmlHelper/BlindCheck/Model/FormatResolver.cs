@@ -1,5 +1,5 @@
 using System.Globalization;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Model;
@@ -15,13 +15,13 @@ static class FormatSource
 }
 
 /// <summary>rPr/pPr 摊平成 {属性名: 子元素}；只收 w 命名空间的子元素。</summary>
-sealed class PropMap : Dictionary<string, XElement>
+sealed class PropMap : Dictionary<string, OpenXmlElement>
 {
     public PropMap() : base(StringComparer.Ordinal)
     {
     }
 
-    public static PropMap Of(XElement? container, string? exclude = null)
+    public static PropMap Of(OpenXmlElement? container, string? exclude = null)
     {
         var map = new PropMap();
         if (container is null) return map;
@@ -55,7 +55,7 @@ sealed class PropLevels
 
     public IReadOnlyList<(string Source, PropMap Props)> Items => _items;
 
-    public XElement? Get(string name)
+    public OpenXmlElement? Get(string name)
     {
         foreach (var (_, props) in _items)
         {
@@ -85,8 +85,7 @@ sealed class PropLevels
             if (!props.TryGetValue(name, out var element)) continue;
             foreach (var attribute in element.Attributes())
             {
-                if (attribute.IsNamespaceDeclaration) continue;
-                if (attribute.Name.Namespace != W.Ns && attribute.Name.Namespace != XNamespace.None) continue;
+                if (attribute.Name.Namespace != W.Ns && attribute.Name.Namespace != W.None) continue;
                 result.TryAdd(attribute.Name.LocalName, (attribute.Value, source, rank));
             }
         }
@@ -236,7 +235,7 @@ sealed class FormatResolver
     /// 样式链各层的属性，子样式在前。不预先合并：子样式只写了 rFonts 的西文槽位或段后间距时，
     /// 父样式的中文字体、行距仍要能逐槽位、逐属性继承下来。
     /// </summary>
-    List<PropMap> StyleProps(Dictionary<string, List<PropMap>> cache, string? styleId, string type, Func<StyleInfo, XElement?> select, string? exclude = null)
+    List<PropMap> StyleProps(Dictionary<string, List<PropMap>> cache, string? styleId, string type, Func<StyleInfo, OpenXmlElement?> select, string? exclude = null)
     {
         var key = styleId ?? "";
         if (cache.TryGetValue(key, out var cached)) return cached;
@@ -252,7 +251,7 @@ sealed class FormatResolver
     List<PropMap> TableStyleRPr(string? styleId) => styleId is null ? [] : StyleProps(_tableStyleRPr, styleId, "table", style => style.RPr);
     List<PropMap> TableStylePPr(string? styleId) => styleId is null ? [] : StyleProps(_tableStylePPr, styleId, "table", style => style.PPr, "rPr");
 
-    public ParaFormat ResolveParagraph(XElement paragraph, string? tableStyleId)
+    public ParaFormat ResolveParagraph(OpenXmlElement paragraph, string? tableStyleId)
     {
         var pPr = paragraph.Element(W.PPr);
         var direct = PropMap.Of(pPr);
@@ -324,7 +323,7 @@ sealed class FormatResolver
         return format;
     }
 
-    public RunFormat ResolveRun(XElement run, ParaFormat paragraph, string? tableStyleId)
+    public RunFormat ResolveRun(OpenXmlElement run, ParaFormat paragraph, string? tableStyleId)
     {
         var direct = PropMap.Of(run.Element(W.RPr));
         var charStyleId = W.ValOf(direct.GetValueOrDefault("rStyle"));
@@ -432,7 +431,7 @@ sealed class FormatResolver
     /// 文字底纹的可见颜色：先看填充色（含主题填充色），再看图案颜色（图案不是"清除"时才显示）；
     /// 白色、自动和 nil 视为没有底纹。
     /// </summary>
-    string? ShadingColor(XElement? shd)
+    string? ShadingColor(OpenXmlElement? shd)
     {
         if (shd is null) return null;
         var pattern = W.ValOf(shd);

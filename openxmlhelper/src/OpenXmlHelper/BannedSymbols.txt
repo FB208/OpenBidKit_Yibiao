@@ -1,0 +1,40 @@
+M:DocumentFormat.OpenXml.OpenXmlElement.Remove;请改用 WordStructure.Remove / RemoveRange（删除须经结构层，见开发说明「结构规则与结构操作层」）
+M:DocumentFormat.OpenXml.OpenXmlElement.RemoveAllChildren;请改用 WordStructure.ClearContent / RemoveChildren
+M:DocumentFormat.OpenXml.OpenXmlCompositeElement.RemoveAllChildren;请改用 WordStructure.ClearContent / RemoveChildren
+M:DocumentFormat.OpenXml.OpenXmlLeafElement.RemoveAllChildren;请改用 WordStructure.ClearContent / RemoveChildren
+M:DocumentFormat.OpenXml.OpenXmlElement.RemoveAllChildren``1;请改用 WordStructure.RemoveChildren<T>
+M:DocumentFormat.OpenXml.OpenXmlElement.RemoveChild``1(``0);请改用 WordStructure.Remove
+M:DocumentFormat.OpenXml.OpenXmlCompositeElement.RemoveChild``1(``0);请改用 WordStructure.Remove
+M:DocumentFormat.OpenXml.OpenXmlElement.ReplaceChild``1(DocumentFormat.OpenXml.OpenXmlElement,``0);请改用 WordStructure.Replace
+M:DocumentFormat.OpenXml.OpenXmlCompositeElement.ReplaceChild``1(DocumentFormat.OpenXml.OpenXmlElement,``0);请改用 WordStructure.Replace
+P:DocumentFormat.OpenXml.OpenXmlElement.InnerXml;不要整体改写 InnerXml，请经 WordStructure 增删元素
+P:DocumentFormat.OpenXml.OpenXmlCompositeElement.InnerXml;不要整体改写 InnerXml，请经 WordStructure 增删元素
+P:DocumentFormat.OpenXml.OpenXmlLeafElement.InnerXml;不要整体改写 InnerXml，请经 WordStructure 增删元素
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeletePart(System.String);请改用 WordStructure.DeletePart / DeleteRelationship
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeletePart(DocumentFormat.OpenXml.Packaging.OpenXmlPart);请改用 WordStructure.DeletePart
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeleteParts``1(System.Collections.Generic.IEnumerable{``0});请改用 WordStructure.DeletePart
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeletePartsOfType``1;请改用 WordStructure.DeletePart
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeleteReferenceRelationship(System.String);请改用 WordStructure.DeleteRelationship
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeleteReferenceRelationship(DocumentFormat.OpenXml.Packaging.ReferenceRelationship);请改用 WordStructure.DeleteRelationship
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeleteExternalRelationship(System.String);请改用 WordStructure.DeleteRelationship
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.DeleteExternalRelationship(DocumentFormat.OpenXml.Packaging.ExternalRelationship);请改用 WordStructure.DeleteRelationship
+M:DocumentFormat.OpenXml.Packaging.OpenXmlPartContainer.ChangeIdOfPart(DocumentFormat.OpenXml.Packaging.OpenXmlPart,System.String);改关系 Id 会让引用悬空，不要使用
+T:System.Xml.Linq.XObject;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XNode;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XContainer;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XElement;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XDocument;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XAttribute;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XName;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XNamespace;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XText;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XCData;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XComment;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XProcessingInstruction;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XDeclaration;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.XStreamingElement;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.Xml.Linq.Extensions;docx 一律用 OpenXML SDK 读写（BlindCheck/Ooxml/W.cs 提供按名称读取的扩展），不要引入 LINQ to XML
+T:System.IO.Compression.ZipArchive;docx 一律用 OpenXML SDK 打开（WordprocessingDocument），不要手写 zip 读写
+T:System.IO.Compression.ZipArchiveEntry;docx 一律用 OpenXML SDK 打开（WordprocessingDocument），不要手写 zip 读写
+T:System.IO.Compression.ZipFile;docx 一律用 OpenXML SDK 打开（WordprocessingDocument），不要手写 zip 读写
+T:System.IO.Compression.ZipFileExtensions;docx 一律用 OpenXML SDK 打开（WordprocessingDocument），不要手写 zip 读写

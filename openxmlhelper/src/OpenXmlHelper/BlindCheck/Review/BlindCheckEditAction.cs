@@ -1,10 +1,11 @@
 using System.Text;
 using System.Text.Json;
-using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using Yibiao.OpenXmlHelper.BlindCheck.Fix;
 using Yibiao.OpenXmlHelper.BlindCheck.Model;
 using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.Jobs;
+using Yibiao.OpenXmlHelper.Ooxml;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Review;
 
@@ -82,7 +83,10 @@ static class BlindCheckEditAction
 
             var outcomes = new List<BlindCheckEditOutcome>();
             var applied = 0;
-            using (var session = BlindCheckSession.Open(sourcePath, request, new ProgressRange(progress, 0, 0.35)))
+            // 在副本上读写打开并修改，只保存改过的部件；校验通过后再覆盖原位置。
+            tempPath = sourcePath + ".edit.docx";
+            WordWorkspace.CopyToWritable(sourcePath, tempPath);
+            using (var session = BlindCheckSession.Open(tempPath, request, new ProgressRange(progress, 0, 0.35), writable: true))
             {
                 var model = session.Context.Model;
                 var paragraphs = model.Locators.GroupBy(item => item.Value).ToDictionary(group => group.Key, group => group.First().Key, StringComparer.Ordinal);
@@ -98,15 +102,17 @@ static class BlindCheckEditAction
                 if (applied > 0)
                 {
                     progress.Report(0.4, "正在写出修改");
-                    var writer = new DocxWriter(session.Package);
                     foreach (var part in touched)
                     {
-                        if (model.Parts.TryGetValue(part, out var document)) writer.SetXml(part, document);
+                        if (model.Parts.TryGetValue(part, out var document)) document.Save();
                     }
-
-                    tempPath = sourcePath + ".edit.docx";
-                    writer.Save(tempPath);
                 }
+            }
+
+            if (applied == 0)
+            {
+                TryDelete(tempPath);
+                tempPath = null;
             }
 
             var validation = new FixValidationResult();
@@ -128,7 +134,7 @@ static class BlindCheckEditAction
                 }
                 else
                 {
-                    File.Move(tempPath, sourcePath, overwrite: true);
+                    WordWorkspace.MoveOverWritable(tempPath, sourcePath);
                 }
 
                 tempPath = null;
@@ -162,7 +168,7 @@ static class BlindCheckEditAction
         }
     }
 
-    static BlindCheckEditOutcome Apply(BlindCheckSession session, Dictionary<string, XElement> paragraphs, Dictionary<string, DumpImage> images, HashSet<string> touched, BlindCheckEditItem edit, int index)
+    static BlindCheckEditOutcome Apply(BlindCheckSession session, Dictionary<string, OpenXmlElement> paragraphs, Dictionary<string, DumpImage> images, HashSet<string> touched, BlindCheckEditItem edit, int index)
     {
         var op = (edit.Op ?? "").Trim();
         var target = (edit.Target ?? "").Trim();
@@ -172,13 +178,13 @@ static class BlindCheckEditAction
         {
             if (!images.TryGetValue(target, out var image) || image.Element is null) return Fail($"找不到图片 {target}，请按标书结构里的 img 编号提交");
             var before = image.Description;
-            foreach (var name in new[] { "descr", "title", "alt" }) image.Element.Attribute(name)?.Remove();
-            image.Element.Element(W.V + "imagedata")?.Attribute(XNamespace.Get("urn:schemas-microsoft-com:office:office") + "title")?.Remove();
+            foreach (var name in new[] { "descr", "title", "alt" }) image.Element.SetAttributeValue(name, null);
+            image.Element.Element(W.V + "imagedata")?.SetAttributeValue(new WNamespace("urn:schemas-microsoft-com:office:office") + "title", null);
             touched.Add(image.SourcePart);
             return new BlindCheckEditOutcome { Index = index, Op = op, Target = target, Ok = true, Message = "已清除替代文字", Before = before, After = "" };
         }
 
-        if (!paragraphs.TryGetValue(target, out var paragraph) || paragraph.Parent is null) return Fail($"找不到段落 {target}，编号可能因删段已变化，请按最新的标书结构提交");
+        if (!paragraphs.TryGetValue(target, out var paragraph) || !WordStructure.IsAttached(paragraph)) return Fail($"找不到段落 {target}，编号可能因删段已变化，请按最新的标书结构提交");
         var model = session.Context.Model;
         if (!model.Records.TryGetValue(paragraph, out var record)) return Fail($"段落 {target} 不能修改");
         var display = DocumentDump.DisplayText(DocumentModel.ParagraphText(paragraph));
@@ -215,12 +221,13 @@ static class BlindCheckEditAction
             if (record.HasPageBreak) return Fail("该段落含分页符，删除后后文不再另起一页，不能删除；含分页符的空段落请判为人工处理");
             if (session.Context.HeadingLevel(record) is not null) return Fail("标题段落不能删除，如需修改标题文字请用 replace");
             if (session.Context.Outline.IsToc(paragraph)) return Fail("目录段落由目录域生成，不能单独删除，请修改正文后在 Word 中更新目录");
-            if (paragraph.Parent.Name == W.Tc && paragraph.Parent.Elements(W.P).Count() <= 1) return Fail("这是单元格里唯一的段落，不能删除，可用 replace 清空文字");
             static string Compact(string value) => string.Concat(value.Where(item => !char.IsWhiteSpace(item)));
             if (Compact(edit.Find ?? "") != Compact(display)) return Fail("删除整段时 find 必须填写该段完整原文（空白可省略），用于确认删除的是哪一段");
-            paragraph.Remove();
+            // 删除经结构层：单元格里仅剩的段落按 Word 的要求降级为清空，结果里如实说明。
+            var cleared = WordStructure.Remove(paragraph) == StructureResult.Cleared;
             touched.Add(record.Container.Part);
-            return new BlindCheckEditOutcome { Index = index, Op = op, Target = target, Ok = true, Message = "已删除段落", Before = Clip(display, 120), After = "" };
+            var message = cleared ? "该段是单元格里仅剩的段落，Word 要求单元格至少保留一个段落，已清空文字、未删除段落" : "已删除段落";
+            return new BlindCheckEditOutcome { Index = index, Op = op, Target = target, Ok = true, Message = message, Before = Clip(display, 120), After = "" };
         }
 
         return Fail($"不支持的修改方式「{op}」，只能是 replace、delete_paragraph 或 clear_image_alt");

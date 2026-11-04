@@ -1,3 +1,7 @@
+using System.Security;
+using DocumentFormat.OpenXml;
+using Yibiao.OpenXmlHelper.Ooxml;
+using Yibiao.OpenXmlHelper.BlindCheck.Ooxml;
 using Yibiao.OpenXmlHelper.BlindCheck.Rules;
 
 namespace Yibiao.OpenXmlHelper.BlindCheck.Fix;
@@ -19,7 +23,7 @@ static class PropertiesFixes
             {
                 var element = StructureRules.LocalChild(core, name);
                 if (element is null || element.Value.Trim().Length == 0 || !profile.Bool(toggle, true)) continue;
-                element.Value = "";
+                SetText(element, "");
                 count += 1;
             }
 
@@ -33,9 +37,9 @@ static class PropertiesFixes
             var company = StructureRules.LocalChild(app, "Company");
             if (company is not null && company.Value.Trim().Length > 0 && profile.Bool("props.check_company", true))
             {
-                company.Value = "";
+                SetText(company, "");
                 // 经理字段同属单位信息，检查不单独报，清单位时一并清空。
-                if (StructureRules.LocalChild(app, "Manager") is { } manager) manager.Value = "";
+                if (StructureRules.LocalChild(app, "Manager") is { } manager) SetText(manager, "");
                 changed = true;
                 count += 1;
             }
@@ -43,7 +47,7 @@ static class PropertiesFixes
             var template = StructureRules.LocalChild(app, "Template");
             if (template is not null && template.Value.Trim().Length > 0 && !StructureRules.DefaultTemplates.Contains(template.Value.Trim()) && profile.Bool("props.check_template", true))
             {
-                template.Value = "Normal.dotm";
+                SetText(template, "Normal.dotm");
                 changed = true;
                 count += 1;
             }
@@ -59,13 +63,33 @@ static class PropertiesFixes
                 .ToList();
             if (removable.Count > 0)
             {
-                removable.ForEach(item => item.Remove());
+                WordStructure.RemoveRange(removable);
                 fix.Touch(customPart!);
                 count += removable.Count;
             }
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// 写入属性元素的文字。app.xml 等有强类型根元素的部件直接改文字；core.xml 没有强类型根元素，按未知元素解析，
+    /// 未知元素的文字不能原地修改，换成同名、同属性的新元素。
+    /// </summary>
+    static void SetText(OpenXmlElement element, string value)
+    {
+        if (element is OpenXmlLeafTextElement text)
+        {
+            text.Text = value;
+            return;
+        }
+
+        var prefix = string.IsNullOrEmpty(element.Prefix) ? "" : element.Prefix + ":";
+        var declaration = string.IsNullOrEmpty(element.Prefix) ? $"xmlns=\"{element.NamespaceUri}\"" : $"xmlns:{element.Prefix}=\"{element.NamespaceUri}\"";
+        var replacement = W.Parse($"<{prefix}{element.LocalName} {declaration}>{SecurityElement.Escape(value)}</{prefix}{element.LocalName}>");
+        foreach (var attribute in element.GetAttributes()) replacement.SetAttribute(attribute);
+        element.InsertAfterSelf(replacement);
+        WordStructure.Remove(element);
     }
 
     /// <summary>去掉带作者、版权、拍摄位置等元数据的图片里的元数据段，不改像素。</summary>
@@ -82,7 +106,7 @@ static class PropertiesFixes
                 continue;
             }
 
-            fix.Writer.SetBytes(image.Part, stripped);
+            fix.Package.SetBytes(image.Part, stripped);
             count += 1;
         }
 
