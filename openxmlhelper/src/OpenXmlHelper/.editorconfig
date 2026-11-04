@@ -1,6 +1,6 @@
 # 删除 Open XML 元素、部件、关系须经结构层（Ooxml/WordStructure），禁用列表见 BannedSymbols.txt。
 [*.cs]
-dotnet_diagnostic.RS0030.severity = warning
+dotnet_diagnostic.RS0030.severity = error
 
 # 结构层自身是唯一允许直接调用删除 API 的地方。
 [Ooxml/{WordStructure,PairedMarkers,ReferenceIntegrity}.cs]
