@@ -153,6 +153,11 @@ function getAiLogsDir(app) {
   return path.join(getUserDataPath(app), 'logs', 'ai');
 }
 
+// 完整接口日志与现有 AI 摘要日志分目录保存。
+function getAiRawLogsDir(app) {
+  return path.join(getUserDataPath(app), 'logs', 'ai-raw');
+}
+
 function getDeveloperLogsDir(app, moduleName) {
   return path.join(getUserDataPath(app), 'logs', String(moduleName || 'app'));
 }
@@ -226,6 +231,7 @@ function getBundledOpenXmlHelperPath(app) {
 module.exports = {
   getAgentRuntimeDir,
   getAiLogsDir,
+  getAiRawLogsDir,
   getBlindCheckDir,
   getBlindCheckSourceDir,
   getBlindCheckFixedDir,

@@ -27,6 +27,7 @@ const {
   resolveAiLogTitle,
   writeAiLog,
 } = require('../utils/aiLog.cjs');
+const { createAiRawLog } = require('../utils/aiRawLog.cjs');
 const textTokenStatsStore = require('./textTokenStatsStore.cjs');
 const { buildImageStylePrompt } = require('./aiImageStyles.cjs');
 const { normalizeTokenUsage } = textTokenStatsStore;
@@ -1025,17 +1026,23 @@ function createAgentChatRequestBody(config, sourceBody) {
   return applyOutputTokenLimit(body, config);
 }
 
+// 统一发送文本请求，并在解析前旁路记录上游原始响应。
 async function fetchChatCompletion(app, config, body, options = {}) {
   const controller = options.signal ? null : new AbortController();
   const timer = controller ? setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS) : null;
   const baseUrl = requireBaseUrl(config.base_url, '请先在设置中配置文本模型 Base URL');
   try {
-    return await fetchWithRedirect(`${baseUrl}/chat/completions`, {
+    const url = `${baseUrl}/chat/completions`;
+    const headers = createHeaders(config.api_key, config.text_model_provider);
+    const serializedBody = JSON.stringify(body);
+    options.rawAttempt?.request(url, headers, serializedBody);
+    const response = await fetchWithRedirect(url, {
       method: 'POST',
-      headers: createHeaders(config.api_key, config.text_model_provider),
-      body: JSON.stringify(body),
+      headers,
+      body: serializedBody,
       signal: options.signal || controller.signal,
     });
+    return options.rawAttempt ? options.rawAttempt.captureResponse(response) : response;
   } catch (error) {
     throw markAiRequestError(error, { retryable: true });
   } finally {
@@ -1199,8 +1206,9 @@ async function readOpenAIChatStream(response) {
   };
 }
 
+// 消费普通文本响应，原始日志由统一接口入口采集。
 async function requestTextAiNormal(app, config, requestBody, options = {}) {
-  const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
+  const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal, rawAttempt: options.rawAttempt });
   await ensureTextAiResponseOk(response, 'AI 请求失败', config);
   let responseData = null;
   try {
@@ -1216,19 +1224,28 @@ async function requestTextAiNormal(app, config, requestBody, options = {}) {
   };
 }
 
+// 消费流式文本响应，原始日志由统一接口入口采集。
 async function requestTextAiStream(app, config, requestBody, options = {}) {
-  const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal });
+  const response = await fetchChatCompletion(app, config, requestBody, { signal: options.signal, rawAttempt: options.rawAttempt });
   await ensureTextAiResponseOk(response, 'AI 请求失败', config);
   return readOpenAIChatStream(response);
 }
 
+// 每次实际请求独立记录结果，自动重试仍归入同一原始日志文件。
 async function requestTextAi(app, config, requestBody, options = {}) {
   return withAiResponseActivity(async () => {
-    if (options.requestMode === 'stream') {
-      return requestTextAiStream(app, config, requestBody, options);
+    const rawAttempt = options.rawLog?.beginAttempt();
+    try {
+      const result = options.requestMode === 'stream'
+        ? await requestTextAiStream(app, config, requestBody, { ...options, rawAttempt })
+        : await requestTextAiNormal(app, config, requestBody, { ...options, rawAttempt });
+      rawAttempt?.finish('success', null, options.signal);
+      return result;
+    } catch (error) {
+      rawAttempt?.finish(options.signal?.aborted && (error === options.signal.reason || error.name === 'AbortError')
+        ? 'cancelled' : 'failed', error, options.signal);
+      throw error;
     }
-
-    return requestTextAiNormal(app, config, requestBody, options);
   });
 }
 
@@ -1461,6 +1478,7 @@ function getGoogleText(responseData) {
     .trim();
 }
 
+// 执行普通文本请求，并分别保留现有日志和完整接口日志。
 async function chatWithConfig(app, config, request) {
   if (!config.api_key) {
     throw new Error('请先在设置中配置文本模型 API Key');
@@ -1478,6 +1496,7 @@ async function chatWithConfig(app, config, request) {
   };
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, '文本请求');
+  const rawLog = createAiRawLog(app, config, requestId, logTitle);
   const requestMode = normalizeTextRequestMode(config);
   let requestBody = createChatRequestBody(config, preparedRequest, { stream: requestMode === 'stream' });
   let responseData = null;
@@ -1499,14 +1518,14 @@ async function chatWithConfig(app, config, request) {
     let result = null;
     result = await runWithAiRetry(() => runWithOperationTimeout(async (signal) => {
       try {
-        return await requestTextAi(app, config, requestBody, { signal, requestMode });
+        return await requestTextAi(app, config, requestBody, { signal, requestMode, rawLog });
       } catch (error) {
         if (!preparedRequest.response_format || !error.responseFormatUnsupported) {
           throw error;
         }
 
         requestBody = createChatRequestBody(config, preparedRequest, { omitResponseFormat: true, stream: requestMode === 'stream' });
-        return requestTextAi(app, config, requestBody, { signal, requestMode });
+        return requestTextAi(app, config, requestBody, { signal, requestMode, rawLog });
       }
     }, timeoutMs, request.signal));
 
@@ -1530,8 +1549,11 @@ async function chatWithConfig(app, config, request) {
       content,
       created_at: new Date().toISOString(),
     });
+    rawLog?.finish('success');
     return content;
   } catch (error) {
+    rawLog?.finish(request.signal?.aborted && (error === request.signal.reason || error.name === 'AbortError')
+      ? 'cancelled' : 'failed', error, request.signal);
     errorMessage = error.name === 'AbortError'
       ? request.timeout_message || `AI 请求超时（${timeoutMs / 1000} 秒）`
       : error.message;
@@ -1582,6 +1604,8 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
   ensureMultimodalEnabled(config, requestBody.messages);
   const requestMode = requestBody.stream ? 'stream' : 'normal';
   const logTitle = resolveAiLogTitle(request, 'Pi Agent');
+  const rawLog = createAiRawLog(app, config, requestId, logTitle);
+  const rawAttempt = rawLog?.beginAttempt();
   let responseData = null;
   let analyticsTracked = false;
 
@@ -1596,13 +1620,14 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
       status: 'pending',
       created_at: new Date().toISOString(),
     });
-    await Promise.resolve(request.onRequestStart?.({ config, requestBody, requestId }));
-    const response = await fetchChatCompletion(app, config, requestBody, { signal: request.signal });
+    await Promise.resolve(request.onRequestStart?.({ config, requestBody, requestId, rawAttempt }));
+    const response = await fetchChatCompletion(app, config, requestBody, { signal: request.signal, rawAttempt });
     await ensureTextAiResponseOk(response, 'AI 请求失败', config);
     const result = await request.consumeResponse(response, {
       config,
       requestBody,
       requestId,
+      rawAttempt,
     });
     responseData = result?.responseData ?? null;
     recordTextTokenStats(config, result?.usage);
@@ -1619,8 +1644,15 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
       content: result?.content || '',
       created_at: new Date().toISOString(),
     });
+    rawAttempt?.finish('success');
+    rawLog?.finish('success');
     return result;
   } catch (error) {
+    // 上游报错引发的连接中止仍记为失败，只有实际取消异常才记为取消。
+    const status = request.signal?.aborted && (error === request.signal.reason || error.name === 'AbortError')
+      ? 'cancelled' : 'failed';
+    rawAttempt?.finish(status, error, request.signal);
+    rawLog?.finish(status, error, request.signal);
     if (!analyticsTracked) {
       recordTextTokenStats(config, null);
       trackAiRequest(app, config, { ai_request_type: 'text' });

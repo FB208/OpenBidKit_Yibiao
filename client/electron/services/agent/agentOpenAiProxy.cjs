@@ -815,7 +815,8 @@ function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody
   });
 }
 
-async function prepareProxyResponse({ app, config, runtimeMeta, requestId, requestBody, downstreamWantsStream, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout }) {
+// 准备下游响应，完整接口日志另存代理错误和中断原因。
+async function prepareProxyResponse({ app, config, runtimeMeta, requestId, requestBody, downstreamWantsStream, response, startedAt, attempt, diagnostics, onActivity, activityContext, streamTimeout, rawAttempt }) {
   const stream = Boolean(requestBody.stream);
 
   if (stream) {
@@ -832,10 +833,18 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
       resolveCompletion = resolve;
       rejectCompletion = reject;
     });
-    const finalizeStreamFailure = (error, capture) => {
+    // 原始响应已单独采集，此处补充上游错误与本地中断的对应关系。
+    const finalizeStreamFailure = (error, capture, interruptionError) => {
       if (streamFinalized) return;
       streamFinalized = true;
       streamTimeout?.clear?.();
+      rawAttempt?.record('proxy_error', {
+        upstream_error: capture?.streamError || null,
+        error: { name: error?.name, message: safeErrorMessage(error), code: error?.code },
+        interruption_error: interruptionError
+          ? { name: interruptionError.name, message: safeErrorMessage(interruptionError), code: interruptionError.code }
+          : null,
+      });
       recordAgentAiFailure({
         app,
         config,
@@ -911,6 +920,7 @@ async function prepareProxyResponse({ app, config, runtimeMeta, requestId, reque
       onError: (error, capture) => finalizeStreamFailure(
         capture?.streamError ? createStreamFailure(capture, safeErrorMessage(error)) : error,
         capture,
+        error,
       ),
     });
 
@@ -1110,6 +1120,7 @@ async function requestAgentChatCompletion({ app, aiService, runtimeMeta, openAiB
             onActivity,
             activityContext,
             streamTimeout: requestBody.stream ? timeout : null,
+            rawAttempt: context.rawAttempt,
           });
           const [, capture] = await Promise.all([
             consumeResponse(prepared.response),
