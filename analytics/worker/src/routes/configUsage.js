@@ -1,5 +1,5 @@
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { queryStatsConfigUsage, queryStatsModelUsage, queryStatsModelUsageSummary } from '../services/analyticsStatsStore.js';
+import { queryStatsConfigUsage, queryStatsModelTrend, queryStatsModelUsage, queryStatsModelUsageSummary } from '../services/analyticsStatsStore.js';
 import { isValidProjectName, logQueryError, normalizeText, safeStatsRange } from '../utils.js';
 
 function readModelFilters(url) {
@@ -73,6 +73,33 @@ export async function handleModelUsage(request, env, url) {
     });
   } catch (error) {
     logQueryError('model-usage', error);
+    return json({ code: 500, message: 'query failed' }, { status: 500 });
+  }
+}
+
+const MODEL_TREND_DAYS = new Set([7, 30, 90]);
+
+export async function handleModelTrend(request, env, url) {
+  if (request.method !== 'GET') {
+    return methodNotAllowed();
+  }
+
+  if (!requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  const projectName = normalizeText(url.searchParams.get('projectName'), 80);
+  const days = MODEL_TREND_DAYS.has(Number(url.searchParams.get('days'))) ? Number(url.searchParams.get('days')) : 30;
+
+  if (!isValidProjectName(projectName)) {
+    return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
+  }
+
+  try {
+    const trend = await queryStatsModelTrend(env, projectName, days);
+    return json({ code: 0, projectName, ...trend });
+  } catch (error) {
+    logQueryError('model-trend', error);
     return json({ code: 500, message: 'query failed' }, { status: 500 });
   }
 }

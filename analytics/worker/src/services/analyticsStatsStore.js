@@ -1256,6 +1256,97 @@ export async function queryStatsModelUsageSummary(env, projectName, range) {
   return summary;
 }
 
+// 模型趋势：窗口为 [今天-days .. 昨天] 共 days 个完整天（不含今天），
+// 按域名(endpoint_host)聚合文本 token；哨兵分区内 D1 读每日表、缺口与尾部读 AE。
+export async function queryStatsModelTrend(env, projectName, days) {
+  const db = requireStatsDb(env);
+  const windowStart = getBusinessDateDaysAgo(days);
+  const windowEnd = getBusinessDateDaysAgo(1);
+  const rolledDates = await queryModelRolledDates(db, projectName, windowStart, windowEnd);
+  let aeStart = windowStart;
+  while (aeStart <= windowEnd && rolledDates.has(aeStart)) {
+    aeStart = addBusinessDateDays(aeStart, 1);
+  }
+  const dailyEnd = addBusinessDateDays(aeStart, -1);
+
+  const [dailyRows, aeRows] = await Promise.all([
+    dailyEnd >= windowStart
+      ? all(db, `
+          SELECT
+            activity_date AS activityDate,
+            endpoint_host AS endpointHost,
+            SUM(total_tokens) AS totalTokens
+          FROM stats_models_daily
+          WHERE project_name = ? AND request_type = 'text'
+            AND activity_date >= ? AND activity_date <= ?
+          GROUP BY activityDate, endpointHost
+        `, [projectName, windowStart, dailyEnd])
+      : [],
+    aeStart <= windowEnd
+      ? queryAnalytics(env, `
+          SELECT
+            ${businessDateSqlExpression()} AS activityDate,
+            blob10 AS endpointHost,
+            SUM(double4 * _sample_interval) AS totalTokens
+          FROM ${DATASET}
+          WHERE blob1 = ${sqlString(projectName)}
+            AND blob2 = 'ai_request'
+            AND blob12 = 'text'
+            AND blob11 != ''
+            AND ${businessDateRangeCondition(aeStart, windowEnd)}
+          GROUP BY activityDate, endpointHost
+          LIMIT ${MAX_ANALYTICS_ROWS}
+        `).then((result) => {
+          if ((result.data || []).length >= MAX_ANALYTICS_ROWS) {
+            throw new Error('model-trend analytics result hit row limit');
+          }
+          return result.data || [];
+        })
+      : [],
+  ]);
+
+  // date -> endpointHost -> tokens，同时累计各域名窗口总量用于 top10 排序。
+  const byDate = new Map();
+  const hostTotals = new Map();
+  const accumulate = (activityDate, endpointHost, totalTokens) => {
+    const date = String(activityDate || '').slice(0, 10);
+    const host = normalizeText(endpointHost, 120);
+    const tokens = number(totalTokens);
+    if (!date || tokens <= 0) return;
+    let perHost = byDate.get(date);
+    if (!perHost) {
+      perHost = new Map();
+      byDate.set(date, perHost);
+    }
+    perHost.set(host, (perHost.get(host) || 0) + tokens);
+    hostTotals.set(host, (hostTotals.get(host) || 0) + tokens);
+  };
+  for (const row of dailyRows) accumulate(row.activityDate, row.endpointHost, row.totalTokens);
+  for (const row of aeRows) accumulate(row.activityDate, row.endpointHost, row.totalTokens);
+
+  const dates = [];
+  for (let cursor = windowStart; cursor <= windowEnd; cursor = addBusinessDateDays(cursor, 1)) {
+    dates.push(cursor);
+  }
+
+  const topHosts = Array.from(hostTotals.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'))
+    .slice(0, 10)
+    .map(([host]) => host);
+
+  const total = dates.map((date) => {
+    let sum = 0;
+    for (const tokens of (byDate.get(date)?.values() || [])) sum += tokens;
+    return sum;
+  });
+  const series = topHosts.map((endpointHost) => ({
+    endpointHost,
+    values: dates.map((date) => number(byDate.get(date)?.get(endpointHost))),
+  }));
+
+  return { days, dates, total, series };
+}
+
 function createAgentRuntimeSummary(source = {}) {
   const successCount = number(source.successCount ?? source.success_count);
   const failedCount = number(source.failedCount ?? source.failed_count);

@@ -4,6 +4,7 @@ import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
 import { bindChangelogEvents, loadChangelogs } from './pages/changelog.js';
 import { loadClients, loadClientDetail, loadIpStats, setupIpStatsActions } from './pages/clients.js';
 import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
+import { loadModelTrend } from './pages/modelTrend.js';
 import { loadLatest } from './pages/latest.js';
 import { loadIpBlocks, loadVersionBlocksSafely, setupIpBlocksPage } from './pages/ipBlocks.js';
 import { loadModelInfoCache, setupModelInfoCachePage, syncModelInfoCache } from './pages/modelInfoCache.js';
@@ -25,6 +26,7 @@ const tabLoaders = {
   traffic: () => loadTraffic(),
   config: () => loadConfigUsage(),
   models: () => loadModelUsage(),
+  'model-trend': () => loadModelTrend(),
   agent: (options = {}) => Promise.all([loadAgentRuntime(), loadAgentErrors({ resetPage: options.resetAgentErrorPage })]),
   latest: (options = {}) => loadLatest(options),
   'system-settings': () => loadSystemSettings(),
@@ -38,7 +40,7 @@ const tabLoaders = {
 };
 
 const dataTabCacheTtl = 60_000;
-const cacheableTabs = new Set(['overview', 'clients', 'ips', 'traffic', 'config', 'models', 'agent', 'latest']);
+const cacheableTabs = new Set(['overview', 'clients', 'ips', 'traffic', 'config', 'models', 'model-trend', 'agent', 'latest']);
 const tabLoadedAt = new Map();
 
 // 判断统计页现有内容是否仍可直接复用。
@@ -216,6 +218,7 @@ function bindEvents() {
   state.trafficRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.configRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.modelRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
+  state.modelTrendRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.agentRange.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.modelProviderFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));
   state.modelEndpointFilter.addEventListener('change', () => refreshActiveTab({ resetLatestPage: true, forceRefresh: true }));

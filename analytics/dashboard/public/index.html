@@ -27,6 +27,7 @@
           <button class="nav-item" type="button" data-tab-button="traffic">访问分析</button>
           <button class="nav-item" type="button" data-tab-button="config">配置使用</button>
           <button class="nav-item" type="button" data-tab-button="models">模型使用</button>
+          <button class="nav-item" type="button" data-tab-button="model-trend">模型趋势</button>
           <button class="nav-item" type="button" data-tab-button="agent">Agent 分析</button>
           <button class="nav-item" type="button" data-tab-button="latest">最近事件</button>
         </div>
@@ -297,6 +298,27 @@
               </label>
             </div>
             <div id="modelUsage"></div>
+          </section>
+        </section>
+
+        <!-- 模型趋势 -->
+        <section id="tab-model-trend" class="tab-panel" data-tab-panel="model-trend">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>模型趋势</h2>
+                <p>每日文本 Token 总量与按域名聚合的 Top 10 服务用量，仅统计已汇总的完整天（不含今天）。</p>
+              </div>
+              <label class="inline-select">
+                范围
+                <select id="modelTrendRange">
+                  <option value="7">7 天</option>
+                  <option value="30" selected>30 天</option>
+                  <option value="90">90 天</option>
+                </select>
+              </label>
+            </div>
+            <div id="modelTrendChart"></div>
           </section>
         </section>
 

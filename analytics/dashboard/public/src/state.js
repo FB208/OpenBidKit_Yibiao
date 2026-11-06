@@ -75,6 +75,8 @@ export const state = {
   modelUsage: $('modelUsage'),
   modelTextTokens: $('modelTextTokens'),
   modelImageRequests: $('modelImageRequests'),
+  modelTrendRange: $('modelTrendRange'),
+  modelTrendChart: $('modelTrendChart'),
   agentRuntime: $('agentRuntime'),
   agentRuntimeModels: $('agentRuntimeModels'),
   agentErrorReceiveEnabled: $('agentErrorReceiveEnabled'),

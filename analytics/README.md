@@ -41,6 +41,7 @@
 | `GET /api/traffic` | D1 或 AE | `ADMIN_TOKEN` | 访问分析，`range=history/today/7/30` |
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
 | `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选，并返回不随筛选的范围汇总 `summary` |
+| `GET /api/model-trend` | D1 或 AE | `ADMIN_TOKEN` | 模型趋势，`days=7/30/90`（默认 30），按日返回文本 Token 总量和按 `endpoint_host` 聚合的 Top 10 序列，只统计已汇总完整天 |
 | `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 总体、运行时、模型维度的成功率、失败率、重试率和重试后成功率，`range=history/today/7/30` |
 | `GET/DELETE /api/agent-errors` | D1 + R2 | `ADMIN_TOKEN` | 分页读取异常元数据，或单条/批量删除日志 |
 | `GET/POST /api/agent-errors/config` | D1 | `ADMIN_TOKEN` | 管理接收开关和精确版本号列表，查看 2 GiB 容量使用情况 |
@@ -93,7 +94,7 @@
 | 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计，页面查询时加上 AE 今天点击量 |
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
-| 模型每日统计 | Cron models stage 按天写 `stats_models_daily` 明细（写完后落完成哨兵行）和 `stats_daily` 的 `text_request_count`/`text_total_tokens`/`image_request_count`/`image_total_tokens`；模型使用 7天/30天 以窗口内最早无哨兵日期为界，之前读每日表、之后读 AE 合并，顶部范围汇总读 `stats_daily` 模型列加同一 AE 尾部 |
+| 模型每日统计 | Cron models stage 按天写 `stats_models_daily` 明细（写完后落完成哨兵行）和 `stats_daily` 的 `text_request_count`/`text_total_tokens`/`image_request_count`/`image_total_tokens`；模型使用 7天/30天 以窗口内最早无哨兵日期为界，之前读每日表、之后读 AE 合并，顶部范围汇总读 `stats_daily` 模型列加同一 AE 尾部；模型趋势同样按哨兵分区读每日表按日聚合 |
 | 概览 AI 指标 | 北京时间 02:30 模型汇总完成后，从 D1 `stats_models` 覆盖刷新 `stats_totals.total_text_tokens` 和 `stats_totals.total_generated_images`；生成图片数沿用生图模型请求次数口径 |
 | Agent 执行统计 | 新版 `agent_runtime` 使用 `blob9` v4 复合值聚合运行时、最终状态、Pi 原生模型重试次数、文本模型服务商、endpoint host 和模型名；v3 历史结果修复次数保留在独立列，不与模型重试混算；历史读 D1，今天/7天/30天读 AE |
 | 配置使用 | 新版 `config_usage` 使用 `config_key/config_value` 键值对上报；D1 历史保留，AE 旧格式不再兼容 |

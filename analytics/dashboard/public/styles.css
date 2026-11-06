@@ -476,6 +476,64 @@ button:disabled {
   line-height: 1;
 }
 
+/* ===== 模型趋势折线图 ===== */
+.trend-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.trend-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.trend-axis-text {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.trend-line {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.trend-line-total {
+  stroke-width: 2.6;
+}
+
+.trend-dot {
+  opacity: 0;
+}
+
+.trend-dot:hover {
+  opacity: 1;
+}
+
+.trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trend-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
 .card .card-link {
   color: var(--primary);
   font-size: 15px;
