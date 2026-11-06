@@ -18,6 +18,7 @@ function NoticeMediaContent({ media, title, prepared }: NoticeMediaContentProps)
     const controller = new AbortController();
     let owned: PreparedNoticeMedia | undefined;
     let attached: PreparedNoticeMedia | undefined;
+    let playbackFrame: number | undefined;
 
     /** 将已就绪的媒体节点直接移入内容区，避免弹出后重新下载或解码。 */
     const attach = (value: PreparedNoticeMedia) => {
@@ -29,11 +30,20 @@ function NoticeMediaContent({ media, title, prepared }: NoticeMediaContentProps)
         element.setAttribute('aria-label', title);
         element.currentTime = 0;
         element.muted = true;
+        element.autoplay = true;
       }
       hostRef.current?.replaceChildren(element);
       setStatus('ready');
       if (element instanceof HTMLVideoElement) {
-        void element.play().catch((error) => console.info('[remote-notice] 自动播放未开始', error));
+        // 等待挂载稳定后播放，避免挂载清理打断尚未完成的播放请求。
+        playbackFrame = window.requestAnimationFrame(() => {
+          if (controller.signal.aborted) return;
+          void element.play().catch((error: unknown) => {
+            if (!controller.signal.aborted) {
+              console.info('[remote-notice] 自动播放未开始', error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+            }
+          });
+        });
       }
     };
 
@@ -50,6 +60,7 @@ function NoticeMediaContent({ media, title, prepared }: NoticeMediaContentProps)
     }
     return () => {
       controller.abort();
+      if (playbackFrame !== undefined) window.cancelAnimationFrame(playbackFrame);
       if (attached?.element instanceof HTMLVideoElement) attached.element.pause();
       attached?.element.remove();
       owned?.dispose();

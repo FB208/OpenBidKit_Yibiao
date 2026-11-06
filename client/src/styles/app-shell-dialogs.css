@@ -347,6 +347,56 @@
   align-self: flex-end;
 }
 
+/* 自动图片公告固定为 3:4，媒体在可用区域等比缩放，不影响历史浏览。 */
+.remote-notice-card--media {
+  width: min(480px, calc(100vw - 40px), calc((100vh - 56px) * 3 / 4));
+  height: auto;
+  aspect-ratio: 3 / 4;
+  max-height: none;
+  gap: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* 操作悬浮在媒体上，不挤占图片的展示高度。 */
+.remote-notice-card--media .remote-notice-actions {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1;
+}
+
+.remote-notice-card--media .notice-media-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.remote-notice-card--media .notice-media-host,
+.remote-notice-card--media .notice-media-link {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.remote-notice-card--media .notice-media-link .notice-media-host {
+  height: 100%;
+}
+
+.remote-notice-card--media .notice-media-host img,
+.remote-notice-card--media .notice-media-host video {
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+}
+
+.remote-notice-card--media .notice-media-details {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 1;
+}
+
 
 /* [4568-4657] document-parse-notice-modal/card/head/close/body/actions */
 .document-parse-notice-modal {

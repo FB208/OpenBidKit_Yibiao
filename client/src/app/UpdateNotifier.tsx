@@ -143,13 +143,14 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
       <Dialog.Portal>
         <Dialog.Overlay className="remote-notice-modal" />
         <Dialog.Content
-          className="remote-notice-card"
+          className={`remote-notice-card${remoteNotice?.noticeType === 'image' ? ' remote-notice-card--media' : ''}`}
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}
         >
-          <Dialog.Title className="remote-notice-title">{remoteNotice?.title || '公告'}</Dialog.Title>
+          <Dialog.Title className={remoteNotice?.noticeType === 'image' ? 'sr-only' : 'remote-notice-title'}>{remoteNotice?.title || '公告'}</Dialog.Title>
+          {/* 图片公告只展示媒体，标题保留给屏幕阅读器。 */}
           <Dialog.Description className="sr-only">远程公告</Dialog.Description>
-          {remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
+          {remoteNotice?.noticeType !== 'image' && remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
           {remoteNotice?.noticeType === 'image' ? (
             <NoticeMediaContent key={remoteNotice.id} media={remoteNotice.media} title={remoteNotice.title} prepared={prepared} />
           ) : (
