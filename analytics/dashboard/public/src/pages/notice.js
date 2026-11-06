@@ -4,8 +4,58 @@ import { appState, state } from '../state.js';
 
 let markdownRenderer;
 
-// 使用与客户端相同的基础配置渲染公告 Markdown，并允许公告内嵌 HTML。
+// 仅接受管理员明确提供的 HTTP(S) 媒体或跳转地址。
+function isHttpUrl(value) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+// 切换记录、类型或面板前停止视频并释放预览资源。
+function stopNoticePreview() {
+  for (const video of state.noticePreviewContent.querySelectorAll('video')) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+}
+
+// 在既有预览入口展示 Markdown、图片或静音视频，不执行关闭跳转。
 function renderNoticePreview() {
+  stopNoticePreview();
+  if (state.noticeType.value === 'image') {
+    const url = state.noticeMediaUrl.value.trim();
+    const linkUrl = state.noticeMediaLinkUrl.value.trim();
+    state.noticePreviewContent.innerHTML = '';
+    if (!isHttpUrl(url)) {
+      state.noticePreviewContent.innerHTML = '<div class="notice-preview-empty">请先填写有效的 HTTP(S) 媒体地址。</div>';
+      return;
+    }
+    const video = state.noticeMediaKind.value === 'video';
+    const media = document.createElement(video ? 'video' : 'img');
+    if (video) {
+      media.muted = true;
+      media.autoplay = true;
+      media.controls = true;
+      media.playsInline = true;
+    } else {
+      media.alt = state.noticeTitle.value;
+    }
+    media.src = url;
+    state.noticePreviewContent.append(media);
+    if (isHttpUrl(linkUrl)) {
+      const link = document.createElement('a');
+      link.href = linkUrl;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      if (video) link.textContent = '查看详情';
+      else link.append(media);
+      state.noticePreviewContent.append(link);
+    }
+    return;
+  }
   markdownRenderer ||= window.markdownit({
     html: true,
     linkify: false,
@@ -26,16 +76,47 @@ function renderNoticePreview() {
   }
 }
 
-// 切换公告正文的编辑和预览面板。
+// 切换公告编辑和预览面板，离开预览即停止播放。
 function setNoticeContentMode(mode) {
   const previewing = mode === 'preview';
   if (previewing) renderNoticePreview();
+  else stopNoticePreview();
   state.noticeEditorTab.classList.toggle('active', !previewing);
   state.noticePreviewTab.classList.toggle('active', previewing);
   state.noticeEditorTab.setAttribute('aria-selected', String(!previewing));
   state.noticePreviewTab.setAttribute('aria-selected', String(previewing));
   state.noticeEditorPanel.hidden = previewing;
   state.noticePreviewPanel.hidden = !previewing;
+}
+
+// 按所选类型显示编辑项，保留尚未保存的另一类输入。
+function updateNoticeFields() {
+  stopNoticePreview();
+  const isMedia = state.noticeType.value === 'image';
+  state.noticeContent.hidden = isMedia;
+  state.noticeContent.disabled = isMedia;
+  state.noticeMediaFields.hidden = !isMedia;
+  for (const input of state.noticeMediaFields.querySelectorAll('input, select')) input.disabled = !isMedia;
+  state.noticeContentLabel.textContent = isMedia ? '媒体配置' : 'Markdown 内容';
+  state.noticeMediaUrlLabel.textContent = state.noticeMediaKind.value === 'video' ? '视频地址' : '图片地址';
+  if (!state.noticePreviewPanel.hidden) renderNoticePreview();
+}
+
+// 读取并校验媒体表单，文字公告不调用此函数。
+function readNoticeMedia() {
+  const kind = state.noticeMediaKind.value;
+  const url = state.noticeMediaUrl.value.trim();
+  const linkUrl = state.noticeMediaLinkUrl.value.trim();
+  const delay = state.noticeCloseDelaySeconds.value.trim();
+  const closeDelaySeconds = Number(delay);
+  const openLinkOnClose = state.noticeOpenLinkOnClose.value === 'true';
+  if (!isHttpUrl(url)) throw new Error('请填写有效的 HTTP(S) 图片或视频地址');
+  if (linkUrl && !isHttpUrl(linkUrl)) throw new Error('点击跳转链接必须是 HTTP(S) 地址');
+  if (!delay || !Number.isSafeInteger(closeDelaySeconds) || closeDelaySeconds < 0) {
+    throw new Error('关闭倒计时必须是非负安全整数');
+  }
+  if (openLinkOnClose && !linkUrl) throw new Error('关闭时强制跳转需要填写点击跳转链接');
+  return { kind, url, linkUrl, closeDelaySeconds, openLinkOnClose };
 }
 
 // 渲染公告历史列表。
@@ -51,6 +132,7 @@ function renderNoticesTable() {
       <td class="notice-title-cell">
         <strong>${escapeHtml(notice.title)}</strong>
         ${notice.current ? '<span class="notice-current-badge">当前 KV</span>' : ''}
+        <small>${notice.noticeType === 'image' ? `图片公告${notice.media?.kind === 'video' ? ' · 视频' : ''}` : '文字公告'}</small>
         <small>${escapeHtml(notice.clientNoticeId || '-')}</small>
       </td>
       <td>${escapeHtml(notice.enabled ? '启用' : '不展示')}</td>
@@ -77,11 +159,17 @@ function fillNoticeForm(notice) {
   state.noticeTitle.value = notice?.title || '';
   state.noticeEnabled.value = notice?.enabled === false ? 'false' : 'true';
   state.noticeContent.value = notice?.content || '';
+  state.noticeType.value = notice?.noticeType || 'text';
+  state.noticeMediaKind.value = notice?.media?.kind || 'image';
+  state.noticeMediaUrl.value = notice?.media?.url || '';
+  state.noticeMediaLinkUrl.value = notice?.media?.linkUrl || '';
+  state.noticeCloseDelaySeconds.value = String(notice?.media?.closeDelaySeconds ?? 0);
+  state.noticeOpenLinkOnClose.value = String(notice?.media?.openLinkOnClose === true);
   state.deleteNoticeButton.disabled = !notice;
   state.noticeMeta.textContent = notice
     ? `记录 ID：${notice.id}\n客户端版本：${notice.clientNoticeId || '-'}\n送达用户数：${formatNumber(notice.deliveredUserCount)}\n状态：${notice.current ? '当前 KV 公告' : '历史公告'}\n更新时间：${notice.updatedAt || '-'}\n项目：${notice.projectName || '-'}`
     : '新增公告，保存后将同步到客户端 KV。';
-  if (!state.noticePreviewPanel.hidden) renderNoticePreview();
+  updateNoticeFields();
 }
 
 // 清空编辑表单并进入新增状态。
@@ -121,9 +209,11 @@ async function saveNotice(event) {
   try {
     assertReady();
     const title = state.noticeTitle.value.trim();
+    const noticeType = state.noticeType.value;
     const content = state.noticeContent.value.trim();
     if (!title) throw new Error('请先填写公告标题');
-    if (!content) throw new Error('请先填写 Markdown 内容');
+    if (noticeType === 'text' && !content) throw new Error('请先填写 Markdown 内容');
+    const media = noticeType === 'image' ? readNoticeMedia() : null;
 
     state.saveNoticeButton.disabled = true;
     const data = await requestJson('/api/notice', {
@@ -132,7 +222,9 @@ async function saveNotice(event) {
         id: state.noticeId.value.trim(),
         projectName: getSelectedProjectName(),
         title,
-        content,
+        noticeType,
+        media,
+        ...(noticeType === 'text' ? { content } : {}),
         enabled: state.noticeEnabled.value !== 'false',
       },
     });
@@ -164,6 +256,9 @@ async function deleteNotice(id) {
 
 // 绑定公告页面交互事件。
 export function bindNoticeEvents() {
+  updateNoticeFields();
+  state.noticeType.addEventListener('change', updateNoticeFields);
+  state.noticeMediaKind.addEventListener('change', updateNoticeFields);
   state.loadNoticeButton.addEventListener('click', () => loadNotices().catch(() => undefined));
   state.newNoticeButton.addEventListener('click', resetNoticeForm);
   state.noticeForm.addEventListener('submit', saveNotice);

@@ -20,6 +20,11 @@ const bridge = {
   requiredOnlineServices: {
     getStatus: () => ipcRenderer.invoke('required-online-services:get-status'),
   },
+  notice: {
+    syncCurrent: (request) => ipcRenderer.invoke('notice:sync-current', request),
+    prepareMedia: (request) => ipcRenderer.invoke('notice:prepare-media', request),
+    releaseMedia: (leaseId) => ipcRenderer.invoke('notice:release-media', leaseId),
+  },
   donation: {
     getConfig: () => ipcRenderer.invoke('donation:get-config'),
     createTip: (request) => ipcRenderer.invoke('donation:create-tip', request),

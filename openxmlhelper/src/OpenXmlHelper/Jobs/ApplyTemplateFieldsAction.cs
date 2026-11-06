@@ -41,12 +41,14 @@ static class ApplyTemplateFieldsAction
             using (var document = WordprocessingDocument.Open(tempDocumentPath, true))
             {
                 var candidates = TemplateFieldScanner.Scan(document, chapterRanges);
+                var scope = ResolveScope(request.ScopeChapterIds, chapterRanges);
                 // Agent 要去掉的原文、标题段和补充的位置都在同一次扫描的段落上解析，之后与规则候选一样参与校验和写入。
                 var removals = TemplatePositionResolver.ResolveRemovals(request.Removals, candidates);
                 var headings = TemplateHeadings.Resolve(request.Headings, candidates, removals);
-                TemplatePositionResolver.Resolve(request.Positions, candidates);
+                var positions = TemplatePositionResolver.Resolve(request.Positions, candidates);
+                CheckScope(scope, positions, removals, request.Headings);
                 PlaceTableSlots(candidates, headings);
-                var normalized = NormalizeSelections(request, candidates);
+                var normalized = NormalizeSelections(request, candidates, scope);
                 CheckSelectedRanges(normalized.Select(item => item.Candidate).Concat(removals));
                 // 可重复条目按写入前的位置解析，条目内字段按条编号，写完字段后再加条目书签。
                 var repeats = TemplateRepeats.Resolve(
@@ -54,6 +56,13 @@ static class ApplyTemplateFieldsAction
                     candidates,
                     normalized.Select(item => (item.Candidate, item.Selection.FillBy == TemplateFieldKinds.RuleFillBy)).ToList(),
                     headings);
+                var outsideRepeats = scope is null
+                    ? []
+                    : repeats.SelectMany(list => list).Where(item => !InScope(scope, item.Chapter)).Select(item => $"{item.ListId}·第{item.Number}条").ToList();
+                if (outsideRepeats.Count > 0)
+                {
+                    throw new InvalidOperationException($"repeats 不在本组章节内：{string.Join("、", outsideRepeats.Take(10))}。只标本组章节中的条目。");
+                }
                 // 效果正文按写入前的段落文字生成，定位号与模版正文一致，供 Agent 审阅后修改分类。
                 preview = TemplateTextRenderer.RenderPreview(
                     candidates,
@@ -63,7 +72,8 @@ static class ApplyTemplateFieldsAction
                         ReferenceEqualityComparer.Instance),
                     removals,
                     headings,
-                    repeats);
+                    repeats,
+                    scope);
                 var mainPart = document.MainDocumentPart ?? throw new InvalidOperationException("投标模版缺少正文部件");
                 var body = mainPart.Document.Body ?? throw new InvalidOperationException("投标模版正文为空");
                 // 写入会插入附件段落、把跨段勾选项包进块级控件，先记下各章首块，写完再换算块号。
@@ -178,6 +188,41 @@ static class ApplyTemplateFieldsAction
         }
     }
 
+    /// <summary>分组校验的章节范围；未提供时为 null（全文）。范围中的 id 必须是本模版的章节。</summary>
+    static HashSet<string>? ResolveScope(IReadOnlyList<string>? scopeChapterIds, IReadOnlyList<TemplateChapterRange> chapterRanges)
+    {
+        if (scopeChapterIds is null) return null;
+        var scope = scopeChapterIds.Select(item => (item ?? "").Trim()).Where(item => item.Length > 0).ToHashSet(StringComparer.Ordinal);
+        var known = chapterRanges.Select(item => item.Id ?? "").ToHashSet(StringComparer.Ordinal);
+        var unknown = scope.Where(item => !known.Contains(item)).ToList();
+        if (scope.Count == 0 || unknown.Count > 0)
+        {
+            throw new InvalidOperationException($"scope_chapter_ids 无效：{(scope.Count == 0 ? "为空" : string.Join("、", unknown))}");
+        }
+        return scope;
+    }
+
+    static bool InScope(HashSet<string>? scope, TemplateChapterRange? chapter) =>
+        scope is null || chapter?.Id is { } id && scope.Contains(id);
+
+    /// <summary>分组校验时补充位置、去掉的原文和指定的标题段都须落在本组章节内。</summary>
+    static void CheckScope(
+        HashSet<string>? scope,
+        IReadOnlyList<TemplateFieldCandidate> positions,
+        IReadOnlyList<TemplateFieldCandidate> removals,
+        IReadOnlyList<TemplateHeading>? headings)
+    {
+        if (scope is null) return;
+        var errors = positions.Where(item => !InScope(scope, item.Chapter)).Select(item => $"补充位置 {item.CandidateId}")
+            .Concat(removals.Where(item => !InScope(scope, item.Chapter)).Select(item => $"去掉的原文“{item.Text}”"))
+            .Concat((headings ?? []).Where(item => !scope.Contains((item.ChapterId ?? "").Trim())).Select(item => $"标题段 {item.ChapterId}"))
+            .ToList();
+        if (errors.Count > 0)
+        {
+            throw new InvalidOperationException($"这些内容不在本组章节内：{string.Join("、", errors.Take(10))}。只处理本组章节，其他章节由别的分组负责。");
+        }
+    }
+
     /// <summary>表格位置指向本章标题段时改为插在标题段之后，标题段保留。</summary>
     static void PlaceTableSlots(TemplateFieldCandidateFile candidates, IReadOnlyList<TemplateParagraphEntry?> headings)
     {
@@ -262,7 +307,7 @@ static class ApplyTemplateFieldsAction
 
     sealed record NormalizedField(string Name, string? Instruction, string FillBy);
 
-    static List<NormalizedSelection> NormalizeSelections(ApplyTemplateFieldsRequest request, TemplateFieldCandidateFile candidateFile)
+    static List<NormalizedSelection> NormalizeSelections(ApplyTemplateFieldsRequest request, TemplateFieldCandidateFile candidateFile, HashSet<string>? scope)
     {
         var candidateMap = candidateFile.Candidates.ToDictionary(item => item.CandidateId, StringComparer.Ordinal);
         var ignoredIds = (request.IgnoredCandidateIds ?? [])
@@ -306,8 +351,10 @@ static class ApplyTemplateFieldsAction
         var overlapIds = fieldIds.Intersect(ignoredIds, StringComparer.Ordinal).ToList();
         var classifiedIds = fieldIds.Concat(ignoredIds).Distinct(StringComparer.Ordinal).ToList();
         var unknownIds = classifiedIds.Where(item => !candidateMap.ContainsKey(item)).ToList();
+        // 分组校验只要求本组章节的候选全部归类，也不能分类其他章节的候选。
+        var outsideIds = classifiedIds.Where(item => candidateMap.TryGetValue(item, out var candidate) && !InScope(scope, candidate.Chapter)).ToList();
         var unclassified = candidateMap.Values
-            .Where(item => !classifiedIds.Contains(item.CandidateId, StringComparer.Ordinal))
+            .Where(item => InScope(scope, item.Chapter) && !classifiedIds.Contains(item.CandidateId, StringComparer.Ordinal))
             .ToList();
         var missingIds = unclassified.Where(item => !item.FromPosition).Select(item => item.CandidateId).ToList();
         var unusedPositionIds = unclassified.Where(item => item.FromPosition).Select(item => item.CandidateId).ToList();
@@ -316,6 +363,7 @@ static class ApplyTemplateFieldsAction
         if (duplicateIgnoredIds.Count > 0) classificationErrors.Add($"ignored_candidate_ids 重复：{string.Join('、', duplicateIgnoredIds)}");
         if (overlapIds.Count > 0) classificationErrors.Add($"同时出现在 fields 和 ignored_candidate_ids：{string.Join('、', overlapIds)}");
         if (unknownIds.Count > 0) classificationErrors.Add($"无效候选：{string.Join('、', unknownIds)}");
+        if (outsideIds.Count > 0) classificationErrors.Add($"不属于本组章节，不要分类：{string.Join('、', outsideIds)}");
         if (missingIds.Count > 0) classificationErrors.Add($"尚未分类：{string.Join('、', missingIds)}");
         if (unusedPositionIds.Count > 0) classificationErrors.Add($"补充位置没有对应字段，写入 fields，不需要的从 positions 中删除：{string.Join('、', unusedPositionIds)}");
         if (classificationErrors.Count > 0)

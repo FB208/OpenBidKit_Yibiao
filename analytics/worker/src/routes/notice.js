@@ -2,6 +2,7 @@ import { NOTICE_CONTENT_MAX_LENGTH, NOTICE_TITLE_MAX_LENGTH } from '../constants
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
 import {
   buildNoticeKey,
+  buildNoticeMediaContent,
   deleteStoredNotice,
   incrementDeliveredUserCount,
   listEnabledNotices,
@@ -14,6 +15,7 @@ import {
 } from '../services/noticeStore.js';
 import { isValidProjectName, normalizeText } from '../utils.js';
 
+// 当前公告读取失败返回错误，避免客户端将网络故障视为清空当前版本。
 export async function handlePublicNotice(request, env, url) {
   if (request.method !== 'GET') {
     return methodNotAllowed();
@@ -32,7 +34,7 @@ export async function handlePublicNotice(request, env, url) {
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[analytics] public notice failed', error?.message || String(error));
-    return json({ code: 0, notice: null }, { headers: { 'Cache-Control': 'no-store' } });
+    return json({ code: 500, message: 'notice query failed' }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
 }
 
@@ -159,6 +161,44 @@ async function handleAdminGetNotice(env, url) {
   }
 }
 
+// 校验管理端输入的 HTTP(S) 地址，不按扩展名推断媒体类型。
+function isHttpUrl(value) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+// 只校验当前公告类型所需的字段，并清除文字公告的隐藏媒体配置。
+function readNoticePresentation(body, title) {
+  const noticeType = body.noticeType === undefined ? 'text' : body.noticeType;
+  if (noticeType === 'text') {
+    const content = normalizeText(body.content || body.markdown, NOTICE_CONTENT_MAX_LENGTH);
+    if (!content) throw new Error('请先填写 Markdown 内容');
+    return { noticeType, content, media: null };
+  }
+  if (noticeType !== 'image') throw new Error('请选择文字公告或图片公告');
+
+  const input = body.media;
+  if (!input || !['image', 'video'].includes(input.kind)) throw new Error('请选择图片或视频');
+  const url = typeof input.url === 'string' ? input.url.trim() : '';
+  const linkUrl = typeof input.linkUrl === 'string' ? input.linkUrl.trim() : '';
+  if (!isHttpUrl(url)) throw new Error('请填写有效的 HTTP(S) 图片或视频地址');
+  if (linkUrl && !isHttpUrl(linkUrl)) throw new Error('点击跳转链接必须是 HTTP(S) 地址');
+  if (!Number.isSafeInteger(input.closeDelaySeconds) || input.closeDelaySeconds < 0) {
+    throw new Error('关闭倒计时必须是非负安全整数');
+  }
+  if (typeof input.openLinkOnClose !== 'boolean') throw new Error('请选择关闭时是否强制跳转');
+  if (input.openLinkOnClose && !linkUrl) throw new Error('关闭时强制跳转需要填写点击跳转链接');
+  const media = { kind: input.kind, url, linkUrl, closeDelaySeconds: input.closeDelaySeconds, openLinkOnClose: input.openLinkOnClose };
+  if (buildNoticeMediaContent(title, media).length > NOTICE_CONTENT_MAX_LENGTH) {
+    throw new Error('媒体或跳转地址过长，请缩短后保存');
+  }
+  return { noticeType, media };
+}
+
+// 保存公告当前类型的内容，沿用版本更新、KV 同步和送达计数规则。
 async function handleAdminSaveNotice(request, env) {
   let body;
   try {
@@ -170,18 +210,20 @@ async function handleAdminSaveNotice(request, env) {
   const id = normalizeText(body.id, 120);
   const projectName = normalizeText(body.projectName || body.project_name, 80);
   const title = normalizeText(body.title, NOTICE_TITLE_MAX_LENGTH);
-  const content = normalizeText(body.content || body.markdown, NOTICE_CONTENT_MAX_LENGTH);
+  let presentation;
 
   if (!isValidProjectName(projectName)) {
     return json({ code: 400, message: 'invalid projectName' }, { status: 400 });
   }
 
   if (!title) {
-    return json({ code: 400, message: 'missing title' }, { status: 400 });
+    return json({ code: 400, message: '请先填写公告标题' }, { status: 400 });
   }
 
-  if (!content) {
-    return json({ code: 400, message: 'missing content' }, { status: 400 });
+  try {
+    presentation = readNoticePresentation(body, title);
+  } catch (error) {
+    return json({ code: 400, message: error.message }, { status: 400 });
   }
 
   try {
@@ -190,7 +232,7 @@ async function handleAdminSaveNotice(request, env) {
       projectName,
       enabled: body.enabled !== false,
       title,
-      content,
+      ...presentation,
     });
     if (!notice) {
       return json({ code: 404, message: 'notice not found' }, { status: 404 });

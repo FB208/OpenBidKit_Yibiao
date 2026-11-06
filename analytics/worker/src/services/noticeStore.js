@@ -13,6 +13,16 @@ export function createNoticeId(now) {
   return `notice-${timestamp}-${random}`;
 }
 
+// 生成旧客户端可直接渲染的 Markdown，转义标题和链接中的语法字符。
+export function buildNoticeMediaContent(title, media) {
+  const label = title.replace(/[\r\n]+/g, ' ').replace(/&/g, '&amp;').replace(/[\\`*_[\]{}()#+.!<>|~-]/g, '\\$&');
+  const destination = (url) => `<${new URL(url).href.replace(/[\\<>]/g, encodeURIComponent).replace(/&/g, '&amp;')}>`;
+  const content = media.kind === 'image'
+    ? `![${label}](${destination(media.url)})`
+    : `[打开视频](${destination(media.url)})`;
+  return media.linkUrl ? `${content}\n\n[查看详情](${destination(media.linkUrl)})` : content;
+}
+
 // 将 D1 公告记录转换为管理端使用的数据结构。
 export function normalizeAdminNoticeRow(row) {
   if (!row) {
@@ -26,12 +36,15 @@ export function normalizeAdminNoticeRow(row) {
     enabled: Number(row.enabled) !== 0,
     title: normalizeText(row.title, NOTICE_TITLE_MAX_LENGTH),
     content: normalizeText(row.content, NOTICE_CONTENT_MAX_LENGTH),
+    noticeType: row.notice_type || 'text',
+    media: row.notice_type === 'image' ? JSON.parse(row.media_json) : null,
     deliveredUserCount: Math.max(0, Number(row.delivered_user_count) || 0),
     createdAt: normalizeText(row.created_at, 40),
     updatedAt: normalizeText(row.updated_at, 40),
   };
 }
 
+// 补齐旧 KV 的文字类型，同时保留原客户端版本号。
 export function normalizeNoticeForResponse(notice) {
   if (!notice || typeof notice !== 'object') {
     return null;
@@ -43,6 +56,8 @@ export function normalizeNoticeForResponse(notice) {
     enabled: notice.enabled !== false,
     title: normalizeText(notice.title, NOTICE_TITLE_MAX_LENGTH),
     content: normalizeText(notice.content, NOTICE_CONTENT_MAX_LENGTH),
+    noticeType: notice.noticeType || 'text',
+    media: notice.noticeType === 'image' ? notice.media : null,
     createdAt: normalizeText(notice.createdAt, 40),
     updatedAt: normalizeText(notice.updatedAt, 40),
   };
@@ -69,7 +84,7 @@ export async function readProjectNotice(env, projectName) {
 export async function listProjectNotices(env, projectName) {
   const result = await requireResourceDb(env).prepare(
     `SELECT id, client_notice_id, project_name, title, content, enabled,
-       delivered_user_count, created_at, updated_at
+       notice_type, media_json, delivered_user_count, created_at, updated_at
      FROM notices
      WHERE project_name = ?
      ORDER BY updated_at DESC, id DESC`,
@@ -81,7 +96,7 @@ export async function listProjectNotices(env, projectName) {
 // 客户端"公告"按钮读取全部启用的公告，按更新时间倒序。
 export async function listEnabledNotices(env, projectName) {
   const result = await requireResourceDb(env).prepare(
-    `SELECT id, title, content, updated_at
+    `SELECT id, client_notice_id, title, content, notice_type, media_json, updated_at
      FROM notices
      WHERE project_name = ? AND enabled = 1
      ORDER BY updated_at DESC, id DESC`,
@@ -89,8 +104,11 @@ export async function listEnabledNotices(env, projectName) {
 
   return (result.results || []).map((row) => ({
     id: normalizeText(row.id, 120),
+    clientNoticeId: normalizeText(row.client_notice_id, 80),
     title: normalizeText(row.title, NOTICE_TITLE_MAX_LENGTH),
     content: normalizeText(row.content, NOTICE_CONTENT_MAX_LENGTH),
+    noticeType: row.notice_type || 'text',
+    media: row.notice_type === 'image' ? JSON.parse(row.media_json) : null,
     updatedAt: normalizeText(row.updated_at, 40),
   }));
 }
@@ -110,7 +128,7 @@ export async function readLatestEnabledNoticeUpdatedAt(env, projectName) {
 export async function readStoredNotice(env, projectName, id) {
   const row = await requireResourceDb(env).prepare(
     `SELECT id, client_notice_id, project_name, title, content, enabled,
-       delivered_user_count, created_at, updated_at
+       notice_type, media_json, delivered_user_count, created_at, updated_at
      FROM notices
      WHERE project_name = ? AND id = ?`,
   ).bind(projectName, id).first();
@@ -124,21 +142,26 @@ export async function saveStoredNotice(env, input) {
   const now = formatNoticeTime();
   const clientNoticeId = createNoticeId(now);
   const id = normalizeText(input.id, 120);
+  const noticeType = input.noticeType || 'text';
+  const mediaJson = noticeType === 'image' ? JSON.stringify(input.media) : null;
+  const content = noticeType === 'image' ? buildNoticeMediaContent(input.title, input.media) : input.content;
   let row;
 
   if (id) {
     row = await db.prepare(
       `UPDATE notices
        SET client_notice_id = ?, title = ?, content = ?, enabled = ?,
-         delivered_user_count = 0, updated_at = ?
+         notice_type = ?, media_json = ?, delivered_user_count = 0, updated_at = ?
        WHERE project_name = ? AND id = ?
        RETURNING id, client_notice_id, project_name, title, content, enabled,
-         delivered_user_count, created_at, updated_at`,
+         notice_type, media_json, delivered_user_count, created_at, updated_at`,
     ).bind(
       clientNoticeId,
       input.title,
-      input.content,
+      content,
       input.enabled ? 1 : 0,
+      noticeType,
+      mediaJson,
       now,
       input.projectName,
       id,
@@ -148,17 +171,19 @@ export async function saveStoredNotice(env, input) {
     row = await db.prepare(
       `INSERT INTO notices (
          id, client_notice_id, project_name, title, content, enabled,
-         delivered_user_count, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+         notice_type, media_json, delivered_user_count, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
        RETURNING id, client_notice_id, project_name, title, content, enabled,
-         delivered_user_count, created_at, updated_at`,
+         notice_type, media_json, delivered_user_count, created_at, updated_at`,
     ).bind(
       recordId,
       clientNoticeId,
       input.projectName,
       input.title,
-      input.content,
+      content,
       input.enabled ? 1 : 0,
+      noticeType,
+      mediaJson,
       now,
       now,
     ).first();
@@ -175,6 +200,8 @@ export async function writeLatestNotice(env, notice) {
     enabled: notice.enabled,
     title: notice.title,
     content: notice.content,
+    noticeType: notice.noticeType,
+    media: notice.media,
     createdAt: notice.createdAt,
     updatedAt: notice.updatedAt,
   };

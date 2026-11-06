@@ -1,7 +1,3 @@
-const {
-  OUTLINE_AGENT_TASK_KEY,
-  TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
-} = require('./outlineGenerationAgentV2Config.cjs');
 const { collectTemplateItems } = require('./outlineFormatExtraction.cjs');
 const { formatProgressTitle } = require('./outlineGenerationTaskV2.cjs');
 const { collectOutlineLeaves } = require('./technicalPlanOutline.cjs');
@@ -56,8 +52,8 @@ function inspectBidTemplate(workspaceStore) {
   return result;
 }
 
-// 按当前目录重新提取投标模版：从目录会话分叉后复用模版提取；旧模版已在任务启动前清空。
-async function runBidTemplateExtractionTask({ agentService, workspaceStore, openXmlHelperService, updateTask, checkpointTask, taskControl }) {
+// 按当前目录重新提取投标模版：与目录生成时的提取流程相同，在新会话中进行；旧模版已在任务启动前清空。
+async function runBidTemplateExtractionTask({ agentService, aiService, workspaceStore, openXmlHelperService, updateTask, checkpointTask, taskControl }) {
   const items = collectCurrentTemplateItems(workspaceStore.loadTechnicalPlan());
   let logs = ['开始按当前目录重新提取投标模版'];
   let progress = 5;
@@ -72,23 +68,16 @@ async function runBidTemplateExtractionTask({ agentService, workspaceStore, open
     task = updateTask({ status: 'running', progress, logs });
   }
 
-  await agentService.forkPersistentTask(OUTLINE_AGENT_TASK_KEY, TEMPLATE_EXTRACTION_AGENT_TASK_KEY, {
-    run_id: task.task_id,
-    title: '投标模版提取',
-    status: 'created',
-    phase: 'template-extraction',
-    agent_connection: 'idle',
-  });
   publish(`共 ${items.length} 个目录需要抽进投标模版`, 15);
 
   await runTemplateExtractionTask({
     agentService,
+    aiService,
     workspaceStore,
     openXmlHelperService,
     taskId: task.task_id,
     items,
     signal: taskControl.signal,
-    reextraction: true,
     onActivity(event = {}) {
       const title = formatProgressTitle(event.message);
       if (title && event.visible !== false) publish(title);

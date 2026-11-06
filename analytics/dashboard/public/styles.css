@@ -1072,6 +1072,22 @@ button:disabled {
   box-shadow: none;
 }
 
+/* 媒体配置沿用公告编辑面板，隐藏字段不占布局空间。 */
+.notice-media-fields {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.notice-media-fields small {
+  color: var(--muted);
+}
+
+#noticeMediaFields[hidden],
+#noticeContent[hidden] {
+  display: none;
+}
+
 #noticeContent:focus {
   border-color: transparent;
   box-shadow: none;
@@ -1157,7 +1173,8 @@ button:disabled {
   color: var(--primary);
 }
 
-.notice-preview-content img {
+.notice-preview-content img,
+.notice-preview-content video {
   display: block;
   max-width: 100%;
   max-height: 260px;

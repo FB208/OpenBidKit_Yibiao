@@ -935,6 +935,239 @@ test('制表符和分页段落可写入且保留断点；去掉的章末附件�
   assert.ok(sliced.includes('投标人名称：北京建设公司') && !sliced.includes('附件4'), sliced);
 });
 
+test('锚点：连续空格和下划线不论写几个都按整段匹配，仍须段内唯一；回填后不残留空位', async () => {
+  const name = 'anchor-source';
+  const { candidates, text } = await scanFile(name, [
+    para('投标书', '<w:pStyle w:val="1"/>'),
+    para(`项目名称：${' '.repeat(25)}项目`),
+    para(`日期：${' '.repeat(7)}年${' '.repeat(6)}月${' '.repeat(6)}日`),
+    para('参加______单位的______项目'),
+    para(`电话：${' '.repeat(8)}传真：`),
+    sectPr(),
+  ].join(''), [{ id: 'a1', title: '投标书', auto_fill: true, start_block: 0, end_block: 5 }]);
+  assert.match(text, /^b1 {2}项目名称：␣{25}项目$/m, '模版正文仍按实际个数显示空位');
+  const request = (positions) => ({
+    input: `technical-plan/${name}.docx`,
+    output: 'technical-plan/anchor-template.docx',
+    fields_output: 'technical-plan/anchor-fields.json',
+    fields: [
+      { candidate_id: 'p1', name: '项目名称', subject: '本项目', fill_by: 'ai' },
+      { candidate_id: 'p2', name: '投标日期', subject: '投标人', fill_by: 'ai' },
+      { candidate_id: 'p3', name: '项目名称', subject: '本项目', fill_by: 'ai' },
+      { candidate_id: 'p4', name: '投标人电话', subject: '投标人', fill_by: 'ai' },
+    ],
+    ignored_candidate_ids: candidates.map((item) => item.candidate_id),
+    positions,
+  });
+  const positions = [
+    { id: 'p1', at: 'b1', op: 'span', text: '␣项目' },
+    // 个数写错也按整段匹配。
+    { id: 'p2', at: 'b2', op: 'span', text: '␣年␣␣月␣日' },
+    { id: 'p3', at: 'b3', op: 'span', text: '_项目' },
+    { id: 'p4', at: 'b4', op: 'insert', before: '电话：␣' },
+  ];
+  const ambiguous = await service.runJob({
+    action: 'apply-template-fields',
+    request: request(positions.map((item) => (item.id === 'p3' ? { ...item, text: '_' } : item))),
+    timeoutMs: 60000,
+  }).then(() => '', (error) => error.message);
+  assert.match(ambiguous, /p3：在 b3 中命中 2 处/);
+
+  const result = await service.runJob({ action: 'apply-template-fields', request: request(positions), timeoutMs: 60000 });
+  const preview = fs.readFileSync(path.join(result.jobDir, 'template-preview.txt'), 'utf8');
+  assert.match(preview, /^b1 {2}项目名称：【项目名称←␣{25}项目】$/m);
+  assert.match(preview, /^b2 {2}日期：【投标日期←␣{7}年␣{6}月␣{6}日】$/m);
+  assert.match(preview, /^b3 {2}参加______单位的【项目名称←______项目】$/m);
+  assert.match(preview, /^b4 {2}电话：␣{8}【投标人电话】传真：$/m, '插入点落在整段空白之后');
+
+  const values = { 项目名称: '某某运维项目', 投标日期: '2026年11月5日' };
+  await service.runJob({
+    action: 'fill-template-fields',
+    request: {
+      input: 'technical-plan/anchor-template.docx',
+      output: 'technical-plan/anchor-filled.docx',
+      values: readJson('technical-plan/anchor-fields.json').fields
+        .filter((item) => values[item.name])
+        .map((item) => ({ id: item.id, value: values[item.name] })),
+    },
+    timeoutMs: 60000,
+  });
+  const filled = documentXml('technical-plan/anchor-filled.docx').replace(/<\/w:p>/g, '\n').replace(/<[^>]+>/g, '');
+  assert.ok(filled.includes('项目名称：某某运维项目\n'), filled);
+  assert.ok(filled.includes('日期：2026年11月5日\n'), filled);
+  assert.ok(filled.includes('参加______单位的某某运维项目\n'), filled);
+});
+
+test('分组校验：候选带章节 id；按 scope_chapter_ids 只要求本组候选归类、拒绝其他章节的内容，效果正文只写本组', async () => {
+  const name = 'scope-source';
+  const { candidates } = await scanFile(name, [
+    para('授权书', '<w:pStyle w:val="1"/>'),
+    para('被授权人：____'),
+    para('承诺书', '<w:pStyle w:val="1"/>'),
+    para('承诺单位：____'),
+    para('联系人：____'),
+    sectPr(),
+  ].join(''), [
+    { id: 's1', title: '授权书', auto_fill: true, start_block: 0, end_block: 2 },
+    { id: 's2', title: '承诺书', auto_fill: true, start_block: 2, end_block: 5 },
+  ]);
+  const first = candidates.filter((item) => item.chapter_id === 's1');
+  const second = candidates.filter((item) => item.chapter_id === 's2');
+  assert.ok(first.length >= 1 && second.length >= 2, JSON.stringify(candidates));
+  const unit = second.find((item) => item.context?.includes('承诺单位'));
+  const contact = second.find((item) => item.context?.includes('联系人'));
+  const run = (patch) => service.runJob({
+    action: 'apply-template-fields',
+    request: {
+      input: `technical-plan/${name}.docx`,
+      output: 'technical-plan/bid-template-groups/g2/bid-template.docx',
+      fields_output: 'technical-plan/bid-template-groups/g2/bid-template-fields.json',
+      scope_chapter_ids: ['s2'],
+      fields: [
+        { candidate_id: unit.candidate_id, name: '承诺单位名称', subject: '投标人', fill_by: 'ai' },
+        { candidate_id: contact.candidate_id, name: '投标人联系人', subject: '投标人', fill_by: 'ai' },
+      ],
+      ignored_candidate_ids: second.filter((item) => item !== unit && item !== contact).map((item) => item.candidate_id),
+      ...patch,
+    },
+    timeoutMs: 60000,
+  });
+  const failure = (patch) => run(patch).then(() => '', (error) => error.message);
+
+  const result = await run({});
+  const preview = fs.readFileSync(path.join(result.jobDir, 'template-preview.txt'), 'utf8');
+  assert.match(preview, /^【章节 s2：承诺书】/m);
+  assert.ok(!preview.includes('【章节 s1'), '效果正文只写本组章节');
+  assert.match(preview, /承诺单位：【承诺单位名称】/);
+
+  assert.match(await failure({ fields: [{ candidate_id: unit.candidate_id, name: '承诺单位名称', subject: '投标人', fill_by: 'ai' }] }), /尚未分类/);
+  assert.match(await failure({
+    fields: [
+      { candidate_id: unit.candidate_id, name: '承诺单位名称', subject: '投标人', fill_by: 'ai' },
+      { candidate_id: contact.candidate_id, name: '投标人联系人', subject: '投标人', fill_by: 'ai' },
+      { candidate_id: first[0].candidate_id, name: '被授权人姓名', subject: '被授权人', fill_by: 'ai' },
+    ],
+  }), /不属于本组章节/);
+  assert.match(await failure({ positions: [{ id: 'p1', at: 'b0', op: 'insert', after: '授权书' }] }), /不在本组章节内/);
+  assert.match(await failure({ headings: [{ chapter_id: 's1', at: null }] }), /不在本组章节内/);
+  assert.match(await failure({ scope_chapter_ids: ['s9'] }), /scope_chapter_ids 无效/);
+});
+
+test('分组提取走通（假 Agent）：程序抽章扫描、按章节分组并发、各组按范围确认、合并时改名冲突、统稿清单校验失败后修正、程序全文写入；并发上限为 1 时由一个 Agent 写入', async () => {
+  const { createPiOpenXmlTool } = require('../electron/services/pi/piOpenXmlTool.cjs');
+  const { runTemplateExtractionTask } = require('../electron/services/templateExtractionTask.cjs');
+  const blanks = (label, count) => Array.from({ length: count }, (_, index) => para(`${label}${index + 1}：____`));
+  // 原件三章：前两章各 20 个空位，第三章 2 个，按候选数分成两组。
+  samples.buildDocx(planDir, 'flow-tender.docx', [
+    para('投标书', '<w:pStyle w:val="1"/>'), para('投标人名称：____'), ...blanks('事项', 19),
+    para('授权书', '<w:pStyle w:val="1"/>'), para('投标人名称：____'), ...blanks('条款', 19),
+    para('承诺书', '<w:pStyle w:val="1"/>'), para('投标人名称：____'), para('日期：____'),
+    sectPr(),
+  ].join(''));
+  const items = [
+    { id: 'f1', title: '投标书', path: '投标书', auto_fill: true, source: { start: 0, end: 21 } },
+    { id: 'f2', title: '授权书', path: '授权书', auto_fill: true, source: { start: 21, end: 42 } },
+    { id: 'f3', title: '承诺书', path: '承诺书', auto_fill: true, source: { start: 42, end: 45 } },
+  ];
+  const planFile = (name) => path.join(planDir, name);
+  const store = {
+    listTenderSourceDocxRelativePaths: () => ['technical-plan/flow-tender.docx'],
+    resolveTenderSourceDocxPath: () => ['technical-plan/flow-tender.docx'],
+    loadTechnicalPlan: () => ({ projectOverview: '测试项目' }),
+    getBidTemplateSourcePath: () => planFile('flow-source.docx'),
+    getBidTemplateSourceRelativePath: () => 'technical-plan/flow-source.docx',
+    getBidTemplatePath: () => planFile('flow-template.docx'),
+    getBidTemplateRelativePath: () => 'technical-plan/flow-template.docx',
+    getBidTemplateFieldsPath: () => planFile('flow-fields.json'),
+    getBidTemplateFieldsRelativePath: () => 'technical-plan/flow-fields.json',
+    hasBidTemplate: () => fs.existsSync(planFile('flow-template.docx')) && fs.existsSync(planFile('flow-fields.json')),
+    clearBidTemplate: () => {
+      for (const name of ['flow-source.docx', 'flow-source.chapters.json', 'flow-template.docx', 'flow-fields.json']) fs.rmSync(planFile(name), { force: true });
+    },
+  };
+  // 假 Agent：按原句标签命名，第二组的“投标人名称”主体不同以制造跨组冲突；应用并确认后按业务校验返回结果。
+  const Type = new Proxy({}, { get: () => (...args) => ({ args }) });
+  const tasks = [];
+  const persistent = [];
+  const agentService = {
+    updatePersistentTask(key, state) { persistent.push(`update:${state.status}`); },
+    deletePersistentTask() { persistent.push('delete'); },
+    async runTask(payload) {
+      tasks.push(payload.title);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), '假Agent-'));
+      for (const file of payload.files) fs.writeFileSync(path.join(dir, file.path), file.content, 'utf8');
+      const tool = createPiOpenXmlTool({ workspaceDir: dir, Type, ...payload.open_xml_tool });
+      {
+        const { candidates } = JSON.parse(fs.readFileSync(path.join(dir, '投标模版字段候选.json'), 'utf8'));
+        const fields = new Map();
+        for (const candidate of candidates) {
+          const label = candidate.context.split('：')[0];
+          const key = label === '投标人名称' ? label : `${label}-${candidate.chapter_id}`;
+          const subject = label !== '投标人名称' ? '本项目' : payload.title.includes('第 2/') ? '承诺人' : '投标人';
+          if (!fields.has(key)) fields.set(key, { name: key, subject, fill_by: 'ai', candidate_ids: [] });
+          fields.get(key).candidate_ids.push(candidate.candidate_id);
+        }
+        fs.writeFileSync(path.join(dir, '投标模版字段分类.json'), JSON.stringify({ fields: [...fields.values()], ignored_candidate_ids: [] }), 'utf8');
+      }
+      await tool.execute('1', { action: 'apply-template-fields', fields_file: '投标模版字段分类.json' });
+      await tool.execute('2', { action: 'confirm-template-fields' });
+      const report = await payload.validateOutput(
+        { output_content: fs.readFileSync(path.join(dir, payload.output_file), 'utf8') },
+        { readFile: async (file) => fs.readFileSync(path.join(dir, file), 'utf8') },
+      );
+      assert.deepEqual(report.issues, [], `${payload.title}：${JSON.stringify(report.issues)}`);
+      return { task_id: payload.task_id, session_id: 's', validation_result: report.value };
+    },
+  };
+  // 假统稿：第一次漏掉冲突，校验报错后按修复消息给出能执行的清单。
+  const namingIssues = [];
+  const aiService = (limit) => ({
+    getTextQueueStatus: () => ({ limit }),
+    async collectJsonResponse(request) {
+      assert.match(request.messages[0].content, /投标人名称：投标人名称〔第2组〕/);
+      const invalid = { changes: [{ from: ['投标人名称'], name: '投标人名称' }] };
+      try {
+        request.validator(invalid);
+      } catch (error) {
+        namingIssues.push(error.message);
+        const repair = request.repairMessagesBuilder({ invalidContent: JSON.stringify(invalid), issues: [error.message] });
+        assert.equal(repair[1].role, 'assistant');
+      }
+      const plan = { changes: [{ from: ['投标人名称', '投标人名称〔第2组〕'], name: '投标人名称', subject: '投标人' }] };
+      request.validator(plan);
+      return plan;
+    },
+  });
+  const extract = (limit) => runTemplateExtractionTask({
+    agentService,
+    aiService: aiService(limit),
+    workspaceStore: store,
+    openXmlHelperService: service,
+    taskId: 'flow',
+    items,
+  });
+
+  const result = await extract(4);
+  assert.deepEqual(tasks, ['投标模版分类（第 1/2 组）', '投标模版分类（第 2/2 组）']);
+  assert.equal(namingIssues.length, 1);
+  assert.match(namingIssues[0], /仍带组号.*投标人名称〔第2组〕/);
+  assert.deepEqual(persistent, ['delete'], '多组时不建持久 Session，只清掉上次的');
+  const definitions = readJson('technical-plan/flow-fields.json');
+  assert.deepEqual(definitions.chapters.map((item) => item.id), ['f1', 'f2', 'f3']);
+  assert.equal(result.field_count, definitions.fields.length);
+  const names = new Set(definitions.fields.map((item) => item.name));
+  assert.ok(names.has('投标人名称') && ![...names].some((name) => name.includes('〔第')), [...names].join('、'));
+  assert.equal(definitions.fields.filter((item) => item.name === '投标人名称').length, 3, '三章的投标人名称合成一个字段');
+  assert.ok(!fs.existsSync(planFile('bid-template-groups')), '分组临时目录已删除');
+
+  tasks.length = 0;
+  persistent.length = 0;
+  const single = await extract(1);
+  assert.deepEqual(tasks, ['投标模版提取']);
+  assert.deepEqual(persistent, ['update:success']);
+  assert.equal(single.field_count, readJson('technical-plan/flow-fields.json').fields.length);
+});
+
 // 结构规则回归：单元格里唯一的段落整段是格式文字时，截章和整本导出都要留下这个段落（Word 要求单元格以段落结尾），书签不只剩一半。
 function assertWordStructure(xml, label) {
   for (const [cellXml] of xml.matchAll(/<w:tc>(?:(?!<w:tc>)[\s\S])*?<\/w:tc>/g)) {

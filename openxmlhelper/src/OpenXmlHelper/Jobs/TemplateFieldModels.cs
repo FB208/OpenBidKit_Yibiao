@@ -109,6 +109,11 @@ sealed class TemplateFieldCandidate
     [JsonIgnore]
     public TemplateChapterRange? Chapter { get; set; }
 
+    /// <summary>所在章节的目录 id，供程序按章节分组分类。</summary>
+    [JsonPropertyName("chapter_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ChapterId => Chapter?.Id;
+
     [JsonIgnore]
     public string? TableTitle { get; set; }
 
@@ -389,6 +394,12 @@ sealed class ApplyTemplateFieldsRequest
     public List<TemplateHeading> Headings { get; set; } = [];
     /// <summary>Agent 标出的可重复条目（按实际条数填写，未用的条目导出时删除）。</summary>
     public List<TemplateRepeat> Repeats { get; set; } = [];
+    /// <summary>
+    /// 按章节分组分类时只校验和预览这些章节（目录 id）：只要求其中的候选全部归类，分类和补充位置、去掉的原文、标题段、条目都须在这些章节内，
+    /// 效果正文只写这些章节。产物由调用方写到临时位置；未提供时按全文处理。
+    /// </summary>
+    [JsonPropertyName("scope_chapter_ids")]
+    public List<string>? ScopeChapterIds { get; set; }
 }
 
 /// <summary>一组可重复条目：entries 按顺序给出各条的段落范围，from 至 to（省略时同 from）为同一父元素下的段落。</summary>

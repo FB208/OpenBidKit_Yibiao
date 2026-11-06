@@ -1002,7 +1002,7 @@ function isMissingTechnicalScoreItems(content) {
 }
 
 // 运行 V2 目录业务任务；存在 AI 目录时继续扩展，存在可抽取的格式目录时独立提取模版。
-async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
+async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, aiService, workspaceStore, knowledgeBaseService, openXmlHelperService, updateTask, checkpointTask, taskControl, payload }) {
   const storedPlan = workspaceStore.loadTechnicalPlan() || {};
   const restoringOutlineSelection = payload?.agent_resume?.phase === 'outline-selection';
   const outlineMode = ['response-file', 'standalone-technical', 'standalone-business'].includes(payload?.outline_mode)
@@ -1410,20 +1410,6 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
     agent_connection: 'idle',
   });
 
-  if (extractTemplate && workspaceStore.listTenderSourceDocxRelativePaths().length) {
-    await ordinaryAgentService.forkPersistentTask(
-      OUTLINE_AGENT_TASK_KEY,
-      TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
-      {
-        run_id: templateTaskId,
-        title: '投标模版提取',
-        status: 'created',
-        phase: 'template-extraction',
-        agent_connection: 'idle',
-      },
-    );
-  }
-
   const parallelController = new AbortController();
   const parallelSignal = AbortSignal.any([taskControl.signal, parallelController.signal]);
   let firstParallelFailure = null;
@@ -1440,6 +1426,7 @@ async function runOutlineGenerationTaskV2({ agentService, ordinaryAgentService, 
   const templatePromise = extractTemplate
     ? runTemplateExtractionTask({
         agentService: ordinaryAgentService,
+        aiService,
         workspaceStore,
         openXmlHelperService,
         taskId: templateTaskId,

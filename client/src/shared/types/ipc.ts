@@ -10,6 +10,7 @@ import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportS
 import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey, CredentialLibraryImportResult, CredentialLibraryMutationResult, CredentialLibraryProfile, CredentialLibrarySnapshot, CredentialOtherMaterial, CredentialProject, CredentialRecordSavePayload } from '../../features/credential-library/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { TechnicalPlanOutlineData as OutlineData } from './outline';
+import type { NoticeCachedMedia, NoticeMediaCacheRequest } from './notice';
 
 /** 配置保存只更新提交字段，文本服务商档案也支持局部更新。 */
 export type ClientConfigPatch = Partial<Omit<ClientConfig, 'text_model_profiles'>> & {
@@ -615,6 +616,11 @@ export interface YibiaoBridge {
   relaunchWithGpuHardwareAccelerationDisabled: () => Promise<{ success: boolean }>;
   requiredOnlineServices: {
     getStatus: () => Promise<RequiredOnlineServicesStatus>;
+  };
+  notice: {
+    syncCurrent: (request: { projectName: string; noticeId: string | null }) => Promise<void>;
+    prepareMedia: (request: NoticeMediaCacheRequest) => Promise<NoticeCachedMedia>;
+    releaseMedia: (leaseId: string) => Promise<void>;
   };
   donation: {
     getConfig: () => Promise<DonationPaymentConfig>;

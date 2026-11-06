@@ -248,15 +248,37 @@ static class TemplatePositionResolver
         };
     }
 
-    /// <summary>锚点按原文逐字匹配：␣ 匹配任意一个空格类字符，⇥ 匹配制表符，⏎ 不占字符、忽略。</summary>
-    static string ToPattern(string value) =>
-        string.Concat(value.Select(item => item switch
+    const string BlankClass = "[ \u3000\u00a0]";
+    const string UnderscoreClass = "[_\uff3f]";
+
+    /// <summary>
+    /// 锚点按原文逐字匹配，但连续的空格类字符（␣、半角、全角、不换行空格）整体匹配段内一整段空白，
+    /// 连续的下划线（_、＿）整体匹配一整段下划线，不论个数，Agent 不必数空位长度；⇥ 匹配制表符，⏎ 不占字符、忽略。
+    /// </summary>
+    static string ToPattern(string value)
+    {
+        var text = value.Replace(TemplateTextRenderer.BreakMark.ToString(), "");
+        var builder = new System.Text.StringBuilder();
+        for (var index = 0; index < text.Length;)
         {
-            TemplateTextRenderer.BlankMark => @"[ 　 ]",
-            TemplateTextRenderer.TabMark => @"\t",
-            TemplateTextRenderer.BreakMark => "",
-            _ => Regex.Escape(item.ToString()),
-        }));
+            var item = text[index];
+            if (IsBlank(item) || IsUnderscore(item))
+            {
+                Func<char, bool> same = IsBlank(item) ? IsBlank : IsUnderscore;
+                var run = IsBlank(item) ? BlankClass : UnderscoreClass;
+                while (index < text.Length && same(text[index])) index += 1;
+                builder.Append($"(?<!{run}){run}+(?!{run})");
+                continue;
+            }
+            builder.Append(item == TemplateTextRenderer.TabMark ? @"\t" : Regex.Escape(item.ToString()));
+            index += 1;
+        }
+        return builder.ToString();
+    }
+
+    static bool IsBlank(char item) => item is TemplateTextRenderer.BlankMark or ' ' or '\u3000' or '\u00a0';
+
+    static bool IsUnderscore(char item) => item is '_' or '\uff3f';
 
     static string MatchProblem(TemplateParagraphEntry entry, int count, string target) => count == 0
         ? $"在 {entry.Locator} 中找不到{target}，该段原文：{TemplateTextRenderer.Show(entry.Text)}"

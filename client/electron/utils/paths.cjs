@@ -18,6 +18,11 @@ function getOfficialRechargeQrCachePath(app) {
   return path.join(getUserDataPath(app), 'official_recharge_qr_cache.json');
 }
 
+/** 自动公告的媒体缓存独立于业务工作区。 */
+function getNoticeCacheDir(app) {
+  return path.join(getUserDataPath(app), 'notice-cache');
+}
+
 function getLicenseFilePath(app) {
   return path.join(getUserDataPath(app), 'license.json');
 }
@@ -252,6 +257,7 @@ module.exports = {
   getImportedImagesDir,
   getKnowledgeBaseDir,
   getLicenseFilePath,
+  getNoticeCacheDir,
   getOfficialApiSessionFilePath,
   getOfficialRechargeQrCachePath,
   getOpenXmlHelperDebugExecutablePath,

@@ -1,17 +1,19 @@
+import type { NoticePresentation } from './types/notice';
+
 const NOTICE_ENDPOINT = 'https://analytics.agnet.top/notice';
 const NOTICE_LIST_ENDPOINT = 'https://analytics.agnet.top/notices';
-const PROJECT_NAME = 'yibiao-client';
+export const NOTICE_PROJECT_NAME = 'yibiao-client';
+const PROJECT_NAME = NOTICE_PROJECT_NAME;
 const DISMISSED_NOTICE_ID_KEY = 'remote_notice_dismissed_id';
 const SEEN_NOTICE_UPDATED_AT_KEY = 'remote_notice_seen_updated_at';
 export const NOTICE_SEEN_EVENT = 'yibiao:remote-notice-seen';
 const LOG_PREFIX = '[remote-notice]';
 
-export interface NoticeEntry {
+export type NoticeEntry = NoticePresentation & {
   id: string;
-  title: string;
-  content: string;
+  clientNoticeId: string;
   updatedAt: string;
-}
+};
 
 interface NoticeListResponse {
   code?: number;
@@ -23,15 +25,13 @@ interface NoticeLatestResponse {
   latestUpdatedAt?: string;
 }
 
-export interface RemoteNotice {
+export type RemoteNotice = NoticePresentation & {
   id: string;
   projectName: string;
   enabled: boolean;
-  title: string;
-  content: string;
   createdAt: string;
   updatedAt: string;
-}
+};
 
 interface RemoteNoticeResponse {
   code?: number;
@@ -80,22 +80,30 @@ export async function reportRemoteNoticeDelivered(notice: Pick<RemoteNotice, 'id
   }
 }
 
+// 旧 KV 没有类型标记时按文字公告读取；新图片公告保留媒体配置。
+function noticePresentation(notice: NoticePresentation): NoticePresentation {
+  const common = { title: String(notice.title || '公告'), content: String(notice.content || '') };
+  return notice.noticeType === 'image'
+    ? { ...common, noticeType: 'image', media: notice.media }
+    : { ...common, noticeType: 'text', media: null };
+}
+
+// 规范当前公告；只有明确空值或停用才表示无公告，坏响应不能清理缓存。
 function normalizeNotice(notice: RemoteNotice | null | undefined): RemoteNotice | null {
-  if (!notice?.id || !notice.content || notice.enabled === false) {
-    return null;
-  }
+  if (notice === null || notice?.enabled === false) return null;
+  if (!notice?.id || !notice.content) throw new Error('公告响应无效');
 
   return {
     id: String(notice.id),
     projectName: String(notice.projectName || PROJECT_NAME),
     enabled: true,
-    title: String(notice.title || '公告'),
-    content: String(notice.content),
+    ...noticePresentation(notice),
     createdAt: String(notice.createdAt || ''),
     updatedAt: String(notice.updatedAt || ''),
   };
 }
 
+// 仅明确成功返回空公告时返回 null；请求失败抛错，不能误清理缓存。
 export async function fetchRemoteNotice() {
   const url = new URL(NOTICE_ENDPOINT);
   url.searchParams.set('projectName', PROJECT_NAME);
@@ -107,16 +115,11 @@ export async function fetchRemoteNotice() {
     cache: 'no-store',
   });
 
-  if (!response.ok) {
-    console.info(LOG_PREFIX, 'request failed', response.status);
-    return null;
-  }
+  if (!response.ok) throw new Error(`公告请求失败：${response.status}`);
 
-  const data = await response.json().catch(() => null) as RemoteNoticeResponse | null;
-  console.info(LOG_PREFIX, 'response', data);
-  if (!data || data.code !== 0) {
-    console.info(LOG_PREFIX, 'invalid response', data?.code);
-    return null;
+  const data = await response.json() as RemoteNoticeResponse;
+  if (data?.code !== 0 || !Object.prototype.hasOwnProperty.call(data, 'notice')) {
+    throw new Error('公告响应无效');
   }
 
   const notice = normalizeNotice(data.notice);
@@ -146,8 +149,8 @@ export async function fetchNoticeList() {
 
   return data.notices.map((item) => ({
     id: String(item.id || ''),
-    title: String(item.title || '公告'),
-    content: String(item.content || ''),
+    clientNoticeId: String(item.clientNoticeId || ''),
+    ...noticePresentation(item),
     updatedAt: String(item.updatedAt || ''),
   }));
 }

@@ -462,7 +462,7 @@
               </div>
             </div>
             <div id="noticesTable" class="notice-table-wrap"></div>
-            <form id="noticeForm">
+            <form id="noticeForm" novalidate>
               <input id="noticeId" type="hidden" />
               <div id="noticeMeta" class="notice-meta">新增公告，保存后将同步到客户端 KV。</div>
               <div class="notice-form">
@@ -477,6 +477,13 @@
                     <option value="false">保存但不展示</option>
                   </select>
                 </label>
+                <label class="notice-field-wide">
+                  公告类型
+                  <select id="noticeType">
+                    <option value="text" selected>文字公告</option>
+                    <option value="image">图片公告</option>
+                  </select>
+                </label>
                 <div class="notice-field-wide notice-markdown-field">
                   <span id="noticeContentLabel" class="notice-field-label">Markdown 内容</span>
                   <div class="notice-editor-shell">
@@ -485,6 +492,35 @@
                       <button id="noticePreviewTab" class="notice-editor-tab" type="button" role="tab" aria-selected="false" aria-controls="noticePreviewPanel">预览</button>
                     </div>
                     <div id="noticeEditorPanel" role="tabpanel" aria-labelledby="noticeEditorTab">
+                      <div id="noticeMediaFields" class="notice-media-fields" hidden>
+                        <label>
+                          媒体类型
+                          <select id="noticeMediaKind">
+                            <option value="image" selected>图片</option>
+                            <option value="video">视频</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span id="noticeMediaUrlLabel">图片地址</span>
+                          <input id="noticeMediaUrl" type="url" placeholder="必填，HTTP(S) 媒体直链" />
+                        </label>
+                        <label>
+                          点击跳转链接
+                          <input id="noticeMediaLinkUrl" type="url" placeholder="可空，HTTP(S) 链接" />
+                        </label>
+                        <label>
+                          关闭倒计时（秒）
+                          <input id="noticeCloseDelaySeconds" type="number" min="0" max="9007199254740991" step="1" value="0" />
+                          <small>0 表示随时可关闭</small>
+                        </label>
+                        <label>
+                          关闭时强制跳转
+                          <select id="noticeOpenLinkOnClose">
+                            <option value="false" selected>否</option>
+                            <option value="true">是（须填写点击跳转链接）</option>
+                          </select>
+                        </label>
+                      </div>
                       <textarea id="noticeContent" maxlength="20000" aria-labelledby="noticeContentLabel" placeholder="输入 Markdown 公告内容。支持标题、列表、链接、加粗等语法。"></textarea>
                     </div>
                     <div id="noticePreviewPanel" class="notice-preview-panel" role="tabpanel" aria-labelledby="noticePreviewTab" hidden>

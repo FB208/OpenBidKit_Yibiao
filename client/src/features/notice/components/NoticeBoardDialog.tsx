@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { trackNoticeBoardOpen } from '../../../shared/analytics/analytics';
 import { fetchNoticeList, type NoticeEntry } from '../../../shared/remoteNotice';
+import NoticeMediaContent from './NoticeMediaContent';
 import {
   EntryBrowserDialog,
   ImagePreviewDialog,
@@ -16,6 +17,7 @@ interface NoticeBoardDialogProps {
   onLoaded: (latestUpdatedAt: string) => void;
 }
 
+// 同一时间线按公告类型展示内容；历史浏览不应用自动公告的倒计时和关闭跳转。
 function NoticeBoardDialog({ open, onOpenChange, onLoaded }: NoticeBoardDialogProps) {
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
 
@@ -41,11 +43,14 @@ function NoticeBoardDialog({ open, onOpenChange, onLoaded }: NoticeBoardDialogPr
         onOpen={trackNoticeBoardOpen}
         onLoaded={handleLoaded}
         getKey={(entry) => entry.id}
-        getOptionLabel={(entry) => entry.title}
+        getOptionLabel={(entry) => `${entry.noticeType === 'image' ? '图片公告' : '文字公告'} · ${entry.title}`}
         getTitle={(entry) => entry.title}
         renderContent={(entry) => (
           <>
             {entry.updatedAt ? <div className="notice-board-time">公告时间：{entry.updatedAt}</div> : null}
+            {entry.noticeType === 'image' ? (
+              <NoticeMediaContent key={`${entry.id}:${entry.clientNoticeId}`} media={entry.media} title={entry.title} />
+            ) : (
             <MarkdownFullscreenViewer
               className="markdown-viewer remote-notice-content"
               fullscreenClassName="markdown-viewer"
@@ -60,6 +65,7 @@ function NoticeBoardDialog({ open, onOpenChange, onLoaded }: NoticeBoardDialogPr
                 {entry.content}
               </MarkdownRenderer>
             </MarkdownFullscreenViewer>
+            )}
           </>
         )}
       />

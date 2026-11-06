@@ -295,44 +295,37 @@
   transform: translate(-50%, -50%);
 }
 
-/* 软件启动广告弹窗 */
-.startup-advertisement-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
-  background: rgba(9, 14, 28, 0.62);
-  backdrop-filter: blur(6px);
-}
-
-.startup-advertisement-card {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: 1201;
+/* 图片公告与历史公告共用媒体展示，长内容只在弹窗内部滚动。 */
+.notice-media-content {
   display: flex;
   flex-direction: column;
-  width: min(720px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
-  gap: 14px;
-  padding: 14px;
-  overflow: hidden;
-  background: #ffffff;
-  border: 1px solid rgba(228, 233, 240, 0.9);
-  border-radius: 22px;
-  box-shadow: 0 32px 86px rgba(9, 14, 28, 0.34);
-  transform: translate(-50%, -50%);
-}
-
-.startup-advertisement-scroll {
-  flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  border-radius: 14px;
+  gap: 12px;
+  overflow: auto;
 }
 
-.startup-advertisement-link {
+.notice-media-host {
   display: block;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.notice-media-host img,
+.notice-media-host video {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--yb-radius-md);
+}
+
+.notice-media-host video {
+  max-height: 55vh;
+  background: #000;
+}
+
+.notice-media-link {
+  display: block;
+  flex: 0 0 auto;
   width: 100%;
   padding: 0;
   background: transparent;
@@ -340,16 +333,18 @@
   cursor: pointer;
 }
 
-.startup-advertisement-link img {
-  display: block;
-  width: 100%;
-  height: auto;
+.notice-media-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--yb-text-soft);
 }
 
-.startup-advertisement-actions {
-  display: flex;
+.notice-media-details {
   flex: 0 0 auto;
-  justify-content: flex-end;
+  align-self: flex-end;
 }
 
 

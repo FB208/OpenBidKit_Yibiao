@@ -4,7 +4,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { registerIpcHandlers } = require('./ipc/index.cjs');
 const { setupAutoUpdate, checkAndDownloadUpdate, triggerUpdateDownload, isUpdateCacheInUse, quitAndInstall, getLatestVersion, getUpdateDownloadUrl } = require('./services/updateService.cjs');
-const { getConfigFilePath, getCredentialLibraryDir, getGeneratedImagesDir, getGpuStartupProbePath, getImportedImagesDir } = require('./utils/paths.cjs');
+const { getConfigFilePath, getCredentialLibraryDir, getGeneratedImagesDir, getGpuStartupProbePath, getImportedImagesDir, getNoticeCacheDir } = require('./utils/paths.cjs');
+const { createNoticeMediaResponse } = require('./services/noticeMediaResponse.cjs');
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const iconPath = path.join(__dirname, '../assets/icon.ico');
@@ -253,9 +254,10 @@ const gpuStartupState = configureGpuHardwareAcceleration();
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'yibiao-asset',
-  privileges: { standard: true, secure: true, supportFetchAPI: true },
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
 }]);
 
+// 注册本地资源入口；公告媒体独立处理 Range，其余图片保持原读取方式。
 function registerAssetProtocol() {
   protocol.handle('yibiao-asset', (request) => {
     try {
@@ -264,6 +266,7 @@ function registerAssetProtocol() {
         'credential-library': getCredentialLibraryDir(app),
         'generated-images': getGeneratedImagesDir(app),
         'imported-images': getImportedImagesDir(app),
+        'notice-cache': getNoticeCacheDir(app),
       };
       const rootDir = assetRoots[url.hostname];
       if (!rootDir) {
@@ -284,6 +287,8 @@ function registerAssetProtocol() {
       if (!fs.existsSync(filePath)) {
         return new Response('Not found', { status: 404 });
       }
+
+      if (url.hostname === 'notice-cache') return createNoticeMediaResponse(request, filePath);
 
       return net.fetch(pathToFileURL(filePath).toString());
     } catch {

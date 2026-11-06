@@ -1,13 +1,12 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
-import { dismissRemoteNotice, fetchRemoteNotice, hasDismissedRemoteNotice, markNoticeSeen, reportRemoteNoticeDelivered, type RemoteNotice } from '../shared/remoteNotice';
+import NoticeMediaContent from '../features/notice/components/NoticeMediaContent';
+import { useAutomaticNotice } from '../features/notice/hooks/useAutomaticNotice';
 import { ImagePreviewDialog, MarkdownFullscreenViewer, MarkdownRenderer, useToast, type PreviewImage } from '../shared/ui';
 import type { PluginUpdateInfo } from '../shared/types/ipc';
 import { hasPromptedUpdate, showUpdateReadyToast } from '../shared/updateToast';
 
 const updatePollIntervalMs = 30 * 60 * 1000;
-const noticeCloseDelaySeconds = 5;
-const noticeLogPrefix = '[remote-notice]';
 
 declare global {
   interface Window {
@@ -19,60 +18,21 @@ interface UpdateNotifierProps {
   noticeEnabled: boolean;
 }
 
+// 软件／插件更新保持原流程，自动公告使用统一的类型与媒体准备入口。
 function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
   const { showToast, dismissToast } = useToast();
   const updateCheckingRef = useRef(false);
   const pluginUpdateRunningRef = useRef(false);
-  const activeNoticeIdRef = useRef('');
-  const reportedNoticeIdsRef = useRef(new Set<string>());
   const promptedPluginUpdatesRef = useRef(new Set<string>());
-  const [remoteNotice, setRemoteNotice] = useState<RemoteNotice | null>(null);
-  const [remainingNoticeCloseSeconds, setRemainingNoticeCloseSeconds] = useState(noticeCloseDelaySeconds);
+  const { notice: remoteNotice, prepared, remainingSeconds, closing, close } = useAutomaticNotice(noticeEnabled);
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
-  const canCloseRemoteNotice = remainingNoticeCloseSeconds === 0;
-  const visibleNoticeId = noticeEnabled ? remoteNotice?.id || '' : '';
 
-  const closeRemoteNotice = () => {
-    if (!canCloseRemoteNotice) return;
-    if (remoteNotice?.id) {
-      dismissRemoteNotice(remoteNotice.id);
-      // 自动弹窗点“知道了”也视为已读，侧栏“公告”红点随之消失。
-      markNoticeSeen(remoteNotice.updatedAt);
-    }
-    activeNoticeIdRef.current = '';
-    setPreviewImage(null);
-    setRemoteNotice(null);
-  };
-
-  useEffect(() => {
-    if (!noticeEnabled || !remoteNotice?.id) return;
-    const reportKey = `${remoteNotice.projectName}:${remoteNotice.id}`;
-    if (reportedNoticeIdsRef.current.has(reportKey)) return;
-    reportedNoticeIdsRef.current.add(reportKey);
-    void reportRemoteNoticeDelivered(remoteNotice).catch((error) => {
-      console.info(noticeLogPrefix, 'delivery report failed', error);
-    });
-  }, [noticeEnabled, remoteNotice]);
-
-  useEffect(() => {
-    if (!visibleNoticeId) {
-      setRemainingNoticeCloseSeconds(noticeCloseDelaySeconds);
-      return;
-    }
-
-    const closeAvailableAt = Date.now() + noticeCloseDelaySeconds * 1000;
-    setRemainingNoticeCloseSeconds(noticeCloseDelaySeconds);
-    const timer = window.setInterval(() => {
-      const remainingSeconds = Math.max(0, Math.ceil((closeAvailableAt - Date.now()) / 1000));
-      setRemainingNoticeCloseSeconds(remainingSeconds);
-      if (remainingSeconds === 0) window.clearInterval(timer);
-    }, 250);
-
-    return () => window.clearInterval(timer);
-  }, [visibleNoticeId]);
+  // 切换或关闭公告时同时收起旧正文的图片预览。
+  useEffect(() => { setPreviewImage(null); }, [remoteNotice?.id]);
 
   useEffect(() => {
     let disposed = false;
+    let timer: number | undefined;
 
     const promptPluginUpdates = (updates: PluginUpdateInfo[]) => {
       if (disposed || updates.length === 0) return;
@@ -160,48 +120,10 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
       }
     };
 
-    const checkRemoteNotice = async () => {
-      try {
-        console.info(noticeLogPrefix, 'check start');
-        const notice = await fetchRemoteNotice();
-        const dismissed = notice ? hasDismissedRemoteNotice(notice.id) : false;
-        console.info(noticeLogPrefix, 'check result', {
-          disposed,
-          noticeId: notice?.id || null,
-          dismissed,
-          activeNoticeId: activeNoticeIdRef.current,
-        });
-
-        if (disposed || !notice || dismissed) {
-          return;
-        }
-        if (activeNoticeIdRef.current === notice.id) {
-          console.info(noticeLogPrefix, 'skip: notice already active', notice.id);
-          return;
-        }
-
-        activeNoticeIdRef.current = notice.id;
-        console.info(noticeLogPrefix, 'show notice', notice.id);
-        setRemoteNotice(notice);
-      } catch (error) {
-        // 公告检查失败不打扰用户。
-        console.info(noticeLogPrefix, 'check failed', error);
-      }
-    };
-
-    const checkAll = () => {
-      void checkUpdate();
-      void checkRemoteNotice();
-    };
-
-    let timer: number | undefined;
-    window.__yibiaoCheckRemoteNotice = () => {
-      void checkRemoteNotice();
-    };
-    checkAll();
+    void checkUpdate();
     if (!disposed) {
       timer = window.setInterval(() => {
-        checkAll();
+        void checkUpdate();
       }, updatePollIntervalMs);
     }
 
@@ -209,9 +131,6 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
       disposed = true;
       if (timer !== undefined) {
         window.clearInterval(timer);
-      }
-      if (window.__yibiaoCheckRemoteNotice) {
-        delete window.__yibiaoCheckRemoteNotice;
       }
       unsubscribePluginUpdates?.();
     };
@@ -231,9 +150,12 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
           <Dialog.Title className="remote-notice-title">{remoteNotice?.title || '公告'}</Dialog.Title>
           <Dialog.Description className="sr-only">远程公告</Dialog.Description>
           {remoteNotice?.updatedAt ? <div className="remote-notice-time">公告时间：{remoteNotice.updatedAt}</div> : null}
+          {remoteNotice?.noticeType === 'image' ? (
+            <NoticeMediaContent key={remoteNotice.id} media={remoteNotice.media} title={remoteNotice.title} prepared={prepared} />
+          ) : (
           <MarkdownFullscreenViewer className="markdown-viewer remote-notice-content" fullscreenClassName="markdown-viewer" title={`${remoteNotice?.title || '公告'}全屏查看`}>
             <MarkdownRenderer
-              allowRawHtml
+              allowRawHtml={false}
               imageMode="preview"
               imageClassName="remote-notice-image"
               onPreviewImage={(src, alt) => setPreviewImage({ src, alt: alt || '公告图片' })}
@@ -241,9 +163,10 @@ function UpdateNotifier({ noticeEnabled }: UpdateNotifierProps) {
               {remoteNotice?.content || ''}
             </MarkdownRenderer>
           </MarkdownFullscreenViewer>
+          )}
           <div className="remote-notice-actions">
-            <button className="primary-action" type="button" disabled={!canCloseRemoteNotice} onClick={closeRemoteNotice}>
-              {canCloseRemoteNotice ? '知道了' : `${remainingNoticeCloseSeconds} 秒后可关闭`}
+            <button className="primary-action" type="button" disabled={remainingSeconds !== 0 || closing} onClick={() => { void close().catch((error) => showToast(error instanceof Error ? error.message : '关闭公告失败', 'error')); }}>
+              {remainingSeconds > 0 ? `${remainingSeconds} 秒后可关闭` : remoteNotice?.noticeType === 'image' ? '关闭公告' : '知道了'}
             </button>
           </div>
         </Dialog.Content>

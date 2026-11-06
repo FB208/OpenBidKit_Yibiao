@@ -1705,11 +1705,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         primarySession: agentService.isPrimarySession({ task_key: OUTLINE_AGENT_TASK_KEY }),
       });
     },
-    // 目录变更后按当前目录重新提取投标模版；先确认目录会话存在，再清空旧模版，避免旧产物让提取校验误判完成。
+    // 目录变更后按当前目录重新提取投标模版（新会话，不依赖目录会话）；先清空旧模版，避免旧产物让提取校验误判完成。
     startBidTemplateExtraction(payload) {
-      if (!agentService.hasPersistentTaskSession(OUTLINE_AGENT_TASK_KEY)) {
-        throw new Error('目录生成的 Agent 工作空间不存在，请重新生成目录');
-      }
       return startManagedTask('bid-template-extraction', payload, runBidTemplateExtractionTask, {}, {
         primarySession: true,
         beforeStart: () => {

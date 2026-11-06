@@ -1041,6 +1041,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidTemplateBlankPath,
       rulePageTablesPath,
       bidTemplateBasePath,
+      // 模版提取分组校验的临时产物，正常在提取结束时删除，这里清理异常退出留下的目录。
+      path.join(path.dirname(bidTemplatePath), 'bid-template-groups'),
     ];
     const templateDir = path.dirname(bidTemplatePath);
     if (fs.existsSync(templateDir)) {

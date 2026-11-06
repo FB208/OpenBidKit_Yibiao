@@ -13,7 +13,7 @@ static class TemplateTextRenderer
 {
     public const string FileName = "template-text.txt";
     public const string PreviewFileName = "template-preview.txt";
-    /// <summary>连续空格中的每个空格显示为此标记；补充位置的锚点里它匹配任意一个空格类字符。</summary>
+    /// <summary>连续空格中的每个空格显示为此标记；补充位置的锚点里连续的空格类字符不论个数整体匹配一整段空白。</summary>
     public const char BlankMark = '␣';
     /// <summary>制表符显示为此标记，锚点里它匹配制表符。</summary>
     public const char TabMark = '⇥';
@@ -31,7 +31,7 @@ static class TemplateTextRenderer
     {
         var headings = scan.Chapters.Select(chapter => TemplateHeadings.FindDefault(scan, chapter, [])).ToList();
         var intro = $"投标模版正文：每行一个段落，格式为“定位号  文字”。{LocatorNote}\n"
-            + $"〔c_…〕为已识别的候选插入点，〔c_…：原文〕为覆盖该原文的候选；{MarkNote}〔不可标记〕的段落不能补充位置或去掉文字。\n"
+            + $"〔c_…〕为已识别的候选插入点，〔c_…：原文〕为覆盖该原文的候选；{MarkNote}补充位置和去掉的原文中，连续的空格（␣）或下划线不论多少个都只写一个，程序按整段匹配。〔不可标记〕的段落不能补充位置或去掉文字。\n"
             + "每章标题行给出章节 id 和程序按目录标题认定的默认标题段（导出时加章节编号的段落），“无”表示导出时按目录标题插入一段。\n";
         return RenderCore(
             scan,
@@ -51,7 +51,8 @@ static class TemplateTextRenderer
         IReadOnlyDictionary<TemplateFieldCandidate, string> labels,
         IReadOnlyList<TemplateFieldCandidate> removals,
         IReadOnlyList<TemplateParagraphEntry?> headings,
-        IReadOnlyList<List<TemplateRepeatItem>> repeats)
+        IReadOnlyList<List<TemplateRepeatItem>> repeats,
+        IReadOnlySet<string>? scope = null)
     {
         var intro = $"投标模版效果正文：按当前分类显示导出后的样子，每行一个段落，格式为“定位号  文字”，定位号与投标模版正文相同。{LocatorNote}\n"
             + "【字段名】为填写位置，【字段名←原文】为替换该原文的填写位置，〔择一 字段名：原文〕〔勾选 字段名：原文〕保留原文供选择，〔附件 字段名〕为图片位置，"
@@ -68,7 +69,8 @@ static class TemplateTextRenderer
             (chapter, index) => $"【章节 {chapter.Id}：{chapter.Title}】标题段：{HeadingLabel(headings[index], chapter.Title)}",
             intro,
             showWritable: false,
-            entry => TemplateRepeats.Locate(repeats, entry.Paragraph) is { } item ? TemplateRepeats.PreviewLabel(item) : "");
+            entry => TemplateRepeats.Locate(repeats, entry.Paragraph) is { } item ? TemplateRepeats.PreviewLabel(item) : "",
+            scope);
     }
 
     /// <summary>
@@ -100,7 +102,8 @@ static class TemplateTextRenderer
         Func<TemplateChapterRange, int, string> header,
         string intro,
         bool showWritable,
-        Func<TemplateParagraphEntry, string>? prefix = null)
+        Func<TemplateParagraphEntry, string>? prefix = null,
+        IReadOnlySet<string>? scope = null)
     {
         var entries = new Dictionary<Wp.Paragraph, TemplateParagraphEntry>(ReferenceEqualityComparer.Instance);
         foreach (var entry in scan.Paragraphs) entries.TryAdd(entry.Paragraph, entry);
@@ -137,7 +140,8 @@ static class TemplateTextRenderer
         foreach (var item in items)
         {
             var chapter = item.Entry?.Chapter ?? item.Candidate?.Chapter;
-            if (chapter is null) continue;
+            // 分组校验时只写本组章节。
+            if (chapter is null || scope is not null && !scope.Contains(chapter.Id ?? "")) continue;
             var line = item.Entry is { } entry
                 ? RenderEntry(entry, inline.GetValueOrDefault(entry.Paragraph), trailing.GetValueOrDefault(entry.Paragraph), mark, showWritable, prefix?.Invoke(entry) ?? "")
                 : $"{TemplateFieldScanner.ToLocator(item.Candidate!.Location)}  {(showWritable ? "〔不可标记〕" : "")}{mark(item.Candidate!, Show(item.Candidate!.Text ?? ""))}";
