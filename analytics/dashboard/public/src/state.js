@@ -73,6 +73,8 @@ export const state = {
   retentionTable: $('retentionTable'),
   configUsage: $('configUsage'),
   modelUsage: $('modelUsage'),
+  modelTextTokens: $('modelTextTokens'),
+  modelImageRequests: $('modelImageRequests'),
   agentRuntime: $('agentRuntime'),
   agentRuntimeModels: $('agentRuntimeModels'),
   agentErrorReceiveEnabled: $('agentErrorReceiveEnabled'),

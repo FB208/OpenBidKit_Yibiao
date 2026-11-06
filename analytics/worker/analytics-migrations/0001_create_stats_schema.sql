@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS stats_daily (
   page_view_count INTEGER NOT NULL DEFAULT 0,
   event_count INTEGER NOT NULL DEFAULT 0,
   ai_request_count INTEGER NOT NULL DEFAULT 0,
+  text_request_count INTEGER NOT NULL DEFAULT 0,
+  text_total_tokens INTEGER NOT NULL DEFAULT 0,
+  image_request_count INTEGER NOT NULL DEFAULT 0,
+  image_total_tokens INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_name, activity_date)
 );

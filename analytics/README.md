@@ -40,7 +40,7 @@
 | `GET /api/ip-stats` | D1 或 AE | `ADMIN_TOKEN` | `date` 可选；无日期按全部客户端当前最后访问 IP 汇总，指定日期时按当天最后访问 IP 汇总，并返回新客户端数、Total Tokens、AI 服务商和 endpoint host |
 | `GET /api/traffic` | D1 或 AE | `ADMIN_TOKEN` | 访问分析，`range=history/today/7/30` |
 | `GET /api/config-usage` | D1 或 AE | `ADMIN_TOKEN` | 配置使用，`range=history/today/7/30` |
-| `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选 |
+| `GET /api/model-usage` | D1 或 AE | `ADMIN_TOKEN` | 模型使用，支持 `provider/endpointHost/model` 筛选，并返回不随筛选的范围汇总 `summary` |
 | `GET /api/agent-runtime` | D1 或 AE | `ADMIN_TOKEN` | Agent 总体、运行时、模型维度的成功率、失败率、重试率和重试后成功率，`range=history/today/7/30` |
 | `GET/DELETE /api/agent-errors` | D1 + R2 | `ADMIN_TOKEN` | 分页读取异常元数据，或单条/批量删除日志 |
 | `GET/POST /api/agent-errors/config` | D1 | `ADMIN_TOKEN` | 管理接收开关和精确版本号列表，查看 2 GiB 容量使用情况 |
@@ -93,6 +93,7 @@
 | 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计，页面查询时加上 AE 今天点击量 |
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
+| 模型每日统计 | Cron models stage 按天写 `stats_models_daily` 明细（写完后落完成哨兵行）和 `stats_daily` 的 `text_request_count`/`text_total_tokens`/`image_request_count`/`image_total_tokens`；模型使用 7天/30天 以窗口内最早无哨兵日期为界，之前读每日表、之后读 AE 合并，顶部范围汇总读 `stats_daily` 模型列加同一 AE 尾部 |
 | 概览 AI 指标 | 北京时间 02:30 模型汇总完成后，从 D1 `stats_models` 覆盖刷新 `stats_totals.total_text_tokens` 和 `stats_totals.total_generated_images`；生成图片数沿用生图模型请求次数口径 |
 | Agent 执行统计 | 新版 `agent_runtime` 使用 `blob9` v4 复合值聚合运行时、最终状态、Pi 原生模型重试次数、文本模型服务商、endpoint host 和模型名；v3 历史结果修复次数保留在独立列，不与模型重试混算；历史读 D1，今天/7天/30天读 AE |
 | 配置使用 | 新版 `config_usage` 使用 `config_key/config_value` 键值对上报；D1 历史保留，AE 旧格式不再兼容 |
@@ -273,6 +274,13 @@ cd analytics\worker
 npm run backfill:overview-ai-totals
 ```
 
+把 AE 窗口内（约三个月）的模型用量按天重放，补齐 `stats_models_daily` 明细和 `stats_daily` 的文本/生图模型四列汇总时，执行：
+
+```powershell
+cd analytics\worker
+npm run backfill:models-daily
+```
+
 注意事项：
 
 | 项 | 说明 |
@@ -286,6 +294,7 @@ npm run backfill:overview-ai-totals
 | 临时错误 | AE/D1 对 `429/500/502/503/504` 会自动重试，并打印 HTTP 状态、返回内容和 SQL 片段 |
 | 参数 | 脚本不接受命令行参数；指定单日使用环境变量 `BACKFILL_DATE` |
 | 补字段脚本 | 只补 `stats_versions.client_count` 和 `stats_models.total_tokens`，不回填资源点击量，不重跑每日统计 |
+| 模型每日回填 | `backfill:models-daily` 只重写 `stats_models_daily` 和 `stats_daily` 四个模型列的绝对值，不触碰其他汇总表；同样支持 `BACKFILL_DATE` |
 
 ## 排查
 

@@ -311,6 +311,26 @@ function ensureAnalyticsColumns() {
       column: 'untrusted_reason',
       sql: 'ALTER TABLE stats_clients ADD COLUMN untrusted_reason TEXT NOT NULL DEFAULT \'\'',
     },
+    {
+      table: 'stats_daily',
+      column: 'text_request_count',
+      sql: 'ALTER TABLE stats_daily ADD COLUMN text_request_count INTEGER NOT NULL DEFAULT 0',
+    },
+    {
+      table: 'stats_daily',
+      column: 'text_total_tokens',
+      sql: 'ALTER TABLE stats_daily ADD COLUMN text_total_tokens INTEGER NOT NULL DEFAULT 0',
+    },
+    {
+      table: 'stats_daily',
+      column: 'image_request_count',
+      sql: 'ALTER TABLE stats_daily ADD COLUMN image_request_count INTEGER NOT NULL DEFAULT 0',
+    },
+    {
+      table: 'stats_daily',
+      column: 'image_total_tokens',
+      sql: 'ALTER TABLE stats_daily ADD COLUMN image_total_tokens INTEGER NOT NULL DEFAULT 0',
+    },
   ];
 
   for (const item of columns) {

@@ -166,6 +166,9 @@ export async function loadConfigUsage() {
 
 export async function loadModelUsage() {
   const data = await loadModelUsageData(state.modelRange.value);
+  const summary = data.summary || {};
+  state.modelTextTokens.textContent = formatNumber(summary.textModelUsage?.totalTokens);
+  state.modelImageRequests.textContent = formatNumber(summary.imageModelUsage?.events);
   const rows = Object.values(data.usage || {}).flat();
   fillDatalist(state.modelProviderOptions, rows.map((row) => row.provider));
   fillDatalist(state.modelEndpointOptions, rows.map((row) => row.endpoint_host));

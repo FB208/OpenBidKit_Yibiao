@@ -1,5 +1,5 @@
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
-import { queryStatsConfigUsage, queryStatsModelUsage } from '../services/analyticsStatsStore.js';
+import { queryStatsConfigUsage, queryStatsModelUsage, queryStatsModelUsageSummary } from '../services/analyticsStatsStore.js';
 import { isValidProjectName, logQueryError, normalizeText, safeStatsRange } from '../utils.js';
 
 function readModelFilters(url) {
@@ -57,13 +57,19 @@ export async function handleModelUsage(request, env, url) {
   }
 
   try {
+    const filters = readModelFilters(url);
+    const [usage, summary] = await Promise.all([
+      queryStatsModelUsage(env, projectName, range, filters),
+      queryStatsModelUsageSummary(env, projectName, range),
+    ]);
     return json({
       code: 0,
       projectName,
       range,
-      source: range === 'history' ? 'd1' : 'analytics_engine',
-      filters: readModelFilters(url),
-      usage: await queryStatsModelUsage(env, projectName, range, readModelFilters(url)),
+      source: range === 'history' ? 'd1' : range === 'today' ? 'analytics_engine' : 'd1+analytics_engine',
+      filters,
+      usage,
+      summary,
     });
   } catch (error) {
     logQueryError('model-usage', error);

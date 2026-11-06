@@ -259,11 +259,15 @@
 
         <!-- 模型使用 -->
         <section id="tab-models" class="tab-panel" data-tab-panel="models">
+          <section class="cards model-usage-cards">
+            <div class="panel card"><span>文本模型 Token 总数</span><strong id="modelTextTokens">0</strong></div>
+            <div class="panel card"><span>生图模型总次数</span><strong id="modelImageRequests">0</strong></div>
+          </section>
           <section class="panel section">
             <div class="section-head">
               <div>
                 <h2>模型使用</h2>
-                <p>历史总数展示累计请求次数。</p>
+                <p>顶部汇总随范围联动、不随筛选变化；历史总数展示累计请求次数。</p>
               </div>
               <label class="inline-select">
                 范围

@@ -455,6 +455,10 @@ button:disabled {
   grid-template-columns: repeat(6, 1fr);
 }
 
+.model-usage-cards {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .card {
   padding: 14px 16px;
 }
