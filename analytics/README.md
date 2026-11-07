@@ -65,6 +65,8 @@
 | `GET/POST/DELETE /api/resources` | `RESOURCE_DB` + R2 + AE | `ADMIN_TOKEN` | 资源管理 |
 | `GET /system-settings` | R2 | 无 | 返回客户端当前加群二维码地址；未配置时返回空地址 |
 | `POST /api/system-settings` | R2 | `ADMIN_TOKEN` | 覆盖上传当前加群二维码 |
+| `GET /ads` | R2 | 无 | 客户端侧边栏启用广告列表（图片 + 跳转链接），按排序返回 |
+| `GET/POST/DELETE /api/ads` | R2 | `ADMIN_TOKEN` | 侧边栏广告管理；每条含图片、跳转链接、启停和排序 |
 | `GET /plugins` | `RESOURCE_DB` + R2 | 无 | 插件市场列表，当前版作为升级目标，同时返回保留的上一版信息和地址 |
 | `POST /plugins/download` | `RESOURCE_DB` | 无 | 累计插件成功下载次数 |
 | `GET/POST/DELETE /api/plugins` | `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 插件管理；新增、更新和删除会同步维护 R2 安装包 |

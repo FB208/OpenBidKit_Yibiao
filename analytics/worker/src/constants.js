@@ -9,7 +9,7 @@ export const DATASET = `(
   FROM ${RAW_DATASET}
   WHERE ${ANALYTICS_DATA_FILTER}
 )`;
-export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime']);
+export const ALLOWED_EVENTS = new Set(['app_open', 'page_view', 'config_usage', 'ai_request', 'resource_click', 'agent_runtime', 'ad_click']);
 export const AGENT_RUNTIME_STATUSES = new Set(['success', 'failed']);
 export const AGENT_RUNTIME_MAX_RETRY_COUNT = 3;
 export const AGENT_RUNTIME_KIND_PATTERN = /^[a-z0-9][a-z0-9._-]{0,39}$/;
@@ -31,6 +31,8 @@ export const RESOURCE_MODAL_CONTENT_MAX_LENGTH = 50000;
 export const RESOURCE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const RESOURCE_ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 export const SYSTEM_GROUP_CHAT_QR_KEY = 'resources/system/group-chat-qr';
+export const AD_LINK_MAX_LENGTH = 500;
+export const ADS_MAX_COUNT = 50;
 export const WORKER_CODE_VERSION = 'stats-redesign-v1';
 export const GITHUB_REPO_FULL_NAME = 'FB208/OpenBidKit_Yibiao';
 export const GITHUB_REPO_STATS_CACHE_KEY = `github_repo_stats:${GITHUB_REPO_FULL_NAME}`;

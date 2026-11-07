@@ -64,7 +64,9 @@ function createMetricBlobs(event) {
         ? event.configKey
         : event.event === 'agent_runtime'
           ? event.agentRuntimeMetricKey
-          : '';
+          : event.event === 'ad_click'
+            ? event.adKey
+            : '';
   const blob10 = event.event === 'ai_request'
     ? event.aiModelEndpointHost
     : event.event === 'config_usage'
@@ -127,6 +129,7 @@ export function normalizeTrackBody(body, request) {
     aiModelEndpointHost: normalizeBaseUrlHost(body.ai_model_base_url || body.aiModelBaseUrl),
     aiModelName,
     resourceKey: normalizeText(body.resource_key || body.resourceKey, 80),
+    adKey: normalizeText(body.ad_key || body.adKey, 120),
     agentRuntimeKind,
     agentRuntimeStatus,
     agentRuntimeRetryCount,

@@ -39,6 +39,7 @@
           <button class="nav-item" type="button" data-tab-button="changelog">更新日志</button>
           <button class="nav-item" type="button" data-tab-button="license">授权管理</button>
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
+          <button class="nav-item" type="button" data-tab-button="ads">广告管理</button>
           <button class="nav-item" type="button" data-tab-button="plugins">插件管理</button>
           <button class="nav-item" type="button" data-tab-button="model-info-cache">模型信息缓存</button>
         </div>
@@ -778,6 +779,55 @@
 
             <div id="resourcesStatus" class="notice-status"></div>
             <div id="resourcesTable" class="resource-table-wrap"></div>
+          </section>
+        </section>
+
+        <!-- 广告管理 -->
+        <section id="tab-ads" class="tab-panel" data-tab-panel="ads">
+          <section class="panel section resource-panel">
+            <div class="section-head">
+              <div>
+                <h2>广告管理</h2>
+                <p>配置客户端侧边栏轮播广告，每条包含一张图片和一个跳转链接。客户端固定显示 250×120，建议上传 2:1 比例图片。</p>
+              </div>
+              <div class="resource-head-actions">
+                <button id="loadAdsButton" type="button">读取广告</button>
+                <button id="newAdButton" type="button">新增广告</button>
+              </div>
+            </div>
+
+            <form id="adForm" class="resource-form">
+              <input id="adId" type="hidden" />
+              <div class="resource-image-editor">
+                <span>图片</span>
+                <div id="adImagePreview" class="resource-image-preview">无图片</div>
+                <input id="adImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+              </div>
+
+              <label class="resource-field-wide">
+                跳转链接
+                <input id="adLinkUrl" maxlength="500" placeholder="https://…" />
+              </label>
+              <label>
+                状态
+                <select id="adEnabled">
+                  <option value="true" selected>启用</option>
+                  <option value="false">停用</option>
+                </select>
+              </label>
+              <label>
+                排序
+                <input id="adSortOrder" type="number" value="1" />
+              </label>
+
+              <div class="resource-actions">
+                <button id="resetAdButton" class="secondary-button" type="button">清空表单</button>
+                <button id="saveAdButton" type="submit">保存广告</button>
+              </div>
+            </form>
+
+            <div id="adsStatus" class="notice-status"></div>
+            <div id="adsTable" class="resource-table-wrap"></div>
           </section>
         </section>
 

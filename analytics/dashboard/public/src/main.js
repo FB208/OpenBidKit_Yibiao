@@ -1,4 +1,5 @@
 import { loadSettings, saveSettings } from './api.js';
+import { bindAdEvents, loadAds } from './pages/ads.js';
 import { loadAgentRuntime } from './pages/agentRuntime.js';
 import { loadAgentErrors, setupAgentErrorsPage } from './pages/agentErrors.js';
 import { bindChangelogEvents, loadChangelogs } from './pages/changelog.js';
@@ -35,6 +36,7 @@ const tabLoaders = {
   changelog: () => loadChangelogs(),
   license: () => loadLicenseConfig(),
   resources: () => loadResources(),
+  ads: () => loadAds(),
   plugins: () => loadPlugins(),
   'model-info-cache': () => loadModelInfoCache(),
 };
@@ -142,6 +144,7 @@ function bindEvents() {
   state.generateOfflineLicenseButton.addEventListener('click', generateOfflineLicense);
   state.downloadOfflineLicenseButton.addEventListener('click', downloadOfflineLicense);
   bindResourceEvents();
+  bindAdEvents();
   setupPluginsPage();
   setupModelInfoCachePage();
   setupAgentErrorsPage();

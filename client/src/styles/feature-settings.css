@@ -1731,6 +1731,43 @@ fieldset.settings-list {
   transform: none;
 }
 
+.about-update-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 4px;
+}
+
+.about-update-actions .update-button {
+  margin-top: 0;
+}
+
+.about-changelog-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: var(--yb-primary);
+  font-size: 13px;
+  font-weight: 600;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.about-changelog-link:hover {
+  text-decoration: underline;
+}
+
+.about-changelog-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  background: var(--yb-danger);
+  border-radius: var(--yb-radius-pill);
+}
+
 .privacy-statement {
   display: grid;
   gap: 14px;

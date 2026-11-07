@@ -1,4 +1,5 @@
 import { corsHeaders, json } from './http.js';
+import { handleAdminAds, handlePublicAds } from './routes/ads.js';
 import { handleAgentRuntime } from './routes/agentRuntime.js';
 import { handleAdminChangelogs, handlePublicChangelogLatest, handlePublicChangelogs } from './routes/changelog.js';
 import { handleAdminAgentErrorConfig, handleAdminAgentErrorDownload, handleAdminAgentErrors, handleAgentErrorIngest } from './routes/agentErrors.js';
@@ -46,6 +47,7 @@ const routes = new Map([
   ['/resources', handlePublicResources],
   ['/resource-image', handleResourceImage],
   ['/system-settings', handlePublicSystemSettings],
+  ['/ads', handlePublicAds],
   ['/plugins', handlePublicPlugins],
   ['/plugins/download', handlePublicPluginDownload],
   ['/api/projects', handleProjects],
@@ -57,6 +59,7 @@ const routes = new Map([
   ['/api/plugins', handleAdminPlugins],
   ['/api/plugins/sync', handleAdminPluginSync],
   ['/api/system-settings', handleAdminSystemSettings],
+  ['/api/ads', handleAdminAds],
   ['/api/overview', handleOverview],
   ['/api/clients', handleClients],
   ['/api/client-detail', handleClientDetail],

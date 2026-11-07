@@ -6,6 +6,8 @@ import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageRequest, SettingsPageState, SettingsTab } from '../types';
+import ChangelogDialog from '../../changelog/components/ChangelogDialog';
+import { useChangelogUnread } from '../../changelog/hooks/useChangelogUnread';
 import OfficialAccountControls from '../components/OfficialAccountControls';
 import OfficialInvoicePanel from '../components/OfficialInvoicePanel';
 import OfficialOrdersPanel from '../components/OfficialOrdersPanel';
@@ -676,6 +678,8 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const [agentAutoAnswerDraft, setAgentAutoAnswerDraft] = useState(false);
   const [contextLengthDialogOpen, setContextLengthDialogOpen] = useState(false);
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const { hasUnread: changelogUnread, markSeen: markChangelogSeen } = useChangelogUnread();
   const contextLengthLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const { showToast } = useToast();
   const { enabled: agentAutoAnswerEnabled } = useAutoAnswer();
@@ -2621,20 +2625,30 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 <strong>当前版本 {appVersion || '...'}</strong>
               </div>
               <p>{updateStatusText}</p>
-              <button
-                type="button"
-                className="update-button"
-                disabled={updateBusy}
-                onClick={() => {
-                  if (updateStatus === 'downloaded') {
-                    void installDownloadedUpdate();
-                    return;
-                  }
-                  void checkForUpdates();
-                }}
-              >
-                {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
-              </button>
+              <div className="about-update-actions">
+                <button
+                  type="button"
+                  className="update-button"
+                  disabled={updateBusy}
+                  onClick={() => {
+                    if (updateStatus === 'downloaded') {
+                      void installDownloadedUpdate();
+                      return;
+                    }
+                    void checkForUpdates();
+                  }}
+                >
+                  {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
+                </button>
+                <button
+                  type="button"
+                  className="about-changelog-link"
+                  onClick={() => setChangelogOpen(true)}
+                >
+                  {changelogUnread ? <span className="about-changelog-dot" aria-hidden="true" /> : null}
+                  查看更新日志
+                </button>
+              </div>
             </article>
             <article className="about-info-card about-links-card">
               <span>信息与授权</span>
@@ -2720,6 +2734,11 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
         open={offlineLicenseDialogOpen}
         onOpenChange={setOfflineLicenseDialogOpen}
         onActivated={setLicenseStatus}
+      />
+      <ChangelogDialog
+        open={changelogOpen}
+        onOpenChange={setChangelogOpen}
+        onLoaded={markChangelogSeen}
       />
       {storageDialogOpen && <StorageSpaceDialog onClose={() => setStorageDialogOpen(false)} />}
       <FloatingToolbar groups={settingsToolbarGroups} label="设置保存工具条" />

@@ -4,7 +4,7 @@ const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const PROJECT_NAME = 'yibiao-client';
 const LEGACY_CLIENT_ID_KEY = 'analytics_client_id';
 
-type AnalyticsEvent = 'app_open' | 'page_view' | 'config_usage' | 'resource_click';
+type AnalyticsEvent = 'app_open' | 'page_view' | 'config_usage' | 'resource_click' | 'ad_click';
 
 interface AnalyticsIdentity {
   clientId: string;
@@ -290,6 +290,13 @@ export function trackResourceClick(resourceKey: string) {
   if (!/^[a-zA-Z0-9._:-]{1,80}$/.test(key)) return;
 
   sendAnalytics('resource_click', 'resources', { resource_key: key });
+}
+
+export function trackAdClick(adKey: string) {
+  const key = adKey.trim();
+  if (!/^[a-zA-Z0-9._:-]{1,120}$/.test(key)) return;
+
+  sendAnalytics('ad_click', 'sidebar', { ad_key: key });
 }
 
 // 公告弹窗每次打开都上报，不参与页面切换去重。
