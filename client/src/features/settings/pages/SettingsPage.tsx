@@ -309,6 +309,7 @@ const imageProviderDefaults: ImageModelProfiles = {
     api_key: '',
     model_name: '',
     image_size: '1024x1024',
+    image_watermark: true,
     request_mode: 'stream',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
@@ -438,6 +439,7 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
     model_name: useProviderDefaultImageModel ? defaults.model_name : profile?.model_name ?? defaults.model_name,
     image_size: normalizeImageSize(provider, useProviderDefaultImageModel ? defaults.image_size : profile?.image_size ?? defaults.image_size),
     ...(provider === 'agnes' ? { image_ratio: profile?.image_ratio ?? defaults.image_ratio ?? '1:1' } : {}),
+    ...(provider === 'volcengine' ? { image_watermark: profile?.image_watermark ?? defaults.image_watermark ?? true } : {}),
     request_mode: normalizeAiRequestMode(useProviderDefaultImageModel ? defaults.request_mode : profile?.request_mode ?? defaults.request_mode),
     concurrency_limit: normalizeImageConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
     comfyui_workflow: profile?.comfyui_workflow ?? defaults.comfyui_workflow ?? '',
@@ -516,6 +518,7 @@ function imageProfileFromState(imageModel: SettingsPageState['imageModel']): Ima
     model_name: imageModel.model_name,
     image_size: normalizeImageSize(imageModel.provider, imageModel.image_size),
     ...(imageModel.provider === 'agnes' ? { image_ratio: imageModel.image_ratio || '1:1' } : {}),
+    ...(imageModel.provider === 'volcengine' ? { image_watermark: imageModel.image_watermark !== false } : {}),
     request_mode: imageModel.request_mode,
     concurrency_limit: normalizeImageConcurrencyLimit(imageModel.concurrency_limit),
     comfyui_workflow: imageModel.comfyui_workflow || '',
@@ -2348,6 +2351,17 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 ))}
               </select>
             </label>
+            )}
+            {state.imageModel.provider === 'volcengine' && (
+            <div className="settings-row">
+              <div className="settings-row-copy">
+                <strong>去除AI生成水印</strong>
+                <span>开启后生成的图片右下角不再添加“AI 生成”标识；请确保使用场景符合 AI 内容标识要求</span>
+              </div>
+              <div className="settings-action-cell">
+                <AppSwitch aria-label="去除AI生成水印" checked={state.imageModel.image_watermark === false} onCheckedChange={(checked) => updateImageModelConfig({ image_watermark: !checked })} />
+              </div>
+            </div>
             )}
           </div>
           {imageTestPreview && (

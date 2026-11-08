@@ -55,6 +55,7 @@ export interface ImageModelConfig {
   model_name: string;
   image_size: ImageModelSize;
   image_ratio?: ImageModelRatio;
+  image_watermark?: boolean;
   request_mode: AiRequestMode;
   concurrency_limit: number;
   comfyui_workflow?: string;
