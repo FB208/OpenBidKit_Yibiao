@@ -146,8 +146,8 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
           {collapsed
             ? wrapTooltip('公告', renderNoticeButton(noticeUnread, () => setNoticeOpen(true)))
             : renderNoticeButton(noticeUnread, () => setNoticeOpen(true))}
-          {collapsed ? wrapTooltip('加群', renderGroupChatButton(() => setGroupChatOpen(true))) : renderGroupChatButton(() => setGroupChatOpen(true))}
           {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
+          {collapsed ? wrapTooltip('加群', renderGroupChatButton(() => setGroupChatOpen(true))) : renderGroupChatButton(() => setGroupChatOpen(true))}
         </div>
       </div>
 
