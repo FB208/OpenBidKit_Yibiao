@@ -160,25 +160,61 @@ test('合并：跨组同名且主体、填写方式、说明都相同但类型�
     { index: 3, classification: { fields: [field(['p1'])], ignored_candidate_ids: [], positions: [{ id: 'p1', at: 'b9', op: 'attachment' }] } },
     { index: 4, classification: { fields: [field(['c_c0'])], ignored_candidate_ids: [] } },
   ], { candidates });
-  // 与先出现的文字字段类型不同的都改名列为冲突（补充的附件位置按 op 认定为附件），是否同一信息由统稿决定。
+  // 与先出现的文字字段类型不同的改名列为冲突（补充的附件位置按 op 认定为附件），是否同一信息由统稿决定；
+  // 第 2、3 组的附件写法类型和属性都相同，并成同一个改名字段。
   assert.deepEqual(classification.fields.map((item) => [item.name, item.candidate_ids]), [
     ['营业执照', ['c_a0']],
-    ['营业执照〔第2组〕', ['c_b0']],
-    ['营业执照〔第3组〕', ['g3-p1']],
+    ['营业执照〔第2组〕', ['c_b0', 'g3-p1']],
     ['营业执照〔第4组〕', ['c_c0']],
   ]);
-  assert.deepEqual(conflicts, [{ name: '营业执照', renamed: ['营业执照〔第2组〕', '营业执照〔第3组〕', '营业执照〔第4组〕'] }]);
+  assert.deepEqual(conflicts, [{ name: '营业执照', renamed: ['营业执照〔第2组〕', '营业执照〔第4组〕'] }]);
   const list = buildFieldList(classification, { candidates }, splitTemplateText(''), ITEMS);
-  assert.deepEqual(list.map((item) => item.kind), ['文字', '附件', '附件', '勾选']);
-  // 统稿可以合成同类型的两项，不能把不同类型合成。
+  assert.deepEqual(list.map((item) => item.kind), ['文字', '附件', '勾选']);
+  // 统稿可以改名，不能把不同类型合成，也不能改成同名。
   const fieldList = list.map((item) => ({ name: item.name, kind: item.kind }));
   assert.deepEqual(applyNamingPlan(classification, { changes: [
-    { from: ['营业执照〔第2组〕', '营业执照〔第3组〕'], name: '营业执照扫描件' },
+    { from: ['营业执照〔第2组〕'], name: '营业执照扫描件' },
     { from: ['营业执照〔第4组〕'], name: '投标人是否提供营业执照勾选' },
   ] }, fieldList).errors, []);
   assert.match(applyNamingPlan(classification, { changes: [
-    { from: ['营业执照', '营业执照〔第2组〕', '营业执照〔第3组〕', '营业执照〔第4组〕'], name: '营业执照' },
+    { from: ['营业执照', '营业执照〔第2组〕', '营业执照〔第4组〕'], name: '营业执照' },
   ] }, fieldList).errors.join('；'), /类型不同，不能合成/);
+  assert.match(applyNamingPlan(classification, { changes: [
+    { from: ['营业执照〔第2组〕'], name: '营业执照' },
+    { from: ['营业执照〔第4组〕'], name: '投标人是否提供营业执照勾选' },
+  ] }, fieldList).errors.join('；'), /都叫“营业执照”，但类型或附件拆分不同/);
+});
+
+test('合并：组内按章各写的同名同属性多项并成一个改名字段，统稿合回原名或只改回原名都能执行', () => {
+  const candidates = ['c1', 'c4a', 'c4b', 'c5'].map((id) => ({ candidate_id: id, kind: 'text-placeholder', chapter_id: 'a' }));
+  const own = (ids) => ({ name: '招标项目名称', subject: '本招标项目', fill_by: 'ai', candidate_ids: ids });
+  const { classification, conflicts } = mergeGroupClassifications([
+    { index: 1, classification: { fields: [{ name: '招标项目名称', subject: '本项目', fill_by: 'ai', candidate_ids: ['c1'] }] } },
+    { index: 4, classification: { fields: [own(['c4a']), own(['c4b'])] } },
+    { index: 5, classification: { fields: [own(['c5'])] } },
+  ], { candidates });
+  assert.deepEqual(classification.fields.map((item) => [item.name, item.candidate_ids]), [
+    ['招标项目名称', ['c1']],
+    ['招标项目名称〔第4组〕', ['c4a', 'c4b', 'c5']],
+  ]);
+  assert.deepEqual(conflicts, [{ name: '招标项目名称', renamed: ['招标项目名称〔第4组〕'] }]);
+  const fieldList = buildFieldList(classification, { candidates }, splitTemplateText(''), ITEMS);
+  const merged = applyNamingPlan(classification, { changes: [
+    { from: ['招标项目名称', '招标项目名称〔第4组〕'], name: '招标项目名称', subject: '本招标项目' },
+  ] }, fieldList);
+  assert.deepEqual(merged.errors, []);
+  assert.deepEqual(merged.classification.fields.map((item) => [item.name, item.subject, item.candidate_ids]), [
+    ['招标项目名称', '本招标项目', ['c1', 'c4a', 'c4b', 'c5']],
+  ]);
+  // 只把改名字段改回原名：程序合成同名字段，主体取统稿写明的值，没写时沿用先出现的字段。
+  const renamedBack = applyNamingPlan(classification, { changes: [{ from: ['招标项目名称〔第4组〕'], name: '招标项目名称', subject: '招标项目' }] }, fieldList);
+  assert.deepEqual(renamedBack.errors, []);
+  assert.deepEqual(renamedBack.classification.fields.map((item) => [item.name, item.subject, item.candidate_ids]), [
+    ['招标项目名称', '招标项目', ['c1', 'c4a', 'c4b', 'c5']],
+  ]);
+  assert.equal(applyNamingPlan(classification, { changes: [{ from: ['招标项目名称〔第4组〕'], name: '招标项目名称' }] }, fieldList)
+    .classification.fields[0].subject, '本项目');
+  assert.match(applyNamingPlan(classification, { changes: [] }, fieldList).errors.join(), /仍带组号，必须处理：招标项目名称〔第4组〕/);
 });
 
 test('统稿清单：合成、改名、省略时沿用原写法，以及各类不能执行的情况', () => {
@@ -219,7 +255,15 @@ test('统稿清单：合成、改名、省略时沿用原写法，以及各类�
   assert.match(failures([]), /仍带组号，必须处理：投标人名称〔第2组〕/);
   assert.match(failures([{ from: ['不存在'], name: 'x' }]), /清单中没有字段“不存在”/);
   assert.match(failures([{ from: ['供应商名称'], name: 'a' }, { from: ['供应商名称'], name: 'b' }]), /在多项中出现/);
-  assert.match(failures([{ from: ['供应商名称'], name: '投标人名称' }]), /有 2 个字段都叫“投标人名称”/);
+  // 改成已有字段的名称即合成到该字段；填写方式不同时须写在同一项并写明 fill_by。
+  const renamedInto = applyNamingPlan(classification, { changes: [
+    { from: ['供应商名称'], name: '投标人名称' },
+    { from: ['投标人名称〔第2组〕'], name: '承诺人名称' },
+  ] }, fieldList);
+  assert.deepEqual(renamedInto.errors, []);
+  assert.deepEqual(renamedInto.classification.fields[0], { name: '投标人名称', subject: '投标人', fill_by: 'ai', instruction: '填写全称', candidate_ids: ['c1', 'c2'] });
+  assert.match(failures([{ from: ['投标代表人姓名'], name: '投标人代表签字' }, { from: ['投标人名称〔第2组〕'], name: '承诺人名称' }]), /都叫“投标人代表签字”，但填写方式不同/);
+  assert.match(failures([{ from: ['供应商名称'], name: '营业执照' }, { from: ['投标人名称〔第2组〕'], name: '承诺人名称' }]), /都叫“营业执照”，但类型或附件拆分不同/);
   assert.match(failures([{ from: ['投标代表人姓名', '投标人代表签字'], name: '投标人代表' }]), /填写方式不同，请写明 fill_by/);
   assert.match(failures([{ from: ['投标代表人姓名'], name: '投标人代表姓名', fill_by: 'auto' }]), /fill_by 只能是/);
   assert.match(failures([{ from: ['供应商名称', '营业执照'], name: '供应商材料' }]), /类型不同，不能合成/);

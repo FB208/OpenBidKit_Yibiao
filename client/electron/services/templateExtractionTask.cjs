@@ -197,8 +197,9 @@ ${candidateJson}`;
  * 各组已审阅本组章节的补充位置、去掉的原文、标题段和条目，统稿只处理字段命名。
  */
 function createNamingPrompt({ groupCount, chapterCount, fieldListJson, conflicts, templateText }) {
-  const conflictText = conflicts.length
-    ? `\n以下字段名在不同分组中的类型、主体、填写方式、说明或附件拆分不同，程序已把后出现的改名为“原名〔第N组〕”，必须逐项处理（是同一信息就合成一项，不是就改用能区分的名称，不得保留“〔第N组〕”）：\n${conflicts.map((item) => `- ${item.name}：${item.renamed.join('、')}`).join('\n')}\n`
+  const hasConflicts = conflicts.length > 0;
+  const conflictText = hasConflicts
+    ? `\n以下字段名在不同分组中的类型、主体、填写方式、说明或附件拆分不同，程序已把后出现的改名为“原名〔第N组〕”。每个带“〔第N组〕”的字段都必须写进统稿清单，处理后不得保留组号：与原名字段是同一信息的，改回原名（程序会把同名字段合成一个），需要统一主体或说明时一并写出；不是同一信息的，改用能区分的名称。结合模版正文的原句判断，仍拿不准就不合成，改用能区分的名称：\n${conflicts.map((item) => `- ${item.name}：${item.renamed.join('、')}`).join('\n')}\n`
     : '';
   return `任务：统一投标模版字段的跨章命名。模版共 ${chapterCount} 章，已按章节分成 ${groupCount} 组分别分类，各组看不到彼此的命名。下面是程序合并后的字段清单，每行一个字段，含名称、主体、填写方式、说明、类型、所在章节、位置数和原句。你只输出一份统稿清单，由程序据此修改分类并写入 Word；不生成任何字段值。
 
@@ -209,14 +210,14 @@ function createNamingPrompt({ groupCount, chapterCount, fieldListJson, conflicts
    - 同一主体的同一属性全文使用同一个字段；属性相同但主体不同时，name 必须能够区分；不同语义不得仅因标签相似而合并。
    - 同一字段各位置的类型（文本、勾选项、择一、附件）必须一致；同一落款日期全文同名。
 ${conflictText}
-要做的：按命名标准找出跨章的不一致——同一主体同一属性却用了不同名称或不同主体称谓（如同一投标人一处叫“投标人”一处叫“供应商”）、不同信息却合成了一个字段，以及上面列出的冲突。拿不准是不是同一信息时，结合末尾模版正文中的原句判断，仍拿不准就保持原样。
+要做的：按命名标准找出跨章的不一致——同一主体同一属性却用了不同名称或不同主体称谓（如同一投标人一处叫“投标人”一处叫“供应商”）、不同信息却合成了一个字段${hasConflicts ? '，以及上面列出的冲突' : ''}。${hasConflicts ? '其他字段' : ''}拿不准是不是同一信息时，结合末尾模版正文中的原句判断，仍拿不准就保持原样、不写进清单${hasConflicts ? '；上面列出的冲突不能保持原样' : ''}。
 
 输出：只输出一个 JSON 对象，不要其他文字：
 {"changes":[{"from":["清单中的字段名"],"name":"处理后的名称","subject":"处理后的主体","fill_by":"ai","instruction":"处理后的说明"}]}
    - 每项把 from 中的字段合成一个字段；from 只有一个名称时就是改名或改主体、填写方式、说明。from 照抄清单中的字段名，每个字段名最多出现在一项中。
    - name 必填；subject、fill_by、instruction 省略时沿用原字段的写法（合成时取第一个有值的），需要改时写出处理后的取值。
-   - 不需要改的字段不要写。处理后的字段名在全部字段中唯一，不能与没有改动的字段重名。
-   - 类型不同或附件拆分（parts）不同的字段不要合成。
+   - 不需要改的字段不要写。处理后同名的字段由程序合成为一个字段，所以只有同一信息才能用同一名称，不同信息的名称必须能区分；填写方式不同的字段要合成时，写在同一项的 from 中并写明 fill_by。
+   - 类型不同或附件拆分（parts）不同的字段不要合成，也不要改成同一名称。
 
 字段清单：
 ${fieldListJson}
@@ -347,15 +348,15 @@ function fieldIdentity(field, kind) {
 }
 
 /**
- * 合并各组分类：补充位置 id 加组前缀；同名字段在类型、主体、填写方式、说明和附件拆分都相同时合成一项，
- * 不同时把后出现的改名为“原名〔第N组〕”并列为冲突，由统稿处理。各组已按本组校验，组内同一字段各位置类型一致，
+ * 合并各组分类：补充位置 id 加组前缀；同名字段与已有某种写法的类型、主体、填写方式、说明和附件拆分都相同时
+ * 并入该写法（不论来自哪一组，组内按章各写的同名同属性多项也在此合成），都不同时把后出现的改名为“原名〔第N组〕”
+ * 并列为冲突，由统稿处理；改名保证合并后字段名不重复。各组已按本组校验，组内同一字段各位置类型一致，
  * 字段类型取第一个位置。
  */
 function mergeGroupClassifications(fragments, candidateData) {
   const candidates = new Map(candidateData.candidates.map((item) => [item.candidate_id, item]));
   const fields = [];
-  const byName = new Map();
-  const kinds = new Map();
+  const variants = new Map();
   const conflicts = new Map();
   const merged = { fields, ignored_candidate_ids: [], positions: [], removals: [], headings: [], repeats: [] };
   for (const { index, classification } of fragments) {
@@ -371,21 +372,24 @@ function mergeGroupClassifications(fragments, candidateData) {
       const next = { ...field, candidate_ids: field.candidate_ids.map(mapId) };
       const [firstId] = field.candidate_ids;
       const identity = fieldIdentity(next, locationKind(candidates.get(firstId), groupPositions.get(firstId)));
-      const existing = byName.get(next.name);
-      if (!existing) {
-        byName.set(next.name, next);
-        kinds.set(next.name, identity);
-        fields.push(next);
-      } else if (kinds.get(next.name) === identity) {
-        existing.candidate_ids.push(...next.candidate_ids);
-      } else {
-        const renamed = `${next.name}〔第${index}组〕`;
-        if (!conflicts.has(field.name)) conflicts.set(field.name, []);
-        conflicts.get(field.name).push(renamed);
-        byName.set(renamed, { ...next, name: renamed });
-        kinds.set(renamed, identity);
-        fields.push(byName.get(renamed));
+      if (!variants.has(field.name)) variants.set(field.name, []);
+      const list = variants.get(field.name);
+      const same = list.find((item) => item.identity === identity);
+      if (same) {
+        same.field.candidate_ids.push(...next.candidate_ids);
+        continue;
       }
+      let name = field.name;
+      if (list.length) {
+        const taken = new Set(list.map((item) => item.field.name));
+        name = `${field.name}〔第${index}组〕`;
+        for (let n = 2; taken.has(name); n += 1) name = `${field.name}〔第${index}组之${n}〕`;
+        if (!conflicts.has(field.name)) conflicts.set(field.name, []);
+        conflicts.get(field.name).push(name);
+      }
+      const entry = { ...next, name };
+      list.push({ identity, field: entry });
+      fields.push(entry);
     }
   }
   return {
@@ -429,8 +433,9 @@ function buildFieldList(classification, candidateData, textParts, items) {
 const FILL_BY_VALUES = new Set(['ai', 'manual', 'rule']);
 
 /**
- * 按统稿清单修改合并后的分类：from 中的字段依次并到第一个字段，再写入处理后的名称、主体、填写方式和说明。
- * 只检查能否执行（字段存在、不重复引用、处理后不重名、没有残留组号、合成的类型和附件拆分一致、取值有效），
+ * 按统稿清单修改合并后的分类：from 中的字段依次并到第一个字段，再写入处理后的名称、主体、填写方式和说明；
+ * 处理后同名的字段由程序合成，主体和说明取统稿写明的值，没写时沿用先出现的字段。
+ * 只检查能否执行（字段存在、不重复引用、没有残留组号、合成的类型、附件拆分和填写方式一致、取值有效），
  * 是不是同一信息由模型判断。
  */
 function applyNamingPlan(classification, plan, fieldList) {
@@ -441,6 +446,8 @@ function applyNamingPlan(classification, plan, fieldList) {
   const kinds = new Map(fieldList.map((item) => [item.name, item.kind]));
   const fields = classification.fields.map((item) => ({ ...item, candidate_ids: [...item.candidate_ids] }));
   const byName = new Map(fields.map((item) => [item.name, item]));
+  const kindOf = new Map(fields.map((item) => [item, kinds.get(item.name)]));
+  const written = new Map();
   const referenced = new Set();
   const removed = new Set();
   plan.changes.forEach((change, index) => {
@@ -457,7 +464,7 @@ function applyNamingPlan(classification, plan, fieldList) {
       referenced.add(item);
     }
     if (!sources.length || !name) return;
-    if (new Set(sources.map((item) => kinds.get(item.name))).size > 1) {
+    if (new Set(sources.map((item) => kindOf.get(item))).size > 1) {
       errors.push(`${label}：${from.join('、')} 的类型不同，不能合成`);
     }
     if (new Set(sources.map((item) => JSON.stringify(item.parts || null))).size > 1) {
@@ -481,15 +488,38 @@ function applyNamingPlan(classification, plan, fieldList) {
     const instruction = pick('instruction');
     if (instruction) target.instruction = instruction;
     else delete target.instruction;
+    written.set(target, { subject: change.subject !== undefined, instruction: change.instruction !== undefined });
   });
-  const next = fields.filter((item) => !removed.has(item));
-  const counts = new Map();
-  for (const item of next) counts.set(item.name, (counts.get(item.name) || 0) + 1);
-  for (const [name, count] of counts) {
-    if (count > 1) errors.push(`处理后有 ${count} 个字段都叫“${name}”，同一信息写在一项的 from 中合成，不同信息改用能区分的名称`);
+  // 处理后同名即同一字段（命名标准下名称唯一确定应填写的信息），由程序合成；类型、附件拆分或填写方式不同则不能合成。
+  const next = [];
+  const byFinalName = new Map();
+  const reported = new Set();
+  for (const item of fields) {
+    if (removed.has(item)) continue;
+    const same = byFinalName.get(item.name);
+    if (!same) {
+      byFinalName.set(item.name, item);
+      next.push(item);
+      continue;
+    }
+    const mismatch = kindOf.get(same) !== kindOf.get(item) || JSON.stringify(same.parts || null) !== JSON.stringify(item.parts || null)
+      ? '类型或附件拆分不同，不能合成，请改用能区分的名称'
+      : same.fill_by !== item.fill_by ? '填写方式不同，请写在同一项的 from 中并写明 fill_by' : '';
+    if (mismatch) {
+      if (!reported.has(item.name)) errors.push(`处理后有多个字段都叫“${item.name}”，但${mismatch}`);
+      reported.add(item.name);
+      next.push(item);
+      continue;
+    }
+    same.candidate_ids.push(...item.candidate_ids);
+    for (const key of ['subject', 'instruction']) {
+      if (!written.get(item)?.[key] || written.get(same)?.[key]) continue;
+      if (item[key]) same[key] = item[key];
+      else if (key === 'instruction') delete same.instruction;
+    }
   }
-  const grouped = next.filter((item) => /〔第\d+组〕$/.test(item.name)).map((item) => item.name);
-  if (grouped.length) errors.push(`这些字段仍带组号，必须处理：${grouped.join('、')}`);
+  const grouped = next.filter((item) => /〔第\d+组(之\d+)?〕$/.test(item.name)).map((item) => item.name);
+  if (grouped.length) errors.push(`这些字段仍带组号，必须处理：${[...new Set(grouped)].join('、')}`);
   return { classification: { ...classification, fields: next }, errors };
 }
 
@@ -679,7 +709,8 @@ async function runGroupAgent({ agentService, workspaceStore, openXmlHelperServic
 }
 
 /**
- * 多组时的统稿：一次请求得到统稿清单，程序按清单修改合并后的分类；清单不能执行时把错误交回模型修正一次。
+ * 多组时的统稿：一次请求得到统稿清单，程序按清单修改合并后的分类；清单不能执行时把错误交回模型修正一次，
+ * 仍不能执行时重新请求一轮（同样带一次修正）。
  */
 async function runNamingStep({ aiService, classification, fieldList, conflicts, groupCount, chapterCount, templateText, signal }) {
   const prompt = createNamingPrompt({
@@ -696,7 +727,7 @@ async function runNamingStep({ aiService, classification, fieldList, conflicts, 
     logTitle: '投标模版统稿',
     progressLabel: '投标模版统稿',
     failureMessage: '统一投标模版跨章字段命名失败',
-    max_retries: 0,
+    max_retries: 1,
     signal,
     validator(plan) {
       const result = applyNamingPlan(classification, plan, fieldList);

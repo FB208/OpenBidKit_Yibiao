@@ -159,6 +159,18 @@ export interface BackgroundTaskState {
       };
     };
     outline_selection?: OutlineSelectionState;
+    /** 目录生成时并行的投标模版提取；status=error 时目录已保存，模版需在“下一步”时重新提取。 */
+    template_agent?: {
+      task_key: string;
+      run_id: string;
+      status: 'running' | 'success' | 'skipped' | 'error' | 'interrupted' | string;
+      phase?: string;
+      agent_connection?: 'idle' | 'running';
+      field_count?: number;
+      error?: string;
+      session_id?: string;
+      session_file?: string;
+    };
     outline?: {
       phase: 'generating' | 'reviewing' | 'word-adjusting' | 'second-review' | 'done';
       current_leaf_count: number;

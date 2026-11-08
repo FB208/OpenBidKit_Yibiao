@@ -253,6 +253,7 @@ function OutlineEditPage({
   const logListRef = useRef<HTMLDivElement | null>(null);
   const shownTaskErrorIdRef = useRef<string | null>(null);
   const runningExtractionIdRef = useRef<string | null>(null);
+  const runningOutlineIdRef = useRef<string | null>(null);
   const { showToast } = useToast();
   const activeOutlineData = sorting ? draftOutlineData : outlineData;
   const selectedItem = activeOutlineData && selectedItemId ? findOutlineItem(activeOutlineData.outline, selectedItemId) : null;
@@ -338,6 +339,22 @@ function OutlineEditPage({
     shownTaskErrorIdRef.current = task.task_id;
     showToast(task.error || '目录生成失败，请调整设置后重新生成目录', 'error');
   }, [showToast, task?.error, task?.status, task?.task_id]);
+
+  // 目录生成成功但并行的投标模版提取失败时提示一次；只提示本页面看到运行过的任务，重新进入页面不重复提示。
+  useEffect(() => {
+    const taskId = task?.task_id;
+    if (!taskId) return;
+    if (task?.status === 'running') {
+      runningOutlineIdRef.current = taskId;
+      return;
+    }
+    if (runningOutlineIdRef.current !== taskId) return;
+    runningOutlineIdRef.current = null;
+    const templateAgent = task?.stats?.template_agent;
+    if (task?.status === 'success' && templateAgent?.status === 'error') {
+      showToast(`目录已生成，但投标模版提取失败：${templateAgent.error || '未知原因'}。请点击“下一步”重新提取投标模版`, 'error');
+    }
+  }, [showToast, task?.status, task?.task_id, task?.stats?.template_agent]);
 
   // 只提示本页面看到运行过的提取任务结果，重新进入页面不重复提示。
   useEffect(() => {
