@@ -276,7 +276,7 @@ function createOpenAICompatibleImageRequestBody(provider, imageConfig, prompt, r
       model,
       prompt,
       size,
-      response_format: 'url',
+      response_format: provider === 'jinlong' ? 'b64_json' : 'url',
       ...(requestMode === 'stream' ? { stream: true } : {}),
     };
   }
