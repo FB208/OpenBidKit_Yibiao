@@ -1,9 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DATASET } from '../worker/src/constants.js';
-import { queryAnalytics } from '../worker/src/services/analyticsQuery.js';
-import { businessDateSqlExpression, formatBusinessDateTime, getBusinessToday, normalizeText, sqlString } from '../worker/src/utils.js';
+import { formatBusinessDateTime, normalizeText } from '../worker/src/utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(__dirname, '.env');
@@ -117,7 +115,6 @@ function readCredentials() {
   return {
     accountId,
     d1ApiToken: readRequiredEnv('CLOUDFLARE_API_TOKEN'),
-    analyticsApiToken: readRequiredEnv('ANALYTICS_API_TOKEN'),
     analyticsDatabaseId: String(process.env.ANALYTICS_DB_ID || '').trim(),
   };
 }
@@ -267,48 +264,8 @@ async function backfillVersionClientCounts(db, updatedAt) {
   console.log(`stats_versions.client_count refreshed. versions=${updated}`);
 }
 
-async function backfillModelTotalTokens(env, updatedAt) {
-  const today = getBusinessToday();
-  const result = await queryAnalytics(env, `
-    SELECT
-      blob12 AS requestType,
-      blob9 AS provider,
-      blob10 AS endpointHost,
-      blob11 AS model,
-      SUM(double4 * _sample_interval) AS totalTokens
-    FROM ${DATASET}
-    WHERE blob1 = ${sqlString(projectName)}
-      AND blob2 = 'ai_request'
-      AND blob12 IN ('text', 'image')
-      AND blob11 != ''
-      AND ${businessDateSqlExpression()} < ${sqlString(today)}
-    GROUP BY requestType, provider, endpointHost, model
-    LIMIT 100000
-  `);
-
-  let updated = 0;
-  for (const row of result.data || []) {
-    await env.ANALYTICS_DB.prepare(`
-      INSERT INTO stats_models (project_name, request_type, provider, endpoint_host, model, request_count, total_tokens, updated_at)
-      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-      ON CONFLICT(project_name, request_type, provider, endpoint_host, model) DO UPDATE SET
-        total_tokens = excluded.total_tokens,
-        updated_at = excluded.updated_at
-    `).bind(
-      projectName,
-      normalizeText(row.requestType, 20),
-      normalizeText(row.provider, 80),
-      normalizeText(row.endpointHost, 120),
-      normalizeText(row.model, 160),
-      number(row.totalTokens),
-      updatedAt,
-    ).run();
-    updated += 1;
-  }
-
-  console.log(`stats_models.total_tokens backfilled. models=${updated}, before=${today}`);
-}
-
+// stats_models.total_tokens 的 AE 窗口绝对回填已移除：该写法语义会让 AE 三个月过期后的历史 Token 缩水，
+// total_tokens 现由 models stage 逐日增量累加维护，无需再一次性回填。
 async function main() {
   if (process.argv.length > 2) {
     throw new Error('This script does not accept arguments. Configure analytics/scripts/.env and run npm run backfill:analytics-stat-fields.');
@@ -323,8 +280,6 @@ async function main() {
     credentials.analyticsDatabaseId,
   );
   const env = {
-    ACCOUNT_ID: credentials.accountId,
-    ANALYTICS_API_TOKEN: credentials.analyticsApiToken,
     ANALYTICS_DB: new RemoteD1Database({
       accountId: credentials.accountId,
       databaseId: analyticsDatabaseId,
@@ -340,7 +295,6 @@ async function main() {
   const updatedAt = formatBusinessDateTime(new Date());
   await ensureColumns(env.ANALYTICS_DB);
   await backfillVersionClientCounts(env.ANALYTICS_DB, updatedAt);
-  await backfillModelTotalTokens(env, updatedAt);
   console.log('Field backfill finished.');
 }
 

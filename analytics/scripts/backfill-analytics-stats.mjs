@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { ALLOWED_EVENTS, DATASET } from '../worker/src/constants.js';
 import { queryAnalytics } from '../worker/src/services/analyticsQuery.js';
 import { backfillClientActivityWindow, rebuildRetentionSnapshot, rollupStatsDay } from '../worker/src/services/analyticsStatsStore.js';
-import { listAdminResources } from '../worker/src/services/resourceStore.js';
 import { addBusinessDateDays, businessDateSqlExpression, getBusinessToday, sqlString } from '../worker/src/utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -345,38 +344,9 @@ async function backfillOne(env, activityDate) {
   }
 
   console.log(`[run] ${activityDate}`);
-  const result = await rollupStatsDay(env, projectName, activityDate, { updateResources: false });
+  const result = await rollupStatsDay(env, projectName, activityDate);
   console.log(result.skipped ? `[skip] ${activityDate}` : `[done] ${activityDate}`);
   return result.skipped ? 'skipped' : 'completed';
-}
-
-async function backfillResourceClickTotals(env) {
-  const resources = await listAdminResources(env, { origin: '' });
-  if (!resources.length) {
-    console.log('Resource click totals skipped: no resources found.');
-    return;
-  }
-
-  const today = getBusinessToday();
-  const result = await queryAnalytics(env, `
-    SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
-    FROM ${DATASET}
-    WHERE blob1 = ${sqlString(projectName)}
-      AND blob2 = 'resource_click'
-      AND blob9 != ''
-      AND ${businessDateSqlExpression()} < ${sqlString(today)}
-    GROUP BY resourceKey
-    LIMIT 100000
-  `);
-  const countByKey = new Map((result.data || []).map((row) => [String(row.resourceKey || ''), Number(row.clickCount || 0)]));
-  let updated = 0;
-  for (const resource of resources) {
-    const clickCount = Math.max(0, Math.floor(countByKey.get(resource.analyticsKey) || 0));
-    await env.RESOURCE_DB.prepare('UPDATE resources SET click_count = ? WHERE id = ?').bind(clickCount, resource.id).run();
-    updated += 1;
-  }
-
-  console.log(`Resource click totals set from historical AE data. resources=${updated}, before=${today}`);
 }
 
 async function main() {
@@ -445,8 +415,6 @@ async function main() {
     console.log(`[retention] ${activityDate}`);
     summary[status] += 1;
   }
-
-  await backfillResourceClickTotals(env);
 
   console.log(`Backfill finished. completed=${summary.completed}, skipped=${summary.skipped}`);
 }

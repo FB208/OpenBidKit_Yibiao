@@ -66,7 +66,7 @@
 | `GET /system-settings` | R2 | 无 | 返回客户端当前加群二维码地址；未配置时返回空地址 |
 | `POST /api/system-settings` | R2 | `ADMIN_TOKEN` | 覆盖上传当前加群二维码 |
 | `GET /ads` | R2 | 无 | 客户端侧边栏启用广告列表（图片 + 跳转链接），按排序返回 |
-| `GET/POST/DELETE /api/ads` | R2 | `ADMIN_TOKEN` | 侧边栏广告管理；每条含图片、跳转链接、启停和排序 |
+| `GET/POST/DELETE /api/ads` | R2 + AE | `ADMIN_TOKEN` | 侧边栏广告管理；每条含图片、跳转链接、启停、排序和点击量（累计 + AE 今天） |
 | `GET /plugins` | `RESOURCE_DB` + R2 | 无 | 插件市场列表，当前版作为升级目标，同时返回保留的上一版信息和地址 |
 | `POST /plugins/download` | `RESOURCE_DB` | 无 | 累计插件成功下载次数 |
 | `GET/POST/DELETE /api/plugins` | `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 插件管理；新增、更新和删除会同步维护 R2 安装包 |
@@ -93,7 +93,8 @@
 | 每日统计 | 今天读 AE，前 9 天读 D1 |
 | 最近事件 | 只读 AE，不入 D1 |
 | 留存 | Cron 写入 `stats_client_activity` 和固定 30 天 `stats_retention`，页面只读 D1 最新快照，忽略当天数据 |
-| 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计，页面查询时加上 AE 今天点击量 |
+| 资源点击量 | `RESOURCE_DB.resources.click_count` 保存历史累计（每日 Cron 按 AE 昨日增量累加），页面查询时加上 AE 今天点击量 |
+| 广告点击量 | R2 广告对象 `click_count` 元数据保存历史累计（每日 Cron 按 AE 昨日增量累加），管理接口返回时加上 AE 今天点击量；公开 `/ads` 不返回统计 |
 | 版本客户端数 | D1 历史来自 `stats_clients.last_active_version` 当前分组重算；今天/7天/30天来自 AE 去重客户端数 |
 | 模型 Total Tokens | `ai_request` 的 `double4` 按 `_sample_interval` 聚合，历史写入 `stats_models.total_tokens` |
 | 模型每日统计 | Cron models stage 按天写 `stats_models_daily` 明细（写完后落完成哨兵行）和 `stats_daily` 的 `text_request_count`/`text_total_tokens`/`image_request_count`/`image_total_tokens`；模型使用 7天/30天 以窗口内最早无哨兵日期为界，之前读每日表、之后读 AE 合并，顶部范围汇总读 `stats_daily` 模型列加同一 AE 尾部；模型趋势同样按哨兵分区读每日表按日聚合 |
@@ -111,6 +112,7 @@
 | `config_usage` | 配置使用 |
 | `ai_request` | 模型使用、AI 请求、Token |
 | `resource_click` | 资源点击 |
+| `ad_click` | 侧边栏广告点击，`blob9` 为广告 id |
 | `agent_runtime` | Agent 执行成功率、失败率、重试率和重试后成功率 |
 
 `config_usage` 使用 `config_key/config_value` 键值对上报，每个配置项一条事件。Worker 从 Cloudflare 真实客户端 IP 请求头读取公网 IP 并写入 `blob13`，客户端不自报 IP；`CF-Pseudo-IPv4` 不参与统计。授权状态写入 `blob14-blob18`，只包含状态、授权类型、有效期日期和可信来源标记，不上传设备原始指纹。`ai_request` 只采集请求类型、服务商、endpoint host、模型名和 token 用量，不采集 API Key、Prompt、响应内容或错误详情。`agent_runtime` 额外接收运行时注册表 ID 和 `agent_runtime_model_retry_count`，新版统计编码到 `blob9=v4|<runtime>|<success|failed>|m<model-retry-count>|<provider>|<host>|<model>`；旧版 v3 的 `r<0-3>` 继续表示结果修复次数并独立汇总，不采集 API Key、任务内容、错误详情、Prompt、输出或本地路径。
@@ -235,7 +237,7 @@ Invoke-RestMethod `
 
 ## 历史回填
 
-新版历史回填脚本会按 Cron 同一套逻辑，把 Analytics Engine 中 `yibiao-client` 在脚本执行当天北京时间之前的所有历史日期汇总到 D1 `stats_*` 表；回填会补齐留存所需的 30 天 `app_open` 活动窗口并生成 `stats_retention` 快照；资源点击量会按历史总量写入 `openbidkit-resources.resources.click_count`，不会按天重复累加。
+新版历史回填脚本会按 Cron 同一套逻辑，把 Analytics Engine 中 `yibiao-client` 在脚本执行当天北京时间之前的所有历史日期汇总到 D1 `stats_*` 表；回填会补齐留存所需的 30 天 `app_open` 活动窗口并生成 `stats_retention` 快照；资源点击量由每个回填日的 resources stage 按当日 AE 增量累加进 `openbidkit-resources.resources.click_count`，stage 标记防止重复回填重复累加。
 
 本地执行前，在 `analytics/scripts/.env` 中配置：
 
@@ -296,7 +298,7 @@ npm run backfill:models-daily
 | 异常状态 | 已存在 `running/failed` 且没有 `stats_daily` 时会清理状态并重试；如果已有 `stats_daily` 会停止，避免重复累加污染 D1 |
 | 临时错误 | AE/D1 对 `429/500/502/503/504` 会自动重试，并打印 HTTP 状态、返回内容和 SQL 片段 |
 | 参数 | 脚本不接受命令行参数；指定单日使用环境变量 `BACKFILL_DATE` |
-| 补字段脚本 | 只补 `stats_versions.client_count` 和 `stats_models.total_tokens`，不回填资源点击量，不重跑每日统计 |
+| 补字段脚本 | 只补 `stats_versions.client_count`，不回填资源点击量，不重跑每日统计；`stats_models.total_tokens` 由 models stage 逐日增量维护 |
 | 模型每日回填 | `backfill:models-daily` 只重写 `stats_models_daily` 和 `stats_daily` 四个模型列的绝对值，不触碰其他汇总表；同样支持 `BACKFILL_DATE` |
 
 ## 排查

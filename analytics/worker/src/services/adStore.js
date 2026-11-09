@@ -54,6 +54,7 @@ export function normalizeAdRow(object, origin = '') {
     imageUrl: imageKey ? buildResourceImageUrl(origin, imageKey) : '',
     enabled: meta.enabled !== '0' && meta.enabled !== 'false',
     sortOrder: normalizeSortOrder(meta.sort_order),
+    clickCount: normalizeClickCount(meta.click_count),
     createdAt: normalizeText(meta.created_at, 40),
     updatedAt: normalizeText(meta.updated_at, 40) || object.uploaded?.toISOString?.() || '',
   };
@@ -140,6 +141,7 @@ export async function upsertAd(env, input, { origin = '' } = {}) {
     sort_order: String(normalizeSortOrder(input.sortOrder ?? input.sort_order)),
     created_at: normalizeText(existing?.customMetadata?.created_at, 40) || now,
     updated_at: now,
+    click_count: normalizeText(existing?.customMetadata?.click_count, 20) || '0',
   };
 
   await bucket.put(key, '', { customMetadata: metadata });
@@ -169,4 +171,36 @@ function normalizeSortOrder(value) {
     return 0;
   }
   return Math.max(-999999, Math.min(999999, Math.trunc(number)));
+}
+
+function normalizeClickCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+// Cron 按昨日增量累加累计点击量；metadata 其余字段原样合并，只覆盖 click_count。
+export async function addAdClickCounts(env, deltaByKey) {
+  const bucket = requireBucket(env);
+  const objects = await listAdObjects(env);
+  let updated = 0;
+  for (const object of objects) {
+    const ad = normalizeAdRow(object);
+    if (!ad) {
+      continue;
+    }
+
+    const clickDelta = normalizeClickCount(deltaByKey?.get?.(ad.id) ?? 0);
+    if (clickDelta === 0) {
+      continue;
+    }
+
+    await bucket.put(object.key, '', {
+      customMetadata: {
+        ...(object.customMetadata || {}),
+        click_count: String(ad.clickCount + clickDelta),
+      },
+    });
+    updated += 1;
+  }
+  return updated;
 }

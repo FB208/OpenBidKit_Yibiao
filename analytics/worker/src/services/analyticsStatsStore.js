@@ -21,6 +21,7 @@ import {
   sqlString,
 } from '../utils.js';
 import { queryAnalytics } from './analyticsQuery.js';
+import { addAdClickCounts, listAdminAds } from './adStore.js';
 import { listBlockedIps } from './ipBlockStore.js';
 import { listAdminResources } from './resourceStore.js';
 
@@ -1640,7 +1641,7 @@ export const ROLLUP_CRON_STAGES = [
   { cron: '30 17 * * *', stages: ['clients'], beijingTime: '01:30', description: '写入客户端生命周期和最后访问信息' },
   { cron: '0 18 * * *', stages: ['pages', 'versions'], beijingTime: '02:00', description: '写入页面访问累计值，写入版本事件量并刷新版本客户端数' },
   { cron: '30 18 * * *', stages: ['configs', 'models', 'agents'], beijingTime: '02:30', description: '写入配置使用、模型请求、Agent 执行和 Total Tokens 累计值' },
-  { cron: '0 19 * * *', stages: ['retention', 'resources'], beijingTime: '03:00', description: '写入留存快照，重算资源历史点击量并完成整日汇总' },
+  { cron: '0 19 * * *', stages: ['retention', 'resources'], beijingTime: '03:00', description: '写入留存快照，累加资源和广告昨日点击量并完成整日汇总' },
 ];
 
 export const OVERVIEW_AI_TOTALS_CRON = '30 18 * * *';
@@ -2836,14 +2837,15 @@ export async function backfillClientActivityWindow(env, projectName, startDate, 
   return { projectName: normalizeProjectName(projectName), startDate, endDate, rows: rows.length };
 }
 
-async function queryHistoricalResourceClickRows(env, activityDate, projectNames) {
+// 只取昨日增量：AE 原始事件三个月过期，窗口总量绝对覆盖会让早期点击持续缩水。
+async function queryDailyResourceClickRows(env, activityDate, projectNames) {
   const result = await queryAnalytics(env, `
     SELECT blob9 AS resourceKey, SUM(_sample_interval) AS clickCount
     FROM ${DATASET}
     WHERE blob1 IN ${projectsSql(projectNames)}
       AND blob2 = 'resource_click'
       AND blob9 != ''
-      AND ${businessDateSqlExpression()} <= ${sqlString(activityDate)}
+      AND ${businessDateCondition(activityDate)}
     GROUP BY resourceKey
     ORDER BY resourceKey ASC
     LIMIT ${MAX_ANALYTICS_ROWS}
@@ -2854,16 +2856,34 @@ async function queryHistoricalResourceClickRows(env, activityDate, projectNames)
   })).filter((row) => row.resourceKey);
 }
 
-function prepareResourceClickSetStatement(db, rows) {
+async function queryDailyAdClickRows(env, activityDate, projectNames) {
+  const result = await queryAnalytics(env, `
+    SELECT blob9 AS adKey, SUM(_sample_interval) AS clickCount
+    FROM ${DATASET}
+    WHERE blob1 IN ${projectsSql(projectNames)}
+      AND blob2 = 'ad_click'
+      AND blob9 != ''
+      AND ${businessDateCondition(activityDate)}
+    GROUP BY adKey
+    ORDER BY adKey ASC
+    LIMIT ${MAX_ANALYTICS_ROWS}
+  `);
+  return (result.data || []).map((row) => ({
+    adKey: normalizeText(row.adKey, 120),
+    clickCount: number(row.clickCount),
+  })).filter((row) => row.adKey);
+}
+
+function prepareResourceClickAddStatement(db, rows) {
   return db.prepare(`
     WITH rows AS (
       SELECT
         json_extract(item.value, '$.id') AS id,
-        CAST(json_extract(item.value, '$.clickCount') AS INTEGER) AS click_count
+        CAST(json_extract(item.value, '$.clickDelta') AS INTEGER) AS click_delta
       FROM json_each(?) AS item
     )
     UPDATE resources
-    SET click_count = COALESCE((SELECT click_count FROM rows WHERE rows.id = resources.id), 0)
+    SET click_count = click_count + COALESCE((SELECT click_delta FROM rows WHERE rows.id = resources.id), 0)
     WHERE id IN (SELECT id FROM rows)
   `).bind(rowsJson(rows));
 }
@@ -2885,14 +2905,22 @@ async function runResourcesStage(env, activityDate, projectNames, completedByPro
 
   const resourceDb = requireResourceDb(env);
   const resources = await listAdminResources(env, { origin: '' });
-  const countByKey = new Map((await queryHistoricalResourceClickRows(env, activityDate, projects))
+  const countByKey = new Map((await queryDailyResourceClickRows(env, activityDate, projects))
     .map((row) => [row.resourceKey, row.clickCount]));
   const rows = resources.map((resource) => ({
     id: resource.id,
-    clickCount: Math.max(0, Math.floor(countByKey.get(resource.analyticsKey) || 0)),
+    clickDelta: Math.max(0, Math.floor(countByKey.get(resource.analyticsKey) || 0)),
   }));
   for (const chunk of chunkRows(rows)) {
-    await prepareResourceClickSetStatement(resourceDb, chunk).run();
+    await prepareResourceClickAddStatement(resourceDb, chunk).run();
+  }
+  if (!env.RESOURCE_BUCKET) {
+    console.warn('[analytics] ad click rollup skipped: RESOURCE_BUCKET is not configured');
+  } else {
+    // 广告点击按昨日增量累加 R2 元数据，口径与资源点击一致；失败抛出让 stage 重试。
+    const adCountByKey = new Map((await queryDailyAdClickRows(env, activityDate, projects))
+      .map((row) => [row.adKey, row.clickCount]));
+    await addAdClickCounts(env, adCountByKey);
   }
   await markProjectsStageSuccess(statsDb, pendingProjects, activityDate, 'resources');
   await markRollupRunsSuccess(statsDb, pendingProjects, activityDate);

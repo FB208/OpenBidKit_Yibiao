@@ -1,8 +1,10 @@
 import {
+  DATASET,
   RESOURCE_ALLOWED_IMAGE_TYPES,
   RESOURCE_IMAGE_MAX_BYTES,
 } from '../constants.js';
 import { json, methodNotAllowed, requireAdmin, unauthorized } from '../http.js';
+import { queryAnalytics } from '../services/analyticsQuery.js';
 import {
   createAdId,
   deleteAd,
@@ -13,7 +15,14 @@ import {
   upsertAd,
 } from '../services/adStore.js';
 import { createResourceImageKey, normalizeImageKey } from '../services/resourceStore.js';
-import { normalizeText } from '../utils.js';
+import {
+  businessDateRangeCondition,
+  getBusinessToday,
+  isValidProjectName,
+  logQueryError,
+  normalizeText,
+  sqlString,
+} from '../utils.js';
 
 const allowedImageTypes = new Set(RESOURCE_ALLOWED_IMAGE_TYPES);
 
@@ -56,10 +65,54 @@ export async function handleAdminAds(request, env, url) {
 async function handleAdminGetAds(env, url) {
   try {
     const ads = await listAdminAds(env, { origin: url.origin });
-    return json({ code: 0, ads }, { headers: { 'Cache-Control': 'no-store' } });
+    const todayClickCounts = await queryTodayAdClickCounts(env, ads, url);
+    const adsWithStats = ads.map((ad) => ({
+      ...ad,
+      clickCount: ad.clickCount + (todayClickCounts.get(ad.id) || 0),
+    }));
+    return json({ code: 0, ads: adsWithStats }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[analytics] admin list ads failed', error?.message || String(error));
     return json({ code: 500, message: error?.message || 'ads query failed' }, { status: 500 });
+  }
+}
+
+// 当日点击量由 Cron 尚未汇总的 AE 实时补齐，与资源点击同一口径；失败降级为只展示累计值。
+async function queryTodayAdClickCounts(env, ads, url) {
+  if (!ads.length || !env.ACCOUNT_ID || !env.ANALYTICS_API_TOKEN) {
+    return new Map();
+  }
+
+  const projectName = normalizeText(url.searchParams.get('projectName') || 'yibiao-client', 80);
+  if (!isValidProjectName(projectName)) {
+    return new Map();
+  }
+
+  const adIds = Array.from(new Set(ads.map((ad) => normalizeText(ad.id, 120)).filter(Boolean)));
+  if (!adIds.length) {
+    return new Map();
+  }
+
+  const today = getBusinessToday();
+  const dateWhere = businessDateRangeCondition(today, today);
+  const sql = `
+    SELECT
+      blob9 AS adKey,
+      SUM(_sample_interval) AS clickCount
+    FROM ${DATASET}
+    WHERE blob1 = ${sqlString(projectName)}
+      AND blob2 = 'ad_click'
+      AND blob9 IN (${adIds.map((id) => sqlString(id)).join(', ')})
+      AND ${dateWhere}
+    GROUP BY adKey
+  `;
+
+  try {
+    const result = await queryAnalytics(env, sql);
+    return new Map((result.data || []).map((row) => [row.adKey, Number(row.clickCount || 0)]));
+  } catch (error) {
+    logQueryError('ad clicks', error);
+    return new Map();
   }
 }
 

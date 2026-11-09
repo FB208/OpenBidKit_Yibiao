@@ -1,5 +1,5 @@
 import { assertAdminToken, requestFormData, requestJson, saveSettings } from '../api.js';
-import { escapeHtml } from '../render.js';
+import { escapeHtml, formatNumber } from '../render.js';
 import { appState, state } from '../state.js';
 
 function setAdsStatus(message, type = '') {
@@ -44,6 +44,7 @@ function renderAdsTable() {
       <td class="resource-image-cell">${renderAdImage(ad)}</td>
       <td class="resource-title-cell"><strong>${escapeHtml(truncate(ad.linkUrl, 70) || '-')}</strong><br /><small>${escapeHtml(ad.enabled ? '启用' : '停用')} · 排序 ${escapeHtml(ad.sortOrder)}</small></td>
       <td>${escapeHtml(ad.updatedAt || '-')}</td>
+      <td>${escapeHtml(formatNumber(ad.clickCount))}</td>
       <td class="resource-row-actions">
         <button type="button" class="secondary-button" data-ad-action="edit" data-ad-id="${escapeHtml(ad.id)}">编辑</button>
         <button type="button" class="danger-button" data-ad-action="delete" data-ad-id="${escapeHtml(ad.id)}">删除</button>
@@ -58,6 +59,7 @@ function renderAdsTable() {
           <th>图片</th>
           <th>跳转链接</th>
           <th>更新时间</th>
+          <th>点击量</th>
           <th>操作</th>
         </tr>
       </thead>
