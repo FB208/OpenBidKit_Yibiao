@@ -309,9 +309,13 @@ function KnowledgeBasePage() {
   const [analysisSnapshot, setAnalysisSnapshot] = useState<KnowledgeAnalysisSnapshot | null>(null);
   const [startingMatching, setStartingMatching] = useState(false);
   const [developerMode, setDeveloperMode] = useState(false);
-  const [showCreateFolder, setShowCreateFolder] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderNameForm, setFolderNameForm] = useState<
+    | { mode: 'create' }
+    | { mode: 'rename'; folderId: string; currentName: string }
+    | null
+  >(null);
+  const [folderNameInput, setFolderNameInput] = useState('');
+  const [savingFolderName, setSavingFolderName] = useState(false);
   const [retryingDocumentIds, setRetryingDocumentIds] = useState<Set<string>>(() => new Set());
   const [visibleDocumentCount, setVisibleDocumentCount] = useState(documentRenderBatchSize);
   const [dragPayload, setDragPayload] = useState<KnowledgeDragPayload | null>(null);
@@ -626,26 +630,57 @@ function KnowledgeBasePage() {
   };
 
 
-  const createFolder = async () => {
-    const name = newFolderName.trim();
+  const openCreateFolderForm = () => {
+    setFolderNameForm({ mode: 'create' });
+    setFolderNameInput('');
+  };
+
+  const openRenameFolderForm = (folderId: string, currentName: string) => {
+    setFolderNameForm({ mode: 'rename', folderId, currentName });
+    setFolderNameInput(currentName);
+  };
+
+  const closeFolderNameForm = () => {
+    setFolderNameForm(null);
+    setFolderNameInput('');
+  };
+
+  const submitFolderNameForm = async () => {
+    const name = folderNameInput.trim();
     if (!name) {
       showToast('请输入文件夹名称', 'info');
       return;
     }
+    if (folderNameForm?.mode === 'rename' && name === folderNameForm.currentName) {
+      closeFolderNameForm();
+      return;
+    }
 
     try {
-      setCreatingFolder(true);
-      const folder = await window.yibiao?.knowledgeBase.createFolder(name.trim());
-      if (!folder) return;
-      setIndex((prev) => ({ ...prev, folders: [...prev.folders, folder] }));
-      setActiveFolderId(folder.id);
-      setNewFolderName('');
-      setShowCreateFolder(false);
-      showToast('文件夹已创建', 'success');
+      setSavingFolderName(true);
+      if (folderNameForm?.mode === 'rename') {
+        const folder = await window.yibiao?.knowledgeBase.renameFolder(folderNameForm.folderId, name);
+        if (!folder) return;
+        setIndex((prev) => ({
+          ...prev,
+          folders: prev.folders.map((item) => (item.id === folder.id ? folder : item)),
+        }));
+        showToast('文件夹已重命名', 'success');
+      } else {
+        const folder = await window.yibiao?.knowledgeBase.createFolder(name);
+        if (!folder) return;
+        setIndex((prev) => ({ ...prev, folders: [...prev.folders, folder] }));
+        setActiveFolderId(folder.id);
+        showToast('文件夹已创建', 'success');
+      }
+      closeFolderNameForm();
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '创建文件夹失败', 'error');
+      showToast(
+        error instanceof Error ? error.message : folderNameForm?.mode === 'rename' ? '重命名文件夹失败' : '创建文件夹失败',
+        'error',
+      );
     } finally {
-      setCreatingFolder(false);
+      setSavingFolderName(false);
     }
   };
 
@@ -680,23 +715,6 @@ function KnowledgeBasePage() {
       showToast(message, 'error');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const renameFolder = async (folderId: string, currentName: string) => {
-    const name = window.prompt('请输入新的文件夹名称', currentName)?.trim();
-    if (!name || name === currentName) return;
-
-    try {
-      const folder = await window.yibiao?.knowledgeBase.renameFolder(folderId, name);
-      if (!folder) return;
-      setIndex((prev) => ({
-        ...prev,
-        folders: prev.folders.map((item) => (item.id === folder.id ? folder : item)),
-      }));
-      showToast('文件夹已重命名', 'success');
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '重命名文件夹失败', 'error');
     }
   };
 
@@ -954,7 +972,7 @@ function KnowledgeBasePage() {
           <small>{index.folders.length} 个文件夹 / {index.documents.length} 个文档</small>
         </div>
         <div className="knowledge-toolbar-actions">
-          <button type="button" className="secondary-action" onClick={() => setShowCreateFolder((value) => !value)} disabled={listLoading}>新建文件夹</button>
+          <button type="button" className="secondary-action" onClick={() => (folderNameForm ? closeFolderNameForm() : openCreateFolderForm())} disabled={listLoading}>新建文件夹</button>
           <button type="button" className="primary-action" onClick={uploadDocuments} disabled={loading || !activeFolder}>
             {loading ? '处理中...' : '上传文档'}
           </button>
@@ -983,29 +1001,24 @@ function KnowledgeBasePage() {
         </div>
       </form>
 
-      {showCreateFolder && (
+      {folderNameForm && (
         <form
           className="knowledge-create-folder-bar"
           onSubmit={(event) => {
             event.preventDefault();
-            void createFolder();
+            void submitFolderNameForm();
           }}
         >
           <input
             autoFocus
-            value={newFolderName}
-            onChange={(event) => setNewFolderName(event.target.value)}
+            value={folderNameInput}
+            onChange={(event) => setFolderNameInput(event.target.value)}
             placeholder="输入文件夹名称"
           />
-          <button type="submit" className="primary-action" disabled={creatingFolder}>{creatingFolder ? '创建中...' : '创建'}</button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => {
-              setNewFolderName('');
-              setShowCreateFolder(false);
-            }}
-          >
+          <button type="submit" className="primary-action" disabled={savingFolderName}>
+            {folderNameForm.mode === 'rename' ? (savingFolderName ? '保存中...' : '保存') : (savingFolderName ? '创建中...' : '创建')}
+          </button>
+          <button type="button" className="secondary-action" onClick={closeFolderNameForm}>
             取消
           </button>
         </form>
@@ -1062,7 +1075,7 @@ function KnowledgeBasePage() {
                       </button>
                     </div>
                     <div className="knowledge-folder-actions">
-                      <button type="button" onClick={() => void renameFolder(folder.id, folder.name)}>重命名</button>
+                      <button type="button" onClick={() => openRenameFolderForm(folder.id, folder.name)}>重命名</button>
                       <button type="button" className="is-danger" onClick={() => void deleteFolder(folder.id, folder.name)}>删除</button>
                     </div>
                   </article>
@@ -1073,7 +1086,7 @@ function KnowledgeBasePage() {
             <div className="knowledge-empty-box">
               <strong>还没有文件夹</strong>
               <p>先创建一个文件夹，再上传历史资料。</p>
-              <button type="button" className="primary-action" onClick={() => setShowCreateFolder(true)}>新建文件夹</button>
+              <button type="button" className="primary-action" onClick={openCreateFolderForm}>新建文件夹</button>
             </div>
           )}
         </aside>
