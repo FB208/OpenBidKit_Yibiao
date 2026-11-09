@@ -16,7 +16,7 @@ const { TASK_FILE_WRITING, taskFilePath, taskFileSchemas, readTaskFile, writeLis
 const { SUBMISSION_FIX_TOOL, SUBMISSION_FIX_PARALLEL_THRESHOLD, imageStructure, createContentImageProtection, createSubmissionFixTool } = require('./contentGenerationEditTools.cjs');
 const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
-const { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
+const { CONSISTENCY_TOOLS, CONSISTENCY_UNSUBMITTED_LIMIT, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, assertConsistencyCompletion, buildConsistencyReminder, finalizeConsistencyAudit, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
 const { TABLE_CLEANUP_TOOL, TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
 const { LAYOUT_TOOL, LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools } = require('./contentGenerationLayoutTools.cjs');
 
@@ -682,7 +682,13 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     return `请用简体中文总结，供下一阶段「${nextStageName}」继续使用。保留：本轮目标小节范围及正文、图片文件的位置约定；各阶段已完成情况和程序反馈的结论；已确定的统一事实口径；尚未解决的问题、失败或待重试的小节及原因。正文、图片和台账以工作区文件为准，不在摘要中摘录正文、HTML 或台账原文，也不复述已结束阶段的操作细节。`;
   }
   const consistencyPrompt = workspaceDir => buildConsistencyPrompt(consistencyState, { hasKnowledgeBase, workspaceDir });
-  const createAuditState = () => ({ status: 'extracting', extract_completed: 0, extract_total: 0, remaining_issues: [], failed_sections: [], summary: '', submission: null });
+  const createAuditState = () => ({ status: 'extracting', extract_completed: 0, extract_total: 0, remaining_issues: [], failed_sections: [], summary: '', submission: null, unsubmitted_rounds: 0 });
+  // 比对修复中发给 Agent 的提示都指明提交动作；连续未提交达到上限时由程序复核后收尾。
+  const auditRunning = () => stage === 'auditing' && consistencyState?.status === 'running';
+  const consistencyReminder = (workspaceDir, finalWarning = false) => buildConsistencyReminder(consistencyState, { workspaceDir, finalWarning });
+  const finalizeAudit = (context, acceptedMessages, rounds) => finalizeConsistencyAudit({ aiService, workspaceDir: context.workspace_dir,
+    signal: context.signal || signal, onActivity: context.onActivity || onActivity, consistency,
+    protectLedger: () => protectLedger(context.baseline, context.workspace_dir), acceptedMessages, rounds });
   // 小节并发核对是程序步骤：核对阶段按正文哈希复用未变化小节的结果；比对修复中恢复时只补缺失小节，不因修复改动重新核对。
   // 个别小节核对失败不中断审计，失败原因写入台账，由主 Agent 重新核对或自行核对。
   async function extractLedger(context) {
@@ -764,15 +770,16 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     ...(!resuming ? { word_adjustment_started: false, word_adjust: null, consistency: null, table_cleanup: null, layout_check: null } : {}),
     ...(!resuming && !continuingPlanning ? { prompted_stage: null, compaction_pending: null } : {}),
   });
-  // 审计恢复先补齐小节核对，核对失败的小节随台账交给主 Agent。
-  if (stage === 'auditing' && consistencyState.status !== 'completed') await extractLedger(localContext);
+  // 审计恢复先补齐小节核对，核对失败的小节随台账交给主 Agent；程序收尾中断时先重做收尾，随后按审计已结束续接。
+  if (stage === 'auditing' && consistencyState.program_finalizing) await finalizeAudit(localContext, [], consistencyState.unsubmitted_rounds);
+  else if (stage === 'auditing' && consistencyState.status !== 'completed') await extractLedger(localContext);
   // 当前阶段要求已在原会话发出时只发送“继续之前的任务”；已完成的审计或去表格仍用程序的收尾提示。
   const stageFinished = (stage === 'auditing' && consistencyState?.status === 'completed')
     || (stage === 'table-cleaning' && tableCleanupState?.status === 'completed');
   const continuingStage = (resuming || continuingPlanning) && !stageFinished && wasStagePrompted(persistentState, stage);
   const result = await agentService.runTask({
     task_id: runId, title: '投标文件正文生成', primary_session: true, summary_enabled: false, fixed_tool_list: true,
-    prompt: continuingStage ? CONTINUE_PROMPT : planning ? planning.prompt : layoutState ? buildLayoutPrompt(layoutState) : tableCleanupState ? buildTableCleanupPrompt(tableCleanupState) : consistencyState ? consistencyPrompt(localContext.workspace_dir) : wordAdjustState ? buildWordAdjustPrompt(wordAdjustState) : generationPrompt(),
+    prompt: continuingStage ? (auditRunning() ? consistencyReminder(localContext.workspace_dir) : CONTINUE_PROMPT) : planning ? planning.prompt : layoutState ? buildLayoutPrompt(layoutState) : tableCleanupState ? buildTableCleanupPrompt(tableCleanupState) : consistencyState ? consistencyPrompt(localContext.workspace_dir) : wordAdjustState ? buildWordAdjustPrompt(wordAdjustState) : generationPrompt(),
     output_file: RESULT_FILE, files, signal,
     persistent_task: { task_key: CONTENT_GENERATION_AGENT_TASK_KEY, mode: reuseSession ? 'resume' : 'create' },
     initial_stage: stage, active_tools: planning ? planningTools : layoutState ? LAYOUT_TOOLS : undefined,
@@ -781,11 +788,13 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     // 提交校验不通过时完整退回问题说明；执行失败（模型或服务中断）直接续接原任务。
     // 基础编排的执行失败沿用原有不自动重试策略，正文仍保留一次续接机会。
     buildRetryPrompt: (request, meta) => {
-      if (request.kind === 'execution') return stage === 'content-planning' ? null : CONTINUE_PROMPT;
+      if (request.kind === 'execution') return stage === 'content-planning' ? null : auditRunning() ? consistencyReminder(meta.workspace_dir) : CONTINUE_PROMPT;
       const issues = request.mode === 'minimum' ? request.report.issues.filter(item => item.severity === 'blocking') : request.report.issues;
       return '本次结果文件：' + (stage === 'content-planning' ? planning.outputFile : RESULT_FILE) + '。'
         + contentSubmissionInstructions(meta.workspace_dir, issues, protection.active)
-        + ' 保留已完成内容，不重新执行已结束阶段；本轮处理后重新提交，由程序判断是否继续。';
+        + (auditRunning()
+          ? ' 保留已完成内容，不重新执行已结束阶段；本阶段的“提交”指调用 complete-consistency-round 提交审计结论，完成标记放在该调用上，由程序判断是否继续。'
+          : ' 保留已完成内容，不重新执行已结束阶段；本轮处理后重新提交，由程序判断是否继续。');
     },
     json_validation_schemas: { [RESULT_FILE]: RESULT_SCHEMA, ...taskFileSchemas(undefined, undefined, imageKinds), ...(planning ? { [planning.outputFile]: planning.schema } : {}) },
     // 阶段门禁只限制业务工具；文件修改不在写入时拦截，由提交校验检查结果并还原程序文件。
@@ -797,6 +806,7 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
         const stageTool = ({ 'word-adjusting': WORD_ADJUST_TOOL, 'table-cleaning': TABLE_CLEANUP_TOOL, 'layout-checking': LAYOUT_TOOL })[stage];
         if (stageTool && ![stageTool, 'report-failure'].includes(context.toolCall.name)) throw new Error(`本阶段只调用 ${stageTool}，并在该调用上设置 task_complete=true；不要读取或修改正文。`);
         if (!tableCleanupState && consistencyState && consistencyState.status !== 'running' && context.toolCall.name === 'repair-sections') throw new Error('一致性审计结论已经提交，请标记任务完成并等待程序进入下一阶段');
+        if (stage === 'auditing') assertConsistencyCompletion(consistencyState, context.toolCall);
         imageProtection.beforeToolCall(context);
       }
       const { name } = context.toolCall;
@@ -854,7 +864,16 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
       }
       if (consistencyState) {
         if (consistencyState.status !== 'completed') {
-          if (!consistencyState.submission) return next('auditing', CONTINUE_PROMPT);
+          // 结束本轮却未提交：次数随审计状态持久保存，前两次发状态提示，达到上限由程序复核后收尾。
+          if (!consistencyState.submission) {
+            const rounds = (consistencyState.unsubmitted_rounds || 0) + 1;
+            if (rounds >= CONSISTENCY_UNSUBMITTED_LIMIT) return (async () => {
+              await finalizeAudit(context, accepted.map(item => item.message), rounds);
+              return finishConsistency(context, checked);
+            })();
+            consistency.save({ ...consistencyState, unsubmitted_rounds: rounds });
+            return next('auditing', consistencyReminder(context.workspace_dir, rounds === CONSISTENCY_UNSUBMITTED_LIMIT - 1));
+          }
           const submitted = consistencyState.submission;
           consistency.save({ ...consistencyState, ...submitted, submission: null, status: 'completed',
             remaining_issues: [...submitted.remaining_issues, ...accepted.map(item => item.message)] });

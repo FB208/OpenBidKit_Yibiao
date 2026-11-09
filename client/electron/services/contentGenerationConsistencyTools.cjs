@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const cheerio = require('cheerio');
 const { SUBMISSION_FIX_TOOL, editContentSections, batchResponse } = require('./contentGenerationEditTools.cjs');
-const { TASK_FILE_WRITING, taskFilePath, readTaskFile, writeListFile, readListFile } = require('./contentGenerationTaskFiles.cjs');
+const { TASK_FILE_WRITING, LIST_DIR, LIST_FILES, taskFilePath, readTaskFile, writeListFile, readListFile } = require('./contentGenerationTaskFiles.cjs');
 const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
 const { AI_QUEUE_SCOPE_PAUSED } = require('../utils/aiRequestQueue.cjs');
 const { AI_UPSTREAM_UNAVAILABLE, createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
@@ -17,6 +17,8 @@ const LEDGER_FILE = '正文一致性事实台账.md';
 const LEDGER_VERSION = 2;
 const ISSUE_TYPES = ['与全局事实冲突', '小节内部矛盾'];
 const FACT_CATEGORIES = ['人数与数量', '日期与期限', '频次与时限', '地点与范围', '金额', '技术参数', '编号与名称', '责任归属', '其他'];
+// 比对修复中连续结束本轮未提交审计结论的上限：前两次发状态提示，达到上限时由程序收尾。
+const CONSISTENCY_UNSUBMITTED_LIMIT = 3;
 const SEARCH_LIMIT = 80;
 const SNIPPET_LENGTH = 400;
 const REPAIR_INSTRUCTIONS = '只修复主 Agent 指定的矛盾及本批统一修复规则涉及的内容，遵循其统一结论，只改与矛盾直接相关的数值或陈述，其他用词、称谓和表述保持原样，不检查或调整总字数。主 Agent 给出的段落 ID 只用于定位：问题文字不在该段时，在本节内按语义找到同一问题所在位置修改，不因段落 ID 不符而失败；指定问题在本节已不存在（例如已经修复）时不修改，简短说明后结束；本轮修改后提交真实结果，未完全消除的矛盾交由主 Agent 统一验收；只有无法继续执行的实际阻断才调用 report-failure。';
@@ -286,7 +288,7 @@ ${incremental ? '本轮为新增小节审计：只审计和修改本轮目标小
 4. 以下内容不是问题，不修改：用词、称谓、表述不同或详略不同；全局事实未提及的补充内容（例如岗位、流程、交付物、频次、承诺），只要不与全局事实或其他内容冲突；承诺语气强弱；文风和润色。不追究内容是否有材料依据，不撤回或削弱承诺，只处理会影响阅读理解或项目实施的矛盾。
 5. 确定统一结论后，将需要修改的小节写入 ${taskFilePath('repair')}，格式为 {"rules":"可选，统一修复规则","sections":[{"section_id":"小节 ID","instructions":"本节具体矛盾及统一结论"}]}，再调用 repair-sections 派发；section_id 从台账“小节目录”原样复制${incremental ? '，只能提交本轮目标小节' : ''}。${TASK_FILE_WRITING}同一取值需要在多个小节统一时，写成统一规则放入 rules（写明统一后的取值及适用范围，例如“服务期统一为一年”），并列出涉及的小节，这些小节 instructions 可填空字符串，子任务会在各自小节按规则修改；个别矛盾在该节 instructions 写清段落 ID、矛盾内容及统一结论。子任务按该结论修复，不自行选择另一套取值。需要修改的小节超过 5 个时通过 repair-sections 并发修复；5 个及以下可以直接修改对应小节文件，按同一结论修改。
 6. repair-sections 返回本批统计和未成功项；程序清单/一致性修复结果.json 按小节累积本轮全部派发结果（summary 为已修复与未成功小节数，各节 status 为最近一次结果，changes 为改动段落修改前后的文本），按需读取核实修复结果；未执行的项（ID 不属于本轮目标、正在编辑或缺少要求）按提示改正后重新派发，未解决项如实保留，本轮处理后交由统一提交校验决定是否继续修复；任务文件内容即本次派发的任务，再次派发时改写为失败、未执行或明显漏改的小节，已修好的小节不重复派发。需要分批时可以依次改写任务文件并多次提交。
-7. 本轮处理并核实真实结果后调用 complete-consistency-round 提交结论，完成标记放在该调用上；程序统一校验，由统一规则决定继续修复或结束审计进入后续流程。remaining_issues 只记录确实无法在本轮修复的矛盾${incremental ? '（例如参考小节之间、或参考小节与全局事实之间的矛盾）' : ''}；本次目标内没有问题时直接提交。
+7. 本轮处理并核实真实结果后调用 complete-consistency-round 提交结论，完成标记放在该调用上；本阶段只能通过该调用结束，在其他工具上设置完成标记会被拒绝；程序统一校验，由统一规则决定继续修复或结束审计进入后续流程。remaining_issues 只记录确实无法在本轮修复的矛盾${incremental ? '（例如参考小节之间、或参考小节与全局事实之间的矛盾）' : ''}；本次目标内没有问题时直接提交。
 已插入的图片块、图注、提示词、引用、顺序和图片表格布局不得修改，提交时程序逐节核对，不一致会退回并附上原始图片块；普通文字可改，原表格和实质信息应保留。不检查或调整总字数。正文留在原小节 HTML 文件中，不修改输入资料、台账、其他小节或业务数据库。`;
 }
 
@@ -310,6 +312,59 @@ function collectConsistencySubmissionIssues(workspaceDir, state) {
       message: `小节 ${section.number} ${section.title} 尚无核对结果；可重新核对，或读取原文自行核对后在 manually_checked_section_ids 中列出。` });
   }
   return issues;
+}
+
+// 比对修复中只能以提交审计结论结束：其他工具上的完成标记直接拒绝，该调用不执行。
+function assertConsistencyCompletion(state, toolCall) {
+  if (state?.status !== 'running' || toolCall.name === 'complete-consistency-round' || toolCall.arguments?.task_complete !== true) return;
+  throw new Error(`一致性审计阶段只能在 complete-consistency-round 上设置 task_complete=true。本次 ${toolCall.name} 调用未执行：还要继续工作时去掉 task_complete 重新调用；审计已完成时调用 complete-consistency-round 提交结论，并在该调用上设置 task_complete=true。`);
+}
+
+// 结束本轮未提交、续跑或执行续接时，按当前审计进度指明缺少的提交动作。
+function buildConsistencyReminder(state, { workspaceDir, finalWarning = false }) {
+  const repaired = (state.repaired_section_ids || []).length;
+  const failed = (state.failed_sections || []).length;
+  const unchecked = Object.keys(readLedger(workspaceDir).failures || {}).length;
+  return [
+    '你尚未调用 complete-consistency-round 提交一致性审计结论；本阶段只能通过该调用结束，其他工具上的完成标记会被拒绝。',
+    `当前进度：已修复成功 ${repaired} 节，修复未成功 ${failed} 节（逐节结果见 ${LIST_DIR}/${LIST_FILES.repair}）${unchecked ? `；台账中 ${unchecked} 节尚无核对结果` : ''}。`,
+    '先核实未成功项和尚未处理的台账问题，能统一的继续修复；然后调用 complete-consistency-round 提交结论，确实无法修复的矛盾写入 remaining_issues，完成标记放在该调用上。',
+    finalWarning ? '这是最后一次提醒：本轮结束时仍未提交，程序将重新核对已修改的小节并代为结束审计，未确认修复的问题记为遗留问题。' : '',
+  ].filter(Boolean).join('\n');
+}
+
+// 主 Agent 多次未提交时由程序收尾：按正文哈希重新核对改动过或此前未核对成功的小节，台账仍报告的问题如实记为遗留，跨节比对未经确认单独注明。
+// 收尾前登记 program_finalizing，暂停或失败后续跑先重做收尾，已重新核对的小节按哈希复用。
+async function finalizeConsistencyAudit({ aiService, workspaceDir, signal, onActivity, consistency, protectLedger, acceptedMessages = [], rounds }) {
+  const read = file => fs.readFileSync(path.join(workspaceDir, file), 'utf8');
+  const { sections } = auditScope(workspaceDir);
+  const before = consistency.get();
+  // 待重新核对数只在首次进入收尾时统计，续跑沿用，避免已核对的小节被漏计。
+  const stored = readLedger(workspaceDir);
+  const rechecked = before.program_finalizing ? before.program_rechecked_sections || 0 : sections.filter(section => {
+    const entry = stored.sections?.[section.id];
+    return !entry || entry.hash !== hashHtml(read(section.file));
+  }).length;
+  const notice = `主 Agent 连续 ${rounds} 次结束本轮未提交审计结论，程序正在重新核对已修改的小节并收尾。`;
+  consistency.save({ ...before, unsubmitted_rounds: rounds, program_finalizing: true, program_rechecked_sections: rechecked, summary: notice });
+  onActivity?.({ message: notice });
+  const ledger = await extractConsistencyLedger({ aiService, workspaceDir, signal, onActivity, checkChanges: true,
+    onProgress: (completed, total) => consistency.save({ ...consistency.get(), extract_completed: completed, extract_total: total }) });
+  signal.throwIfAborted();
+  protectLedger();
+  const state = consistency.get();
+  const byId = new Map(sections.map(section => [section.id, section]));
+  const label = section => `${section.number} ${section.title}`;
+  const reported = sections.filter(section => !section.reference && ledger.sections[section.id])
+    .flatMap(section => ledger.sections[section.id].issues.map(issue => `${label(section)}［${issue.block_id || '未定位'}］${issue.type}：${issue.problem}（程序核对仍报告，未经主 Agent 复核）`));
+  const unchecked = sections.filter(section => !ledger.sections[section.id])
+    .map(section => `${label(section)} 未取得一致性核对结果：${ledger.failures[section.id] || '尚未核对'}`);
+  const unrepaired = (state.failed_sections || []).filter(id => byId.has(id)).map(id => `${label(byId.get(id))} 的一致性修复子任务未成功`);
+  const unresolved = reported.length + unchecked.length + unrepaired.length;
+  const summary = `主 Agent 连续 ${rounds} 次未提交审计结论，一致性审计由程序收尾：重新核对 ${rechecked} 个正文有改动或此前未核对成功的小节，${unresolved} 处问题未确认修复，已记为遗留问题。`;
+  consistency.save({ ...state, status: 'completed', program_finalizing: false, submission: null, summary,
+    remaining_issues: [...reported, ...unchecked, ...unrepaired, '跨小节事实比对未经主 Agent 确认完成，小节之间可能仍有取值不一致。', ...acceptedMessages] });
+  onActivity?.({ message: summary });
 }
 
 // 主 Agent 检索、重新核对、派发修复及提交结论；子任务失败随持久会话保存。
@@ -390,7 +445,7 @@ function createContentGenerationConsistencyTools({ agentService, aiService, sign
   }, {
     // 任务来自固定任务文件，按顺序派发；同一次派发内各小节并发修复。
     name: 'repair-sections', label: '并发修复一致性问题', executionMode: 'sequential',
-    description: `主 Agent 确定统一结论后，读取 ${taskFilePath('repair')} 中需要修改的目标小节，分配给子任务并发修复。格式为 {"rules":"可选，统一修复规则","sections":[{"section_id":"从台账“小节目录”原样复制的本轮目标小节 ID","instructions":"本节具体矛盾：段落 ID、矛盾内容及统一结论；只需按 rules 修改时填空字符串"}]}。rules 适用于本次派发的每个小节：同一取值需要在多个小节统一时写明统一后的取值及适用范围，子任务在各自小节按规则修改相关表述。${TASK_FILE_WRITING}文件内容即本次派发的任务，再次派发前按需改写。各子任务原生 edit 自己的小节，只改与矛盾直接相关的内容，保留图片，不检查或调整字数。返回 total、success 和 unresolved：ID 错误、参考小节、正在编辑或缺少要求的项未执行并说明原因，其他小节照常修复，未成功项返回主 Agent，在本轮提交时统一处理；程序清单/一致性修复结果.json 按小节累积本轮各次派发的最新状态及成功项的 changes（改动段落修改前后的纯文本）。`,
+    description: `主 Agent 确定统一结论后，读取 ${taskFilePath('repair')} 中需要修改的目标小节，分配给子任务并发修复。格式为 {"rules":"可选，统一修复规则","sections":[{"section_id":"从台账“小节目录”原样复制的本轮目标小节 ID","instructions":"本节具体矛盾：段落 ID、矛盾内容及统一结论；只需按 rules 修改时填空字符串"}]}。rules 适用于本次派发的每个小节：同一取值需要在多个小节统一时写明统一后的取值及适用范围，子任务在各自小节按规则修改相关表述。${TASK_FILE_WRITING}文件内容即本次派发的任务，再次派发前按需改写。各子任务原生 edit 自己的小节，只改与矛盾直接相关的内容，保留图片，不检查或调整字数。返回 total、success 和 unresolved：ID 错误、参考小节、正在编辑或缺少要求的项未执行并说明原因，其他小节照常修复，未成功项返回主 Agent，在本轮提交时统一处理；子任务已完成、仅图片块或结构等产物检查未通过的小节，文字修改已保留，按返回的问题恢复产物即可，提交校验会统一核对；程序清单/一致性修复结果.json 按小节累积本轮各次派发的最新状态及成功项的 changes（改动段落修改前后的纯文本）。`,
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_callId, _params, toolSignal, onUpdate) {
       requireAuditing();
@@ -444,7 +499,8 @@ function createContentGenerationConsistencyTools({ agentService, aiService, sign
         },
         title: '一致性修复', preloadInput: true, instructions: `${REPAIR_INSTRUCTIONS}${rules ? `\n本批统一修复规则（适用于本批每个小节，按语义判断本节全文中的相关表述）：\n${rules}` : ''}`,
       }) : { results: [], restored: [] };
-      const succeeded = new Set(edited.filter(item => item.status === 'success').map(item => item.section_id));
+      // 子任务已完成、仅产物检查未通过的小节文字修改已写入，不计入一致性修复失败；图片块和结构问题由提交校验统一退回。
+      const succeeded = new Set(edited.filter(item => item.status === 'success' || item.issues?.length).map(item => item.section_id));
       const latest = consistency.get();
       // 已修复小节随持久状态保存，暂停、失败或重启后仍可知道本轮修复进度。
       consistency.save({ ...latest, failed_sections: (latest.failed_sections || []).filter(id => !succeeded.has(id)),
@@ -474,4 +530,4 @@ function createContentGenerationConsistencyTools({ agentService, aiService, sign
   }];
 }
 
-module.exports = { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, sectionAuditText, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, createContentGenerationConsistencyTools };
+module.exports = { CONSISTENCY_TOOLS, CONSISTENCY_UNSUBMITTED_LIMIT, LEDGER_FILE, LEDGER_JSON, sectionAuditText, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, assertConsistencyCompletion, buildConsistencyReminder, finalizeConsistencyAudit, createContentGenerationConsistencyTools };

@@ -12,6 +12,7 @@ const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
 const { AGENT_REPORTED_FAILURE_CODE } = require('./piTaskFailureTool.cjs');
 const { createWorkspaceBaseline } = require('./piWorkspaceBaseline.cjs');
 const { createSubmissionPolicy, buildSubmissionRepairPrompt } = require('./piSubmissionPolicy.cjs');
+const { STAGE_LOOP_LIMIT, createStageLoopGuard } = require('./piStageLoopGuard.cjs');
 const {
   createPersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -44,6 +45,8 @@ const INPUT_BASELINE_GROUP = 'inputs';
 const STATUS_TICK_MS = 1000;
 // 达到 max_turns_per_prompt 时的错误码；该错误不进入执行重试续跑。
 const AGENT_TURN_LIMIT_CODE = 'AGENT_TURN_LIMIT';
+// 阶段续接反复重发同一指令时的错误码；在执行重试之外抛出，停止任务并保留进度。
+const AGENT_STALLED_LOOP_CODE = 'AGENT_STALLED_LOOP';
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
 const SELF_CHECK_OUTPUT_SCHEMA = {
   type: 'object',
@@ -910,6 +913,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       let stageIndex = Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0);
       let stagePrompt = prompt;
       let submission = createSubmissionPolicy();
+      // 只在本次运行内计数：触发后任务停止，用户继续任务时重新计数。
+      const stageLoop = createStageLoopGuard();
       const acceptedSubmissionIssues = [];
 
       const createWorkflowMeta = () => ({
@@ -1074,6 +1079,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       while (true) {
         let candidate = null;
         let acceptedIssues = [];
+        // 本阶段期间有用户回答时不算空转，例如由用户决定是否继续调整的阶段。
+        const answersBefore = activeTask.user_question_answers.length;
         // 执行异常只使用原 max_retries，提交策略在同一业务阶段的续接中保持。
         let executionRetries = 0;
         while (true) {
@@ -1191,6 +1198,14 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           : stageIndex + 1;
         activeTask.stage_index = stageIndex;
         const continuationStage = continuation.stage || `workflow_stage_${stageIndex}`;
+        const loop = stageLoop.inspect({ stage: continuationStage, prompt: continuation.prompt,
+          userAnswered: activeTask.user_question_answers.length > answersBefore });
+        if (loop.stalled) {
+          const error = new Error(`Agent 在当前阶段连续 ${STAGE_LOOP_LIMIT} 次结束本轮仍未完成阶段要求，程序已重复发出相同指令，任务已停止；已完成的进度保留，可继续任务重试。`);
+          error.code = AGENT_STALLED_LOOP_CODE;
+          touchActivity({ task_token: taskToken, stage: 'stalled_loop', message: error.message, source: 'pi.stage-loop', visible: true, activity: false });
+          throw error;
+        }
         if (continuationStage !== completedWorkflowStage) submission = createSubmissionPolicy();
         activeTask.workflow_stage = continuationStage;
         stagePrompt = continuation.prompt;
