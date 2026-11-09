@@ -431,6 +431,8 @@ function createAgentService({ app, configStore, aiService, licenseService, autoC
       isMonitorActive: () => monitorListeners.size > 0,
       onMonitorEvent: emitMonitorEvent,
       requestUserQuestion,
+      // Runtime 在任务运行中启动的子任务（如空转诊断）沿用子代理的并发和轮数限制。
+      runChildTask: (payload) => startTask(payload, entry.userTaskContextProvider),
     });
     entry.runtimeUnsubscribe = taskRuntime.onStatus?.(() => emitStatus()) || null;
     return taskRuntime;

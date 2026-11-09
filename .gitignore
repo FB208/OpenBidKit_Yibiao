@@ -30,6 +30,9 @@ openxmlhelper/**/bin/
 openxmlhelper/**/obj/
 client/vendor/openxml-tools/
 
+# 空转诊断资料：构建时从提交导出
+client/vendor/diagnosis-source/
+
 # 临时和缓存文件
 *.tmp
 *.temp

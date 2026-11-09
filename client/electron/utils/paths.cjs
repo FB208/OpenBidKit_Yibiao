@@ -233,6 +233,17 @@ function getBundledOpenXmlHelperPath(app) {
   return path.join(getBundledOpenXmlHelperDir(app), fileName);
 }
 
+/** 安装包内随版本附带的诊断资料（构建时从提交导出的源码）。 */
+function getBundledDiagnosisSourceDir() {
+  return path.join(process.resourcesPath, 'diagnosis-source');
+}
+
+/** 诊断 Agent 阅读的源码资料：安装版为同步到 userData 的副本，开发版直接使用仓库根目录。 */
+function getDiagnosisSourceDir(app) {
+  if (app.isPackaged) return path.join(getUserDataPath(app), 'diagnosis-source');
+  return path.join(__dirname, '..', '..', '..');
+}
+
 module.exports = {
   getAgentRuntimeDir,
   getAiLogsDir,
@@ -242,9 +253,11 @@ module.exports = {
   getBlindCheckFixedDir,
   getBlindCheckTenderDir,
   getBundledAgentToolsBinDir,
+  getBundledDiagnosisSourceDir,
   getBundledOpenXmlHelperDir,
   getBundledOpenXmlHelperPath,
   getDeveloperLogsDir,
+  getDiagnosisSourceDir,
   getDuplicateCheckContentDir,
   getDuplicateCheckDir,
   getConfigFilePath,

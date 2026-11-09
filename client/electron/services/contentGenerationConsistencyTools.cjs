@@ -17,8 +17,6 @@ const LEDGER_FILE = '正文一致性事实台账.md';
 const LEDGER_VERSION = 2;
 const ISSUE_TYPES = ['与全局事实冲突', '小节内部矛盾'];
 const FACT_CATEGORIES = ['人数与数量', '日期与期限', '频次与时限', '地点与范围', '金额', '技术参数', '编号与名称', '责任归属', '其他'];
-// 比对修复中连续结束本轮未提交审计结论的上限：前两次发状态提示，达到上限时由程序收尾。
-const CONSISTENCY_UNSUBMITTED_LIMIT = 3;
 const SEARCH_LIMIT = 80;
 const SNIPPET_LENGTH = 400;
 const REPAIR_INSTRUCTIONS = '只修复主 Agent 指定的矛盾及本批统一修复规则涉及的内容，遵循其统一结论，只改与矛盾直接相关的数值或陈述，其他用词、称谓和表述保持原样，不检查或调整总字数。主 Agent 给出的段落 ID 只用于定位：问题文字不在该段时，在本节内按语义找到同一问题所在位置修改，不因段落 ID 不符而失败；指定问题在本节已不存在（例如已经修复）时不修改，简短说明后结束；本轮修改后提交真实结果，未完全消除的矛盾交由主 Agent 统一验收；只有无法继续执行的实际阻断才调用 report-failure。';
@@ -321,7 +319,7 @@ function assertConsistencyCompletion(state, toolCall) {
 }
 
 // 结束本轮未提交、续跑或执行续接时，按当前审计进度指明缺少的提交动作。
-function buildConsistencyReminder(state, { workspaceDir, finalWarning = false }) {
+function buildConsistencyReminder(state, { workspaceDir }) {
   const repaired = (state.repaired_section_ids || []).length;
   const failed = (state.failed_sections || []).length;
   const unchecked = Object.keys(readLedger(workspaceDir).failures || {}).length;
@@ -329,13 +327,12 @@ function buildConsistencyReminder(state, { workspaceDir, finalWarning = false })
     '你尚未调用 complete-consistency-round 提交一致性审计结论；本阶段只能通过该调用结束，其他工具上的完成标记会被拒绝。',
     `当前进度：已修复成功 ${repaired} 节，修复未成功 ${failed} 节（逐节结果见 ${LIST_DIR}/${LIST_FILES.repair}）${unchecked ? `；台账中 ${unchecked} 节尚无核对结果` : ''}。`,
     '先核实未成功项和尚未处理的台账问题，能统一的继续修复；然后调用 complete-consistency-round 提交结论，确实无法修复的矛盾写入 remaining_issues，完成标记放在该调用上。',
-    finalWarning ? '这是最后一次提醒：本轮结束时仍未提交，程序将重新核对已修改的小节并代为结束审计，未确认修复的问题记为遗留问题。' : '',
-  ].filter(Boolean).join('\n');
+  ].join('\n');
 }
 
-// 主 Agent 多次未提交时由程序收尾：按正文哈希重新核对改动过或此前未核对成功的小节，台账仍报告的问题如实记为遗留，跨节比对未经确认单独注明。
-// 收尾前登记 program_finalizing，暂停或失败后续跑先重做收尾，已重新核对的小节按哈希复用。
-async function finalizeConsistencyAudit({ aiService, workspaceDir, signal, onActivity, consistency, protectLedger, acceptedMessages = [], rounds }) {
+// 空转诊断结论为收尾时由程序结束审计：按正文哈希重新核对改动过或此前未核对成功的小节，台账仍报告的问题如实记为遗留，跨节比对未经确认单独注明。
+// 收尾前登记 program_finalizing 及诊断说明，暂停或失败后续跑先重做收尾，已重新核对的小节按哈希复用。
+async function finalizeConsistencyAudit({ aiService, workspaceDir, signal, onActivity, consistency, protectLedger, acceptedMessages = [], reason = '' }) {
   const read = file => fs.readFileSync(path.join(workspaceDir, file), 'utf8');
   const { sections } = auditScope(workspaceDir);
   const before = consistency.get();
@@ -345,8 +342,9 @@ async function finalizeConsistencyAudit({ aiService, workspaceDir, signal, onAct
     const entry = stored.sections?.[section.id];
     return !entry || entry.hash !== hashHtml(read(section.file));
   }).length;
-  const notice = `主 Agent 连续 ${rounds} 次结束本轮未提交审计结论，程序正在重新核对已修改的小节并收尾。`;
-  consistency.save({ ...before, unsubmitted_rounds: rounds, program_finalizing: true, program_rechecked_sections: rechecked, summary: notice });
+  const cause = reason ? `（${reason}）` : '';
+  const notice = `主 Agent 未提交审计结论，经诊断由程序收尾${cause}，正在重新核对已修改的小节。`;
+  consistency.save({ ...before, program_finalizing: true, program_finalize_reason: reason, program_rechecked_sections: rechecked, summary: notice });
   onActivity?.({ message: notice });
   const ledger = await extractConsistencyLedger({ aiService, workspaceDir, signal, onActivity, checkChanges: true,
     onProgress: (completed, total) => consistency.save({ ...consistency.get(), extract_completed: completed, extract_total: total }) });
@@ -361,7 +359,7 @@ async function finalizeConsistencyAudit({ aiService, workspaceDir, signal, onAct
     .map(section => `${label(section)} 未取得一致性核对结果：${ledger.failures[section.id] || '尚未核对'}`);
   const unrepaired = (state.failed_sections || []).filter(id => byId.has(id)).map(id => `${label(byId.get(id))} 的一致性修复子任务未成功`);
   const unresolved = reported.length + unchecked.length + unrepaired.length;
-  const summary = `主 Agent 连续 ${rounds} 次未提交审计结论，一致性审计由程序收尾：重新核对 ${rechecked} 个正文有改动或此前未核对成功的小节，${unresolved} 处问题未确认修复，已记为遗留问题。`;
+  const summary = `主 Agent 未提交审计结论，经诊断由程序收尾${cause}：重新核对 ${rechecked} 个正文有改动或此前未核对成功的小节，${unresolved} 处问题未确认修复，已记为遗留问题。`;
   consistency.save({ ...state, status: 'completed', program_finalizing: false, submission: null, summary,
     remaining_issues: [...reported, ...unchecked, ...unrepaired, '跨小节事实比对未经主 Agent 确认完成，小节之间可能仍有取值不一致。', ...acceptedMessages] });
   onActivity?.({ message: summary });
@@ -530,4 +528,4 @@ function createContentGenerationConsistencyTools({ agentService, aiService, sign
   }];
 }
 
-module.exports = { CONSISTENCY_TOOLS, CONSISTENCY_UNSUBMITTED_LIMIT, LEDGER_FILE, LEDGER_JSON, sectionAuditText, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, assertConsistencyCompletion, buildConsistencyReminder, finalizeConsistencyAudit, createContentGenerationConsistencyTools };
+module.exports = { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, sectionAuditText, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, assertConsistencyCompletion, buildConsistencyReminder, finalizeConsistencyAudit, createContentGenerationConsistencyTools };

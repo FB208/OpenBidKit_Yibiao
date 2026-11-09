@@ -122,22 +122,29 @@ async function supplementLayoutGaps({ aiService, workspaceDir, signal, onActivit
       settle(item, 'error');
     },
   });
-  // 本轮结束按文件复查：全部位置已插入补写的小节完成，其余位置连同原因记入 failed_gaps。
+  const summary = summarizeLayoutSupplement(workspaceDir, current);
+  save({ ...current, ...summary, submission: {} });
+  report([], { label: `格式补写：完成 ${summary.completed_section_ids.length} 节${summary.failed_gaps.length ? `，${summary.failed_gaps.length} 处未补写` : ''}`, done: true });
+  return current;
+}
+
+// 按文件复查补写结果：全部位置已插入补写的小节完成，其余位置连同原因记入 failed_gaps；未记录失败原因的位置使用 fallbackReason。
+function summarizeLayoutSupplement(workspaceDir, state, fallbackReason = '补写未完成') {
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
+  const targets = new Map(decisions.targets.map(section => [section.id, section]));
   const completed = [];
   const failedGaps = [];
-  for (const job of current.jobs) {
+  for (const job of state.jobs) {
     const section = targets.get(job.section_id);
-    const html = read(section);
+    const html = fs.readFileSync(path.join(workspaceDir, section.file), 'utf8');
     const missing = job.gaps.filter(gap => !locateGap(html, gap)?.inserted);
     if (!missing.length) completed.push(job.section_id);
     for (const gap of missing) {
       failedGaps.push({ section_id: job.section_id, number: section.number, title: section.title, figure_id: gap.figure_ids?.[0] || '',
-        reason: current.failures[gapKey(job.section_id, gap)]?.reason || '补写未完成' });
+        reason: state.failures[gapKey(job.section_id, gap)]?.reason || fallbackReason });
     }
   }
-  save({ ...current, completed_section_ids: completed, failed_gaps: failedGaps, submission: {} });
-  report([], { label: `格式补写：完成 ${completed.length} 节${failedGaps.length ? `，${failedGaps.length} 处未补写` : ''}`, done: true });
-  return current;
+  return { completed_section_ids: completed, failed_gaps: failedGaps };
 }
 
 // 工具结果：补写完成的小节数和未补写位置原因。
@@ -170,4 +177,4 @@ function createContentGenerationLayoutTools({ aiService, signal, onActivity, lay
   }];
 }
 
-module.exports = { LAYOUT_TOOL, LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools, supplementLayoutGaps, locateGap };
+module.exports = { LAYOUT_TOOL, LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools, supplementLayoutGaps, summarizeLayoutSupplement, locateGap };

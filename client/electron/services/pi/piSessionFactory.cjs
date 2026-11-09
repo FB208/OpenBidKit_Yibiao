@@ -50,7 +50,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, requestTerminationDecision, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline, parallelSearch = false }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, requestTerminationDecision, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline, parallelSearch = false, workspaceInstructions = '' }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -108,8 +108,9 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
+    // 任务需要的工作区约定例外（如诊断任务只读访问工作区外资料）追加在通用约定之后。
     agentsFilesOverride: () => ({
-      agentsFiles: [{ path: '<yibiao-agent-workspace>', content: environment.instructions }],
+      agentsFiles: [{ path: '<yibiao-agent-workspace>', content: workspaceInstructions ? `${environment.instructions}\n\n${workspaceInstructions}` : environment.instructions }],
     }),
     systemPromptOverride: () => undefined,
     appendSystemPromptOverride: () => [

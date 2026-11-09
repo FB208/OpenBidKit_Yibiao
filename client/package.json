@@ -9,14 +9,15 @@
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c blue,magenta \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "tsc --noEmit && vite build",
-    "dist": "npm run build && node scripts/prepare-openxml-helper.cjs && electron-builder",
-    "dist:win": "npm run build && node scripts/prepare-openxml-helper.cjs --platform win32 --arch x64 && electron-builder --win",
-    "dist:mac": "npm run build && node scripts/prepare-openxml-helper.cjs --platform darwin --arch all && electron-builder --mac",
+    "dist": "npm run build && node scripts/prepare-openxml-helper.cjs && node scripts/prepare-diagnosis-source.cjs && electron-builder",
+    "dist:win": "npm run build && node scripts/prepare-openxml-helper.cjs --platform win32 --arch x64 && node scripts/prepare-diagnosis-source.cjs && electron-builder --win",
+    "dist:mac": "npm run build && node scripts/prepare-openxml-helper.cjs --platform darwin --arch all && node scripts/prepare-diagnosis-source.cjs && electron-builder --mac",
     "postinstall": "patch-package --error-on-fail --error-on-warn && electron-builder install-app-deps",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "generate-build-attestation": "node scripts/generate-build-attestation.cjs",
     "prepare-agent-tools": "node scripts/prepare-agent-tools.cjs",
     "prepare-openxml-helper": "node scripts/prepare-openxml-helper.cjs",
+    "prepare-diagnosis-source": "node scripts/prepare-diagnosis-source.cjs",
     "verify-agent-tools": "node scripts/verify-agent-tools.cjs",
     "smoke:electron-native": "electron scripts/electron-native-smoke.cjs",
     "start": "electron ."
@@ -56,6 +57,13 @@
         {
           "from": "vendor/openxml-tools/win32-${arch}",
           "to": "openxml-tools/win32-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "vendor/diagnosis-source",
+          "to": "diagnosis-source",
           "filter": [
             "**/*"
           ]
@@ -102,6 +110,13 @@
         {
           "from": "vendor/openxml-tools/darwin-${arch}",
           "to": "openxml-tools/darwin-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "vendor/diagnosis-source",
+          "to": "diagnosis-source",
           "filter": [
             "**/*"
           ]

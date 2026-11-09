@@ -11,14 +11,14 @@ const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 const { createContentGenerationImageTools, validateContentImageReferences, imageToolNames } = require('./contentGenerationImageTools.cjs');
 const { ORIGINAL_GENERATION, resolveImageKinds, imageKindNames, imageGenerationList, imageKindList, renderImageKindText, buildImageTypeTable, filterTemplateSample } = require('./contentImageKinds.cjs');
 const { AI_IMAGE_STYLES } = require('./aiImageStyles.cjs');
-const { WORD_ADJUST_TOOL, WORD_ADJUST_TOOLS, countHtmlWords, planWordAdjustment, createWordAdjustState, buildWordAdjustPrompt, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
+const { WORD_ADJUST_TOOL, WORD_ADJUST_TOOLS, countHtmlWords, checkWordCount, planWordAdjustment, createWordAdjustState, buildWordAdjustPrompt, createContentGenerationWordTools } = require('./contentGenerationWordTools.cjs');
 const { TASK_FILE_WRITING, taskFilePath, taskFileSchemas, readTaskFile, writeListFile, clearTaskArtifacts, compactResults } = require('./contentGenerationTaskFiles.cjs');
 const { SUBMISSION_FIX_TOOL, SUBMISSION_FIX_PARALLEL_THRESHOLD, imageStructure, createContentImageProtection, createSubmissionFixTool } = require('./contentGenerationEditTools.cjs');
 const { warmPromptPrefix, sharedPrefixMessages } = require('../utils/promptPrefixCache.cjs');
-const { createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
-const { CONSISTENCY_TOOLS, CONSISTENCY_UNSUBMITTED_LIMIT, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, assertConsistencyCompletion, buildConsistencyReminder, finalizeConsistencyAudit, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
-const { TABLE_CLEANUP_TOOL, TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools } = require('./contentGenerationTableTools.cjs');
-const { LAYOUT_TOOL, LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools } = require('./contentGenerationLayoutTools.cjs');
+const { AI_UPSTREAM_UNAVAILABLE, createAiBatchGuard, isBatchCancelled } = require('../utils/aiBatchGuard.cjs');
+const { CONSISTENCY_TOOLS, LEDGER_FILE, LEDGER_JSON, extractConsistencyLedger, buildConsistencyPrompt, collectConsistencySubmissionIssues, assertConsistencyCompletion, buildConsistencyReminder, finalizeConsistencyAudit, createContentGenerationConsistencyTools } = require('./contentGenerationConsistencyTools.cjs');
+const { TABLE_CLEANUP_TOOL, TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools, summarizeTableCleanup } = require('./contentGenerationTableTools.cjs');
+const { LAYOUT_TOOL, LAYOUT_TOOLS, buildLayoutPrompt, createContentGenerationLayoutTools, summarizeLayoutSupplement } = require('./contentGenerationLayoutTools.cjs');
 
 const CONTENT_GENERATION_AGENT_TASK_KEY = 'technical-plan-content-generation';
 // 阶段要求已在原会话发出后，续跑和同阶段续接只发送这一句，由 Agent 依据会话历史和工作区继续。
@@ -605,6 +605,10 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
   let toolContext;
   let imageProtection;
   let generationTools;
+  // 本任务注册的全部业务工具，空转收尾时由程序代为执行单工具阶段的工具。
+  let stageTools = [];
+  // 程序代执行工具后重新读取的正文结果；之后有新的提交验收时清空。
+  let finishedResult = null;
   let runSummary;
   const localContext = { signal, onActivity, workspace_dir: persistent?.paths?.workspaceDir };
   const currentWorkspaceDir = () => toolContext?.workspaceDir || localContext.workspace_dir;
@@ -682,13 +686,13 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     return `请用简体中文总结，供下一阶段「${nextStageName}」继续使用。保留：本轮目标小节范围及正文、图片文件的位置约定；各阶段已完成情况和程序反馈的结论；已确定的统一事实口径；尚未解决的问题、失败或待重试的小节及原因。正文、图片和台账以工作区文件为准，不在摘要中摘录正文、HTML 或台账原文，也不复述已结束阶段的操作细节。`;
   }
   const consistencyPrompt = workspaceDir => buildConsistencyPrompt(consistencyState, { hasKnowledgeBase, workspaceDir });
-  const createAuditState = () => ({ status: 'extracting', extract_completed: 0, extract_total: 0, remaining_issues: [], failed_sections: [], summary: '', submission: null, unsubmitted_rounds: 0 });
-  // 比对修复中发给 Agent 的提示都指明提交动作；连续未提交达到上限时由程序复核后收尾。
+  const createAuditState = () => ({ status: 'extracting', extract_completed: 0, extract_total: 0, remaining_issues: [], failed_sections: [], summary: '', submission: null });
+  // 比对修复中发给 Agent 的提示都指明提交动作；反复未提交属于空转，由 Runtime 诊断后按结论处理。
   const auditRunning = () => stage === 'auditing' && consistencyState?.status === 'running';
-  const consistencyReminder = (workspaceDir, finalWarning = false) => buildConsistencyReminder(consistencyState, { workspaceDir, finalWarning });
-  const finalizeAudit = (context, acceptedMessages, rounds) => finalizeConsistencyAudit({ aiService, workspaceDir: context.workspace_dir,
+  const consistencyReminder = workspaceDir => buildConsistencyReminder(consistencyState, { workspaceDir });
+  const finalizeAudit = (context, acceptedMessages, reason) => finalizeConsistencyAudit({ aiService, workspaceDir: context.workspace_dir,
     signal: context.signal || signal, onActivity: context.onActivity || onActivity, consistency,
-    protectLedger: () => protectLedger(context.baseline, context.workspace_dir), acceptedMessages, rounds });
+    protectLedger: () => protectLedger(context.baseline, context.workspace_dir), acceptedMessages, reason });
   // 小节并发核对是程序步骤：核对阶段按正文哈希复用未变化小节的结果；比对修复中恢复时只补缺失小节，不因修复改动重新核对。
   // 个别小节核对失败不中断审计，失败原因写入台账，由主 Agent 重新核对或自行核对。
   async function extractLedger(context) {
@@ -760,6 +764,99 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
       return restoredResult;
     }
   }
+  // 阶段完成后的续接：按当前阶段状态决定下一阶段或结束；空转收尾函数完成本阶段后也经由这里切换。
+  function continueStage(_result, context) {
+    if (stage === 'content-planning') return (async () => {
+      await planning.complete(context.validation_result, context);
+      const nextFiles = await prepareFiles(context);
+      await context.writeFiles(nextFiles);
+      prepareRunSummary(nextFiles);
+      stage = 'generating';
+      initializeContent();
+      return next(stage, generationPrompt());
+    })();
+    const accepted = context.accepted_issues;
+    const checked = context.validation_result;
+    // 单工具阶段未调用工具就结束时重发阶段提示词；工具已提交的结果即本阶段结论，遗留项由工具记录。
+    if (stage === 'layout-checking') {
+      if (!layoutState.submission) return next(stage, buildLayoutPrompt(layoutState));
+      layout.save({ ...layoutState, submission: null, status: 'rechecking' });
+      return finishLayout(context, checked);
+    }
+    if (tableCleanupState) {
+      if (tableCleanupState.status !== 'completed') {
+        if (!tableCleanupState.submission) return next('table-cleaning', buildTableCleanupPrompt(tableCleanupState));
+        tableCleanup.save({ ...tableCleanupState, submission: null, status: 'completed' });
+      }
+      return finishLayout(context, checked);
+    }
+    if (consistencyState) {
+      if (consistencyState.status !== 'completed') {
+        // 结束本轮却未提交时发状态提示；反复未提交由 Runtime 判定空转并诊断，收尾见 stalled_stage_finishers。
+        if (!consistencyState.submission) return next('auditing', consistencyReminder(context.workspace_dir));
+        const submitted = consistencyState.submission;
+        consistency.save({ ...consistencyState, ...submitted, submission: null, status: 'completed',
+          remaining_issues: [...submitted.remaining_issues, ...accepted.map(item => item.message)] });
+      }
+      return finishConsistency(context, checked);
+    }
+    // 字数校正结束后进入一致性审计；进入审计前压缩上下文，核对小节事实与压缩并行。
+    const startAudit = () => {
+      consistency.save(createAuditState());
+      imageProtection.enter(CONSISTENCY_TOOLS);
+      return { ...next('auditing', consistencyPrompt(context.workspace_dir), compactionInstructions('一致性审计')), await_before_prompt: extractLedger(context) };
+    };
+    if (stage === 'word-adjusting') {
+      if (wordAdjustState.status !== 'completed') return next(stage, buildWordAdjustPrompt(wordAdjustState));
+      return startAudit();
+    }
+    const decisions = JSON.parse(fs.readFileSync(path.join(context.workspace_dir, INPUT_FILES.decisions), 'utf8'));
+    const targetWords = decisions.targets.reduce((sum, section) => sum + (section.content_plan?.target_words || 0), 0);
+    const totalWords = checked.sections.reduce((sum, section) => sum + section.words, 0);
+    // 开启字数修复且总字数不在要求范围内时，进入字数校正阶段由工具统一校正；主 Agent 只统计字数。
+    const plan = wordAdjustmentEnabled ? planWordAdjustment(context.workspace_dir) : null;
+    const adjusting = Boolean(plan?.jobs.length);
+    onActivity?.({ message: '首次正文生成：本轮目标 ' + (targetWords || '未设置') + ' 字，实际 ' + totalWords + ' 字；'
+      + (adjusting ? `进入字数校正，按字数要求改写 ${plan.jobs.length} 个小节。` : (plan ? '没有可调整的小节，保留字数偏差，' : wordAdjustmentEnabled ? '' : '未开启字数修复，') + '进入一致性审计。') });
+    if (!adjusting) return startAudit();
+    // 先记录图片保护，字数校正和审计都以此比对图片块；字数校正阶段不压缩上下文。
+    imageProtection.enter(WORD_ADJUST_TOOLS);
+    wordAdjust.save(createWordAdjustState(plan));
+    return next('word-adjusting', buildWordAdjustPrompt(wordAdjustState));
+  }
+  // 空转诊断结论为收尾时由程序结束本阶段：单工具阶段的工作本来由工具完成，程序代为执行一次本阶段工具；
+  // 工具报错时按当前正文记录遗留（stall_note）。两种情况都经 continueStage 照常切换阶段。
+  // 工具会改动正文，之后按当前正文重新读取结果交给后续流程；任务就此结束时以它作为最终结果，原 Agent 再次提交时以新的验收为准。
+  function finishByStageTool(toolName, forceComplete) {
+    return async meta => {
+      const tool = stageTools.find(item => item.name === toolName);
+      try {
+        await tool.execute('stalled-stage-finish', {}, meta.signal);
+      } catch (error) {
+        if (meta.signal?.aborted || error?.code === AI_UPSTREAM_UNAVAILABLE) throw error;
+        forceComplete(meta.workspace_dir, `程序代为执行本阶段工具失败：${error?.message || error}。诊断：${meta.diagnosis.user_message}`);
+      }
+      finishedResult = inspectContentArtifacts(meta.workspace_dir, { imageProtection: protection }).result;
+      return continueStage(null, { ...meta, validation_result: finishedResult });
+    };
+  }
+  const stalledStageFinishers = {
+    auditing: async meta => {
+      await finalizeAudit(meta, (meta.accepted_issues || []).map(item => item.message), meta.diagnosis.user_message);
+      return finishConsistency(meta, meta.validation_result);
+    },
+    'word-adjusting': finishByStageTool(WORD_ADJUST_TOOL, (workspaceDir, note) => {
+      const words = checkWordCount(workspaceDir);
+      wordAdjust.save({ ...wordAdjustState, status: 'completed', final_words: words.total_words, in_range: words.in_range, stall_note: note });
+    }),
+    // 剩余表格的小节必须全部登记，后续提交校验才会放行。
+    'table-cleaning': finishByStageTool(TABLE_CLEANUP_TOOL, (workspaceDir, note) => {
+      tableCleanup.save({ ...tableCleanupState, ...summarizeTableCleanup(workspaceDir, tableCleanupState, note), submission: {}, stall_note: note });
+    }),
+    'layout-checking': finishByStageTool(LAYOUT_TOOL, (workspaceDir, note) => {
+      layout.save({ ...layoutState, ...summarizeLayoutSupplement(workspaceDir, layoutState, note), submission: {}, stall_note: note });
+    }),
+  };
   const runId = crypto.randomUUID();
   // 新一轮清空上一轮任务文件和程序清单；暂停继续与失败重试保留。
   if (reuseSession && !resuming) clearTaskArtifacts(localContext.workspace_dir);
@@ -771,7 +868,7 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
     ...(!resuming && !continuingPlanning ? { prompted_stage: null, compaction_pending: null } : {}),
   });
   // 审计恢复先补齐小节核对，核对失败的小节随台账交给主 Agent；程序收尾中断时先重做收尾，随后按审计已结束续接。
-  if (stage === 'auditing' && consistencyState.program_finalizing) await finalizeAudit(localContext, [], consistencyState.unsubmitted_rounds);
+  if (stage === 'auditing' && consistencyState.program_finalizing) await finalizeAudit(localContext, [], consistencyState.program_finalize_reason);
   else if (stage === 'auditing' && consistencyState.status !== 'completed') await extractLedger(localContext);
   // 当前阶段要求已在原会话发出时只发送“继续之前的任务”；已完成的审计或去表格仍用程序的收尾提示。
   const stageFinished = (stage === 'auditing' && consistencyState?.status === 'completed')
@@ -824,7 +921,8 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
         imageProtection: protection, consistency, tableCleanup, submissionOptions, failTask }, context);
       const layoutTools = createContentGenerationLayoutTools({ aiService, signal, layout, onActivity, failTask }, context);
       if (stage !== 'content-planning') initializeContent();
-      return [...generationTools, ...layoutTools];
+      stageTools = [...generationTools, ...layoutTools];
+      return stageTools;
     },
     validateOutput: (_result, context) => {
       if (stage === 'content-planning') {
@@ -833,82 +931,18 @@ async function runContentGenerationAgent({ agentService, aiService, generationOp
         return planning.validate(fs.readFileSync(file, 'utf8'));
       }
       onActivity?.({ progress: { step: 'result-check', label: '正在核对正文结果与当前阶段要求' } });
+      finishedResult = null;
       const report = validateContentStageSubmission(context.workspace_dir);
       onActivity?.({ progress: { step: 'result-check', label: report.issues.length ? '结果核对发现 ' + report.issues.length + ' 处问题' : '正文结果核对完成', done: report.issues.length === 0 } });
       return report;
     },
-    continueTask: (_result, context) => {
-      if (stage === 'content-planning') return (async () => {
-        await planning.complete(context.validation_result, context);
-        const nextFiles = await prepareFiles(context);
-        await context.writeFiles(nextFiles);
-        prepareRunSummary(nextFiles);
-        stage = 'generating';
-        initializeContent();
-        return next(stage, generationPrompt());
-      })();
-      const accepted = context.accepted_issues;
-      const checked = context.validation_result;
-      // 单工具阶段未调用工具就结束时重发阶段提示词；工具已提交的结果即本阶段结论，遗留项由工具记录。
-      if (stage === 'layout-checking') {
-        if (!layoutState.submission) return next(stage, buildLayoutPrompt(layoutState));
-        layout.save({ ...layoutState, submission: null, status: 'rechecking' });
-        return finishLayout(context, checked);
-      }
-      if (tableCleanupState) {
-        if (tableCleanupState.status !== 'completed') {
-          if (!tableCleanupState.submission) return next('table-cleaning', buildTableCleanupPrompt(tableCleanupState));
-          tableCleanup.save({ ...tableCleanupState, submission: null, status: 'completed' });
-        }
-        return finishLayout(context, checked);
-      }
-      if (consistencyState) {
-        if (consistencyState.status !== 'completed') {
-          // 结束本轮却未提交：次数随审计状态持久保存，前两次发状态提示，达到上限由程序复核后收尾。
-          if (!consistencyState.submission) {
-            const rounds = (consistencyState.unsubmitted_rounds || 0) + 1;
-            if (rounds >= CONSISTENCY_UNSUBMITTED_LIMIT) return (async () => {
-              await finalizeAudit(context, accepted.map(item => item.message), rounds);
-              return finishConsistency(context, checked);
-            })();
-            consistency.save({ ...consistencyState, unsubmitted_rounds: rounds });
-            return next('auditing', consistencyReminder(context.workspace_dir, rounds === CONSISTENCY_UNSUBMITTED_LIMIT - 1));
-          }
-          const submitted = consistencyState.submission;
-          consistency.save({ ...consistencyState, ...submitted, submission: null, status: 'completed',
-            remaining_issues: [...submitted.remaining_issues, ...accepted.map(item => item.message)] });
-        }
-        return finishConsistency(context, checked);
-      }
-      // 字数校正结束后进入一致性审计；进入审计前压缩上下文，核对小节事实与压缩并行。
-      const startAudit = () => {
-        consistency.save(createAuditState());
-        imageProtection.enter(CONSISTENCY_TOOLS);
-        return { ...next('auditing', consistencyPrompt(context.workspace_dir), compactionInstructions('一致性审计')), await_before_prompt: extractLedger(context) };
-      };
-      if (stage === 'word-adjusting') {
-        if (wordAdjustState.status !== 'completed') return next(stage, buildWordAdjustPrompt(wordAdjustState));
-        return startAudit();
-      }
-      const decisions = JSON.parse(fs.readFileSync(path.join(context.workspace_dir, INPUT_FILES.decisions), 'utf8'));
-      const targetWords = decisions.targets.reduce((sum, section) => sum + (section.content_plan?.target_words || 0), 0);
-      const totalWords = checked.sections.reduce((sum, section) => sum + section.words, 0);
-      // 开启字数修复且总字数不在要求范围内时，进入字数校正阶段由工具统一校正；主 Agent 只统计字数。
-      const plan = wordAdjustmentEnabled ? planWordAdjustment(context.workspace_dir) : null;
-      const adjusting = Boolean(plan?.jobs.length);
-      onActivity?.({ message: '首次正文生成：本轮目标 ' + (targetWords || '未设置') + ' 字，实际 ' + totalWords + ' 字；'
-        + (adjusting ? `进入字数校正，按字数要求改写 ${plan.jobs.length} 个小节。` : (plan ? '没有可调整的小节，保留字数偏差，' : wordAdjustmentEnabled ? '' : '未开启字数修复，') + '进入一致性审计。') });
-      if (!adjusting) return startAudit();
-      // 先记录图片保护，字数校正和审计都以此比对图片块；字数校正阶段不压缩上下文。
-      imageProtection.enter(WORD_ADJUST_TOOLS);
-      wordAdjust.save(createWordAdjustState(plan));
-      return next('word-adjusting', buildWordAdjustPrompt(wordAdjustState));
-    },
+    continueTask: continueStage,
+    stalled_stage_finishers: stalledStageFinishers,
     onCheckpoint: checkpoint => onCheckpoint({ ...checkpoint, task_key: CONTENT_GENERATION_AGENT_TASK_KEY, run_id: runId }),
     onActivity,
   });
   signal.throwIfAborted();
-  return result.validation_result;
+  return finishedResult || result.validation_result;
 }
 
 module.exports = { CONTENT_GENERATION_AGENT_TASK_KEY, CONTINUE_PROMPT, wasStagePrompted, BASELINE_GROUPS, listSectionFiles, buildContentGenerationFiles, createContentGenerationTools, runContentGenerationAgent, readContentGenerationResult, inspectSectionArtifact, inspectContentArtifacts, checkSectionHtml };

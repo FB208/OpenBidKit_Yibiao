@@ -12,7 +12,9 @@ const { createPiSession, loadPiModules } = require('./piSessionFactory.cjs');
 const { AGENT_REPORTED_FAILURE_CODE } = require('./piTaskFailureTool.cjs');
 const { createWorkspaceBaseline } = require('./piWorkspaceBaseline.cjs');
 const { createSubmissionPolicy, buildSubmissionRepairPrompt } = require('./piSubmissionPolicy.cjs');
-const { STAGE_LOOP_LIMIT, createStageLoopGuard } = require('./piStageLoopGuard.cjs');
+const { createStageLoopGuard } = require('./piStageLoopGuard.cjs');
+const { AGENT_STALLED_LOOP_CODE, extractSessionRecord, resolveStall, runDiagnosisTask } = require('./piStallDiagnosis.cjs');
+const { ensureDiagnosisSource } = require('../diagnosisSourceService.cjs');
 const {
   createPersistentAgentTask,
   getPersistentAgentSessionPath,
@@ -45,8 +47,6 @@ const INPUT_BASELINE_GROUP = 'inputs';
 const STATUS_TICK_MS = 1000;
 // 达到 max_turns_per_prompt 时的错误码；该错误不进入执行重试续跑。
 const AGENT_TURN_LIMIT_CODE = 'AGENT_TURN_LIMIT';
-// 阶段续接反复重发同一指令时的错误码；在执行重试之外抛出，停止任务并保留进度。
-const AGENT_STALLED_LOOP_CODE = 'AGENT_STALLED_LOOP';
 const SELF_CHECK_OUTPUT_FILE = 'agent-self-check-result.json';
 const SELF_CHECK_OUTPUT_SCHEMA = {
   type: 'object',
@@ -256,7 +256,7 @@ function normalizeMonitorValue(value) {
   }
 }
 
-function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent, requestUserQuestion }) {
+function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, onMonitorEvent, requestUserQuestion, runChildTask }) {
   const runtime = PI_RUNTIME;
   const runtimeId = PI_RUNTIME_ID;
   const runtimeName = PI_RUNTIME_NAME;
@@ -865,6 +865,7 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         activeTools: payload.active_tools,
         fixedToolList: payload.fixed_tool_list === true,
         beforeToolCall: payload.before_tool_call,
+        workspaceInstructions: payload.workspace_instructions,
         baseline,
       });
       session = created.session;
@@ -913,8 +914,11 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
       let stageIndex = Number(payload.initial_stage_index || persistentTask?.state.stage_index || 0);
       let stagePrompt = prompt;
       let submission = createSubmissionPolicy();
-      // 只在本次运行内计数：触发后任务停止，用户继续任务时重新计数。
+      // 空转判定与诊断次数只在本次运行内有效：用户继续任务时重新计数；换阶段时诊断次数归零。
       const stageLoop = createStageLoopGuard();
+      let stallDiagnoses = [];
+      // 本阶段会话记录的起点，诊断时从这里摘录原 Agent 的执行记录。
+      let stageStartEntryId = session.sessionManager?.getLeafId?.() || null;
       const acceptedSubmissionIssues = [];
 
       const createWorkflowMeta = () => ({
@@ -1172,11 +1176,40 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
         if (typeof payload.continueTask !== 'function') break;
         const completedStageIndex = stageIndex;
         const completedWorkflowStage = activeTask.workflow_stage;
-        const continuation = await payload.continueTask(candidate, {
+        const continueMeta = {
           ...createWorkflowMeta(),
           validation_result: validationResult,
           accepted_issues: acceptedIssues,
-        });
+        };
+        let continuation = await payload.continueTask(candidate, continueMeta);
+        // 同阶段原样重发且期间没有用户回答即判定空转：暂停原 Agent，由诊断 Agent 给出结论后按结论续接、收尾或停止。
+        if (continuation?.prompt && continuation.stage && continuation.complete !== true) {
+          const loop = stageLoop.inspect({ stage: continuation.stage, prompt: continuation.prompt,
+            userAnswered: activeTask.user_question_answers.length > answersBefore });
+          if (loop.stalled) {
+            const stalledStage = continuation.stage;
+            const stalledPrompt = continuation.prompt;
+            const notify = message => touchActivity({ task_token: taskToken, stage: 'stall_diagnosis', message, source: 'pi.stall-diagnosis', visible: true, activity: true });
+            try {
+              continuation = await resolveStall({
+                continuation, diagnoses: stallDiagnoses, guard: stageLoop, meta: continueMeta, notify, signal: activeController.signal,
+                finisher: payload.stalled_stage_finishers?.[stalledStage],
+                runDiagnosis: async ({ attempt, previous, categories }) => runDiagnosisTask({
+                  runChildTask, title, stage: stalledStage, prompt: stalledPrompt,
+                  sourceDir: await ensureDiagnosisSource(app), workspaceDir,
+                  sessionFile: session.sessionFile || '', stateFile: persistentTask?.paths.stateFile || '',
+                  record: extractSessionRecord(session.sessionManager, stageStartEntryId, { stage: stalledStage, sessionFile: session.sessionFile || '' }),
+                  categories, attempt, previous, signal: activeController.signal,
+                  // 诊断子任务的活动只用于保持主任务的无进展计时，进度由 notify 统一展示。
+                  onActivity: event => touchActivity({ task_token: taskToken, stage: 'stall_diagnosis', source: `pi.stall-diagnosis.${event?.source || 'activity'}`, visible: false, activity: true }),
+                }),
+              });
+            } catch (error) {
+              if (error?.code === AGENT_STALLED_LOOP_CODE) touchActivity({ task_token: taskToken, stage: 'stalled_loop', message: error.message, source: 'pi.stage-loop', visible: true, activity: false });
+              throw error;
+            }
+          }
+        }
         if (!continuation || continuation.complete === true || !continuation.prompt) break;
         emitMonitorEvent({
           type: 'task_output',
@@ -1198,15 +1231,11 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
           : stageIndex + 1;
         activeTask.stage_index = stageIndex;
         const continuationStage = continuation.stage || `workflow_stage_${stageIndex}`;
-        const loop = stageLoop.inspect({ stage: continuationStage, prompt: continuation.prompt,
-          userAnswered: activeTask.user_question_answers.length > answersBefore });
-        if (loop.stalled) {
-          const error = new Error(`Agent 在当前阶段连续 ${STAGE_LOOP_LIMIT} 次结束本轮仍未完成阶段要求，程序已重复发出相同指令，任务已停止；已完成的进度保留，可继续任务重试。`);
-          error.code = AGENT_STALLED_LOOP_CODE;
-          touchActivity({ task_token: taskToken, stage: 'stalled_loop', message: error.message, source: 'pi.stage-loop', visible: true, activity: false });
-          throw error;
+        if (continuationStage !== completedWorkflowStage) {
+          submission = createSubmissionPolicy();
+          stallDiagnoses = [];
+          stageStartEntryId = session.sessionManager?.getLeafId?.() || null;
         }
-        if (continuationStage !== completedWorkflowStage) submission = createSubmissionPolicy();
         activeTask.workflow_stage = continuationStage;
         stagePrompt = continuation.prompt;
         // 与压缩并行的程序步骤：先登记错误处理，压缩结束后再等待其完成，之后才发送提示词。

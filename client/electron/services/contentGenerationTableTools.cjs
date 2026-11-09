@@ -160,21 +160,28 @@ async function removeDataTables({ aiService, workspaceDir, signal, onActivity, s
       settle(job, 'error');
     },
   });
-  // 本轮结束按文件复查：没有数据表格的小节完成，仍有表格的小节连同原因记为遗留。
+  const summary = summarizeTableCleanup(workspaceDir, current);
+  save({ ...current, ...summary, submission: {} });
+  report([], { label: `去表格：转换 ${summary.completed_section_ids.length} 节${summary.remaining.length ? `，${summary.remaining.length} 节保留表格` : ''}`, done: true });
+  return current;
+}
+
+// 按文件复查去表格结果：没有数据表格的小节完成，仍有表格的小节连同原因记为遗留，后续提交校验据此放行。
+// 扫描全部目标小节，工具未运行（section_ids 为空）时也能找出全部剩余表格；未记录失败原因的表格使用 fallbackReason。
+function summarizeTableCleanup(workspaceDir, state, fallbackReason = '转换未完成') {
+  const decisions = JSON.parse(fs.readFileSync(path.join(workspaceDir, '正文编排决策.json'), 'utf8'));
   const remaining = [];
   const completed = [];
-  for (const section of targets.filter(item => current.section_ids.includes(item.id))) {
-    const { tables, skipped } = scanTables(read(section));
+  for (const section of decisions.targets) {
+    const { tables, skipped } = scanTables(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
     if (!tables.length && !skipped.length) {
-      completed.push(section.id);
+      if (state.section_ids.includes(section.id)) completed.push(section.id);
       continue;
     }
-    const reasons = [...skipped, ...tables.map(table => current.failures[tableKey(section.id, table)]?.reason || '转换未完成')];
+    const reasons = [...skipped, ...tables.map(table => state.failures[tableKey(section.id, table)]?.reason || fallbackReason)];
     remaining.push({ section_id: section.id, number: section.number, title: section.title, reason: [...new Set(reasons)].join('；') });
   }
-  save({ ...current, completed_section_ids: completed, remaining, remaining_section_ids: remaining.map(item => item.section_id), submission: {} });
-  report([], { label: `去表格：转换 ${completed.length} 节${remaining.length ? `，${remaining.length} 节保留表格` : ''}`, done: true });
-  return current;
+  return { completed_section_ids: completed, remaining, remaining_section_ids: remaining.map(item => item.section_id) };
 }
 
 // 工具结果：处理小节数和保留表格的小节原因。
@@ -208,4 +215,4 @@ function createContentGenerationTableTools({ aiService, signal, onActivity, tabl
   }];
 }
 
-module.exports = { TABLE_CLEANUP_TOOL, TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools, removeDataTables, scanTables, numbersOf };
+module.exports = { TABLE_CLEANUP_TOOL, TABLE_CLEANUP_TOOLS, hasDataTables, buildTableCleanupPrompt, createContentGenerationTableTools, removeDataTables, summarizeTableCleanup, scanTables, numbersOf };

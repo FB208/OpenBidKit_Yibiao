@@ -170,6 +170,9 @@ jobs:
       - name: Build renderer
         run: npm run build
 
+      - name: Prepare diagnosis source
+        run: node scripts/prepare-diagnosis-source.cjs
+
       - name: Build Windows NSIS and ZIP artifacts
         run: npx electron-builder --win nsis zip --publish never -c.npmRebuild=false
 
@@ -303,6 +306,9 @@ jobs:
 
       - name: Build renderer
         run: npm run build
+
+      - name: Prepare diagnosis source
+        run: node scripts/prepare-diagnosis-source.cjs
 
       - name: Preload Electron macOS runtime
         run: |
