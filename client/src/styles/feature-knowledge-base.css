@@ -5,103 +5,723 @@
   overflow: hidden;
 }
 
+/* ── 顶部工作条：标题/位置 + 内嵌检索 + 主操作 ── */
 .knowledge-workspace-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.88);
+  padding: 12px 16px;
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-lg);
-  box-shadow: 0 10px 28px rgba(33, 116, 253, 0.08);
+  box-shadow: var(--yb-shadow-sm);
 }
 
 .knowledge-breadcrumb {
   display: flex;
   align-items: baseline;
+  flex: 1;
   gap: 10px;
   min-width: 0;
-}
-
-.knowledge-breadcrumb span {
-  color: var(--yb-text-muted);
-  font-size: 13px;
 }
 
 .knowledge-breadcrumb strong {
   color: var(--yb-text);
   font-size: 18px;
+  white-space: nowrap;
+}
+
+.knowledge-breadcrumb span {
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .knowledge-breadcrumb small {
+  flex: 0 0 auto;
   color: var(--yb-text-muted);
   font-size: 12px;
 }
 
+.knowledge-search-inline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 8px;
+}
+
+.knowledge-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  width: 15px;
+  height: 15px;
+  color: var(--yb-text-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.knowledge-search-inline input {
+  width: min(300px, 30vw);
+  height: 38px;
+  padding: 0 14px 0 34px;
+  color: var(--yb-text);
+  font-size: 13px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-pill);
+  outline: none;
+  transition: border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
+}
+
+.knowledge-search-inline input:focus {
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: var(--yb-focus-ring);
+}
+
+.knowledge-search-inline .secondary-action {
+  padding: 9px 16px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .knowledge-toolbar-actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
 
-.knowledge-toolbar-actions .secondary-action.is-active {
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--yb-primary), var(--yb-violet));
-  border-color: transparent;
-  box-shadow: 0 10px 24px rgba(33, 116, 253, 0.16);
+.knowledge-toolbar-actions .primary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  font-size: 13px;
 }
 
-.knowledge-global-search {
+/* ── 主区域：文件夹导航 + 文档列表 ── */
+.knowledge-layout {
   display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.88);
+  grid-template-columns: 252px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+.knowledge-folder-panel,
+.knowledge-document-panel,
+.knowledge-preview-panel {
+  display: grid;
+  min-height: 0;
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-lg);
-  box-shadow: 0 10px 28px rgba(33, 116, 253, 0.08);
+  box-shadow: var(--yb-shadow-sm);
 }
 
-.knowledge-global-search > label {
-  color: var(--yb-text);
-  font-size: 13px;
-  font-weight: 800;
+.knowledge-folder-panel,
+.knowledge-document-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
-.knowledge-global-search-controls {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-  gap: 8px;
+.knowledge-preview-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: min(520px, 42vh);
 }
 
-.knowledge-global-search-controls input {
-  min-width: 0;
-  height: 42px;
-  padding: 0 14px;
+.knowledge-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--yb-border-soft);
+}
+
+.knowledge-panel-head strong {
   color: var(--yb-text);
   font-size: 14px;
-  background: #ffffff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-md);
-  outline: none;
 }
 
-.knowledge-global-search-controls input:focus {
-  border-color: rgba(33, 116, 253, 0.5);
+.knowledge-panel-head span {
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+.knowledge-head-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  color: var(--yb-primary);
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(33, 116, 253, 0.08);
+  border: 0;
+  border-radius: var(--yb-radius-pill);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease;
+}
+
+.knowledge-head-action:hover:not(:disabled) {
+  background: rgba(33, 116, 253, 0.15);
+}
+
+.knowledge-head-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.knowledge-folder-list,
+.knowledge-document-list,
+.knowledge-item-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  scrollbar-gutter: stable;
+}
+
+.knowledge-folder-list {
+  gap: 2px;
+}
+
+/* 文件夹导航行：拖拽把手 + 图标/名称/数量 + 悬停菜单 */
+.knowledge-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--yb-radius-md);
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
+}
+
+.knowledge-nav-item:hover {
+  background: rgba(33, 116, 253, 0.05);
+}
+
+.knowledge-nav-item.is-active {
+  background: rgba(33, 116, 253, 0.09);
+  border-color: rgba(33, 116, 253, 0.22);
+  box-shadow: inset 3px 0 0 var(--yb-primary);
+}
+
+.knowledge-nav-item.is-active .knowledge-nav-icon {
+  color: var(--yb-primary);
+}
+
+.knowledge-nav-item.is-drop-target {
+  background: rgba(33, 116, 253, 0.13);
+  border-color: rgba(33, 116, 253, 0.48);
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.1);
+}
+
+.knowledge-nav-item.is-dragging,
+.knowledge-document-card.is-dragging {
+  opacity: 0.52;
+}
+
+.knowledge-nav-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 6px;
+  color: var(--yb-text);
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-sm);
+  cursor: pointer;
+}
+
+.knowledge-nav-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--yb-text-muted);
+}
+
+.knowledge-nav-main strong {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-count-badge {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  color: var(--yb-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.14);
+  border-radius: var(--yb-radius-pill);
+}
+
+.knowledge-nav-item.is-active .knowledge-count-badge,
+.knowledge-nav-item.is-drop-target .knowledge-count-badge {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.12);
+}
+
+.knowledge-drag-handle {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 26px;
+  color: var(--yb-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-sm);
+  cursor: grab;
+  opacity: 0.55;
+  user-select: none;
+  transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease,
+    opacity var(--yb-duration-fast) ease;
+}
+
+.knowledge-drag-handle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.knowledge-nav-item:hover .knowledge-drag-handle,
+.knowledge-document-card:hover .knowledge-drag-handle,
+.knowledge-drag-handle:hover {
+  color: var(--yb-primary);
+  opacity: 1;
+}
+
+.knowledge-drag-handle:hover {
+  background: rgba(33, 116, 253, 0.1);
+}
+
+.knowledge-drag-handle[draggable="false"] {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+.knowledge-drag-handle:active {
+  cursor: grabbing;
+}
+
+.knowledge-nav-menu-trigger {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--yb-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-sm);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.knowledge-nav-menu-trigger[data-state="open"] {
+  color: var(--yb-text);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.knowledge-nav-menu-trigger:hover {
+  color: var(--yb-text);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.knowledge-nav-menu-trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 文件夹行操作菜单（Radix Popover） */
+.knowledge-nav-menu {
+  z-index: 50;
+  display: grid;
+  min-width: 128px;
+  gap: 2px;
+  padding: 5px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  box-shadow: var(--yb-shadow-lg);
+}
+
+.knowledge-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--yb-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-sm);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease;
+}
+
+.knowledge-menu-item svg {
+  width: 14px;
+  height: 14px;
+  color: var(--yb-text-muted);
+}
+
+.knowledge-menu-item:hover {
+  background: rgba(33, 116, 253, 0.08);
+}
+
+.knowledge-menu-item.is-danger {
+  color: var(--yb-danger);
+}
+
+.knowledge-menu-item.is-danger svg {
+  color: var(--yb-danger);
+}
+
+.knowledge-menu-item.is-danger:hover {
+  background: var(--yb-danger-soft);
+}
+
+/* 新建/重命名文件夹的行内输入 */
+.knowledge-inline-edit {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px;
+}
+
+.knowledge-inline-edit form {
+  flex: 1;
+  min-width: 0;
+}
+
+.knowledge-inline-edit input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  color: var(--yb-text);
+  font-size: 13px;
+  background: var(--yb-surface);
+  border: 1px solid rgba(33, 116, 253, 0.55);
+  border-radius: var(--yb-radius-sm);
+  outline: none;
   box-shadow: var(--yb-focus-ring);
 }
 
+.knowledge-inline-edit input:disabled {
+  opacity: 0.6;
+}
+
+/* ── 文档卡片 ── */
+.knowledge-document-list {
+  gap: 10px;
+  padding: 12px;
+}
+
+.knowledge-document-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px;
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    box-shadow var(--yb-duration-fast) ease;
+}
+
+.knowledge-document-card:hover:not(.is-dragging) {
+  background: var(--yb-surface);
+  border-color: rgba(33, 116, 253, 0.18);
+  box-shadow: var(--yb-shadow-sm);
+}
+
+.knowledge-document-card.is-drop-before::before,
+.knowledge-document-card.is-drop-after::after {
+  position: absolute;
+  right: 14px;
+  left: 14px;
+  height: 3px;
+  content: '';
+  background: linear-gradient(90deg, var(--yb-primary), var(--yb-violet));
+  border-radius: var(--yb-radius-pill);
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
+}
+
+.knowledge-document-card.is-drop-before::before {
+  top: -3px;
+}
+
+.knowledge-document-card.is-drop-after::after {
+  bottom: -3px;
+}
+
+.knowledge-document-body {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 4px;
+  border-radius: var(--yb-radius-sm);
+}
+
+.knowledge-document-body[role="button"] {
+  cursor: pointer;
+}
+
+.knowledge-doc-ext {
+  display: grid;
+  flex: 0 0 42px;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border-radius: var(--yb-radius-md);
+}
+
+.knowledge-doc-ext.is-doc {
+  background: linear-gradient(135deg, #2b6cb0, #2174fd);
+}
+
+.knowledge-doc-ext.is-pdf {
+  background: linear-gradient(135deg, #d64541, #ef6b5b);
+}
+
+.knowledge-doc-ext.is-xls {
+  background: linear-gradient(135deg, #177a4c, #2aa86f);
+}
+
+.knowledge-doc-ext.is-md {
+  background: linear-gradient(135deg, #64748b, #94a3b8);
+}
+
+.knowledge-document-info {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+}
+
+.knowledge-document-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.knowledge-document-title strong {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  color: var(--yb-text);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-document-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--yb-text-muted);
+  font-size: 12px;
+}
+
+.knowledge-doc-error {
+  color: var(--yb-danger);
+}
+
+.knowledge-doc-folder {
+  color: var(--yb-primary);
+}
+
+/* 文档卡操作 */
+.knowledge-card-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.knowledge-card-actions button {
+  padding: 5px 10px;
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-sm);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    color var(--yb-duration-fast) ease;
+}
+
+.knowledge-card-actions button:hover:not(:disabled) {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.06);
+  border-color: rgba(33, 116, 253, 0.2);
+}
+
+.knowledge-card-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.knowledge-card-actions button.is-retry {
+  color: #c2410c;
+  background: rgba(249, 115, 22, 0.1);
+  border-color: rgba(249, 115, 22, 0.24);
+}
+
+.knowledge-card-actions button.is-danger {
+  color: var(--yb-danger);
+  background: var(--yb-danger-soft);
+  border-color: var(--yb-danger-border);
+}
+
+/* 外部文件拖入文档面板 */
+.knowledge-document-panel.is-file-drag-over {
+  border-color: rgba(33, 116, 253, 0.5);
+  box-shadow: inset 0 0 0 2px rgba(33, 116, 253, 0.22), var(--yb-shadow-sm);
+}
+
+.knowledge-document-panel.is-file-drag-over::after {
+  position: absolute;
+  z-index: 10;
+  top: 12px;
+  right: 14px;
+  content: '松开上传到此文件夹';
+  padding: 5px 14px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--yb-primary);
+  border-radius: var(--yb-radius-pill);
+  box-shadow: var(--yb-shadow-sm);
+  pointer-events: none;
+}
+
+.knowledge-document-panel {
+  position: relative;
+}
+
+/* 加载态（空态统一走 shared EmptyState） */
+.knowledge-loading-box {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 42px 24px;
+  color: var(--yb-text-muted);
+  text-align: center;
+}
+
+.knowledge-loading-box.large {
+  min-height: 220px;
+}
+
+.knowledge-loading-box strong {
+  color: var(--yb-text);
+}
+
+.knowledge-loading-box p {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* 状态徽标：pending 灰 / 处理中 蓝 / 待匹配 warning / success 绿 / error 红 */
+.knowledge-status {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  color: var(--yb-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.14);
+  border-radius: var(--yb-radius-pill);
+  white-space: nowrap;
+}
+
+.knowledge-status.is-success {
+  color: var(--yb-success-deep);
+  background: var(--yb-success-soft);
+}
+
+.knowledge-status.is-error {
+  color: var(--yb-danger-deep);
+  background: var(--yb-danger-soft);
+}
+
+.knowledge-status.is-ready_for_matching {
+  color: var(--yb-warning-deep);
+  background: var(--yb-warning-soft);
+}
+
+.knowledge-status.is-analyzing,
+.knowledge-status.is-converting,
+.knowledge-status.is-copying,
+.knowledge-status.is-extracting,
+.knowledge-status.is-matching,
+.knowledge-status.is-recovering,
+.knowledge-status.is-saving {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.12);
+}
+
+.knowledge-entity-id {
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 7px;
+  overflow-wrap: anywhere;
+  color: #475569;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: rgba(15, 23, 42, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--yb-radius-sm);
+}
+
+/* ── 检索结果面板 ── */
 .knowledge-search-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   flex: 1 1 0;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-lg);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--yb-shadow-sm);
 }
 
 .knowledge-search-result-list {
@@ -121,9 +741,9 @@
   flex-wrap: wrap;
   gap: 12px;
   padding: 12px;
-  border-top: 1px solid var(--yb-border-soft);
   color: var(--yb-text-muted);
   font-size: 13px;
+  border-top: 1px solid var(--yb-border-soft);
 }
 
 .knowledge-search-pagination > div {
@@ -131,18 +751,24 @@
   gap: 8px;
 }
 
+.knowledge-search-pagination .secondary-action {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
 .knowledge-search-result-card {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   padding: 14px;
   background: var(--yb-bg);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-md);
-  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    box-shadow var(--yb-duration-fast) ease;
 }
 
 .knowledge-search-result-card:hover {
-  background: #ffffff;
+  background: var(--yb-surface);
   border-color: rgba(33, 116, 253, 0.2);
   box-shadow: var(--yb-shadow-sm);
 }
@@ -175,7 +801,7 @@
 
 .knowledge-search-result-card h3 {
   color: var(--yb-text);
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .knowledge-search-result-card p {
@@ -184,268 +810,144 @@
   line-height: 1.7;
 }
 
-.knowledge-search-result-actions .secondary-action,
-.knowledge-search-result-actions .knowledge-item-source-action {
-  min-height: 36px;
-}
+@media (max-width: 900px) {
+  .knowledge-workspace-bar {
+    flex-wrap: wrap;
+  }
 
-@media (max-width: 760px) {
-  .knowledge-global-search-controls {
-    grid-template-columns: 1fr;
+  .knowledge-search-inline {
+    order: 3;
+    flex: 1 1 100%;
+  }
+
+  .knowledge-search-inline input {
+    width: 100%;
+    flex: 1;
   }
 }
 
-.knowledge-create-folder-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-lg);
-  box-shadow: 0 10px 28px rgba(33, 116, 253, 0.08);
-}
-
-.knowledge-create-folder-bar input {
-  flex: 1;
-  min-width: 180px;
-  height: 42px;
-  padding: 0 14px;
-  color: var(--yb-text);
-  font-size: 14px;
-  background: #ffffff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-md);
-  outline: none;
-}
-
-.knowledge-create-folder-bar input:focus {
-  border-color: rgba(33, 116, 253, 0.5);
-  box-shadow: var(--yb-focus-ring);
-}
-
-.knowledge-layout {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+/* ── 文档查看器 ── */
+.knowledge-viewer-page {
+  min-height: 0;
   gap: 12px;
-  min-height: 0;
-  flex: 1 1 0;
-}
-
-.knowledge-folder-panel,
-.knowledge-document-panel,
-.knowledge-preview-panel {
-  display: grid;
-  min-height: 0;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-lg);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
-}
-
-.knowledge-folder-panel,
-.knowledge-document-panel {
-  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
-.knowledge-preview-panel {
-  grid-template-rows: auto minmax(0, 1fr);
-  max-height: min(520px, 42vh);
-}
-
-.knowledge-panel-head {
+.knowledge-viewer-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--yb-border-soft);
-}
-
-.knowledge-panel-head strong {
-  color: var(--yb-text);
-  font-size: 15px;
-}
-
-.knowledge-panel-head span {
-  color: var(--yb-text-muted);
-  font-size: 13px;
-}
-
-.knowledge-folder-list,
-.knowledge-document-list,
-.knowledge-item-list {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  min-height: 0;
-  overflow: auto;
-  padding: 10px;
-  scrollbar-gutter: stable;
-}
-
-.knowledge-folder-card {
-  display: grid;
+  flex: 1;
   gap: 10px;
-  width: 100%;
-  padding: 11px;
-  text-align: left;
-  background: var(--yb-bg);
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-md);
-  cursor: pointer;
-  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
-}
-
-.knowledge-folder-card.is-dragging,
-.knowledge-document-card.is-dragging {
-  opacity: 0.52;
-}
-
-.knowledge-folder-card.is-drop-target {
-  background: rgba(33, 116, 253, 0.14);
-  border-color: rgba(33, 116, 253, 0.48);
-  box-shadow: 0 12px 28px rgba(33, 116, 253, 0.16);
-}
-
-.knowledge-folder-row,
-.knowledge-document-title-main {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
   min-width: 0;
 }
 
-.knowledge-drag-handle {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 32px;
-  color: var(--yb-text-muted);
-  font-size: 16px;
-  font-weight: 800;
-  line-height: 1;
-  background: rgba(148, 163, 184, 0.1);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: var(--yb-radius-sm);
-  cursor: grab;
-  user-select: none;
-  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
+.knowledge-viewer-title .knowledge-breadcrumb {
+  flex: 1;
 }
 
-.knowledge-drag-handle:hover {
-  color: var(--yb-primary);
-  background: rgba(33, 116, 253, 0.1);
-  border-color: rgba(33, 116, 253, 0.18);
-}
-
-.knowledge-drag-handle[draggable="false"] {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
-.knowledge-drag-handle:active {
-  cursor: grabbing;
-}
-
-.knowledge-folder-main {
-  display: grid;
-  width: 100%;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 4px 10px;
-  padding: 0;
-  text-align: left;
+.knowledge-back-action {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 7px 10px 7px 6px;
+  color: var(--yb-text-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
   background: transparent;
   border: 0;
+  border-radius: var(--yb-radius-sm);
+  cursor: pointer;
+  transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease;
 }
 
-.knowledge-folder-card.is-active {
-  background: rgba(33, 116, 253, 0.1);
-  border-color: rgba(33, 116, 253, 0.35);
+.knowledge-back-action:hover {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.08);
 }
 
-.knowledge-folder-card:hover:not(.is-active):not(.is-dragging) {
-  background: #ffffff;
-  border-color: rgba(33, 116, 253, 0.18);
+.knowledge-back-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.knowledge-viewer-bar .knowledge-breadcrumb strong {
+  overflow: hidden;
+  max-width: min(680px, 48vw);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 查看模式分段控件 */
+.knowledge-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(148, 163, 184, 0.14);
+  border-radius: var(--yb-radius-pill);
+}
+
+.knowledge-segmented button {
+  padding: 7px 14px;
+  color: var(--yb-text-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-pill);
+  cursor: pointer;
+  transition: color var(--yb-duration-fast) ease, background var(--yb-duration-fast) ease,
+    box-shadow var(--yb-duration-fast) ease;
+}
+
+.knowledge-segmented button:hover:not(:disabled):not(.is-active) {
+  color: var(--yb-text);
+}
+
+.knowledge-segmented button.is-active {
+  color: var(--yb-text);
+  background: var(--yb-surface);
+  box-shadow: var(--yb-shadow-xs);
+}
+
+.knowledge-segmented button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.knowledge-viewer-panel {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
   box-shadow: var(--yb-shadow-sm);
 }
 
-.knowledge-folder-main > span {
-  display: grid;
-  grid-row: span 2;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--yb-primary);
-  font-weight: 800;
-  background: rgba(33, 116, 253, 0.12);
-  border-radius: var(--yb-radius-md);
+.knowledge-viewer-item-list {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+  padding: 16px;
 }
 
-.knowledge-folder-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
+.knowledge-viewer-markdown {
+  min-height: 0;
+  overflow: auto;
 }
 
-.knowledge-folder-actions button {
-  padding: 6px 9px;
-  color: var(--yb-primary);
-  font-size: 12px;
-  font-weight: 800;
-  background: #ffffff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-sm);
-  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
-}
-
-.knowledge-folder-actions button:hover:not(:disabled) {
-  background: rgba(33, 116, 253, 0.08);
-  border-color: rgba(33, 116, 253, 0.2);
-}
-
-.knowledge-folder-card strong,
-.knowledge-document-title strong,
-.knowledge-item-card strong {
-  color: var(--yb-text);
-}
-
-.knowledge-document-name {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.knowledge-entity-id {
-  width: fit-content;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  color: #475569;
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  background: rgba(15, 23, 42, 0.05);
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: var(--yb-radius-sm);
-  padding: 3px 7px;
-}
-
-.knowledge-folder-card small,
-.knowledge-document-meta,
-.knowledge-empty-box p,
-.knowledge-item-card p {
-  color: var(--yb-text-muted);
-  font-size: 13px;
-}
-
-.knowledge-document-card,
-.knowledge-item-card,
-.knowledge-empty-box {
+/* 知识条目卡 */
+.knowledge-item-card {
   position: relative;
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 10px;
   padding: 14px;
   background: var(--yb-bg);
   border: 1px solid var(--yb-border-soft);
@@ -454,165 +956,69 @@
     box-shadow var(--yb-duration-fast) ease;
 }
 
-/* 空态内的引导按钮不占满整行 */
-.knowledge-empty-box .primary-action {
-  justify-self: start;
-}
-
-.knowledge-document-card:hover:not(.is-dragging) {
-  background: #ffffff;
-  border-color: rgba(33, 116, 253, 0.16);
+.knowledge-item-card:hover {
+  background: var(--yb-surface);
+  border-color: rgba(33, 116, 253, 0.18);
   box-shadow: var(--yb-shadow-sm);
 }
 
-.knowledge-document-card.is-drop-before::before,
-.knowledge-document-card.is-drop-after::after {
-  position: absolute;
-  right: 14px;
-  left: 14px;
-  height: 3px;
-  content: '';
-  background: linear-gradient(90deg, var(--yb-primary), #7c3aed);
-  border-radius: var(--yb-radius-pill);
-  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.12);
-}
-
-.knowledge-document-card.is-drop-before::before {
-  top: -3px;
-}
-
-.knowledge-document-card.is-drop-after::after {
-  bottom: -3px;
-}
-
-.knowledge-empty-box.large {
-  min-height: 220px;
-  place-content: center;
-  text-align: center;
-}
-
-.knowledge-document-title,
-.knowledge-document-meta,
-.knowledge-document-actions,
-.knowledge-preview-tabs {
+.knowledge-item-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
-.knowledge-status {
-  padding: 4px 10px;
-  color: var(--yb-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  background: rgba(148, 163, 184, 0.12);
-  border-radius: var(--yb-radius-pill);
-}
-
-.knowledge-status.is-success {
-  color: var(--yb-success);
-  background: rgba(16, 185, 129, 0.12);
-}
-
-.knowledge-status.is-error {
-  color: var(--yb-danger);
-  background: rgba(239, 68, 68, 0.12);
-}
-
-.knowledge-status.is-analyzing,
-.knowledge-status.is-converting,
-.knowledge-status.is-copying,
-.knowledge-status.is-extracting,
-.knowledge-status.is-matching,
-.knowledge-status.is-recovering,
-.knowledge-status.is-ready_for_matching,
-.knowledge-status.is-saving {
+.knowledge-item-index {
+  flex: 0 0 auto;
+  padding: 1px 7px;
   color: var(--yb-primary);
-  background: rgba(33, 116, 253, 0.12);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  background: rgba(33, 116, 253, 0.1);
+  border-radius: var(--yb-radius-sm);
 }
 
-.knowledge-document-actions,
-.knowledge-preview-tabs {
-  justify-content: flex-start;
-}
-
-.knowledge-document-actions button,
-.knowledge-preview-tabs button {
-  padding: 7px 12px;
+.knowledge-item-head strong {
   color: var(--yb-text);
+}
+
+.knowledge-item-card p {
+  margin: 0;
+  color: var(--yb-text-muted);
   font-size: 13px;
-  font-weight: 700;
-  background: #ffffff;
-  border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-md);
-  cursor: pointer;
-  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
-    color var(--yb-duration-fast) ease;
-}
-
-.knowledge-document-actions button:hover:not(:disabled) {
-  color: var(--yb-primary);
-  background: rgba(33, 116, 253, 0.06);
-  border-color: rgba(33, 116, 253, 0.2);
-}
-
-.knowledge-document-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.knowledge-document-actions button.is-retry {
-  color: #c2410c;
-  background: rgba(249, 115, 22, 0.1);
-  border-color: rgba(249, 115, 22, 0.24);
-}
-
-.knowledge-folder-actions button.is-danger,
-.knowledge-document-actions button.is-danger {
-  color: var(--yb-danger);
-  background: rgba(239, 68, 68, 0.08);
-  border-color: rgba(239, 68, 68, 0.16);
-}
-
-.knowledge-preview-tabs button.is-active {
-  color: #ffffff;
-  background: var(--yb-primary);
-  border-color: var(--yb-primary);
-}
-
-.knowledge-preview-panel {
-  overflow: hidden;
+  line-height: 1.7;
 }
 
 .knowledge-item-source-action {
   width: fit-content;
-  padding: 7px 12px;
+  padding: 6px 12px;
   color: var(--yb-primary);
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 700;
   background: rgba(33, 116, 253, 0.08);
   border: 1px solid rgba(33, 116, 253, 0.16);
   border-radius: var(--yb-radius-md);
   cursor: pointer;
   user-select: none;
-  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease, box-shadow var(--yb-duration-fast) ease, color var(--yb-duration-fast) ease, transform var(--yb-duration-fast) ease;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
 }
 
 .knowledge-item-source-action:hover {
-  background: rgba(33, 116, 253, 0.12);
+  background: rgba(33, 116, 253, 0.14);
 }
 
 .knowledge-item-content {
   min-height: 0;
   max-height: 260px;
   overflow: auto;
+  padding: 12px;
   color: var(--yb-text);
   line-height: 1.78;
-  background: #ffffff;
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-md);
-  padding: 12px;
 }
 
 .knowledge-item-loading {
@@ -623,6 +1029,7 @@
   font-size: 13px;
 }
 
+/* ── 条目原文弹窗 ── */
 .knowledge-source-viewer {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -645,10 +1052,10 @@
   z-index: 121;
   width: min(1040px, calc(100vw - 48px));
   height: min(820px, calc(100vh - 48px));
-  background: #ffffff;
-  border: 1px solid rgba(228, 233, 240, 0.9);
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
   border-radius: var(--yb-radius-xl);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
+  box-shadow: var(--yb-shadow-modal);
   transform: translate(-50%, -50%);
 }
 
@@ -737,52 +1144,50 @@
 .knowledge-item-card pre {
   max-height: 260px;
   overflow: auto;
-  white-space: pre-wrap;
+  padding: 12px;
   color: var(--yb-text);
-  background: #ffffff;
+  white-space: pre-wrap;
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-md);
-  padding: 12px;
 }
 
 .knowledge-markdown-preview {
+  min-height: 0;
   margin: 16px;
-  min-height: 0;
 }
 
-.knowledge-viewer-page {
-  min-height: 0;
-  gap: 12px;
-  overflow: hidden;
+.knowledge-preview-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
 }
 
-.knowledge-viewer-bar .knowledge-breadcrumb strong {
-  overflow: hidden;
-  max-width: min(680px, 48vw);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.knowledge-viewer-panel {
-  display: grid;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.86);
+.knowledge-preview-tabs button {
+  padding: 7px 12px;
+  color: var(--yb-text);
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
-  border-radius: var(--yb-radius-lg);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  border-radius: var(--yb-radius-md);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease,
+    color var(--yb-duration-fast) ease;
 }
 
-.knowledge-viewer-item-list {
-  padding: 16px;
+.knowledge-preview-tabs button.is-active {
+  color: #ffffff;
+  background: var(--yb-primary);
+  border-color: var(--yb-primary);
 }
 
-.knowledge-viewer-markdown {
-  min-height: 0;
-  overflow: auto;
+.knowledge-preview-panel {
+  overflow: hidden;
 }
 
+/* ── 分析调试视图 ── */
 .knowledge-analysis-view {
   display: flex;
   flex-direction: column;
@@ -824,7 +1229,7 @@
   height: 42px;
   padding: 0 12px;
   color: var(--yb-text);
-  background: #ffffff;
+  background: var(--yb-surface);
   border: 1px solid var(--yb-border-soft);
   border-radius: var(--yb-radius-md);
   outline: none;
@@ -859,8 +1264,8 @@
 
 .knowledge-analysis-report {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--yb-border-soft);

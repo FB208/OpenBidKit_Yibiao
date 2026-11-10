@@ -586,6 +586,7 @@
 .yb-empty-state {
   display: grid;
   grid-column: 1 / -1;
+  align-content: center;
   justify-items: center;
   gap: 8px;
   padding: 42px 24px;

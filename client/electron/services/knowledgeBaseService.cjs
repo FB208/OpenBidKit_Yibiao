@@ -2172,26 +2172,29 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       }
     },
 
-    async uploadDocuments(folderId, webContents) {
+    async uploadDocuments(folderId, webContents, filePaths) {
       const currentIndex = knowledgeBaseStore.list();
       const folder = currentIndex.folders.find((item) => item.id === folderId);
       if (!folder) throw new Error('请先选择知识库文件夹');
 
-      const result = await dialog.showOpenDialog({
-        title: '选择知识库文档',
-        properties: ['openFile', 'multiSelections'],
-        filters: [
-          { name: '知识库文档', extensions: ['doc', 'docx', 'wps', 'pdf', 'md', 'markdown', 'xls', 'xlsx'] },
-          { name: '所有文件', extensions: ['*'] },
-        ],
-      });
-
-      if (result.canceled || !result.filePaths.length) {
-        return { success: false, message: '已取消选择' };
+      let selectedPaths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
+      if (!selectedPaths.length) {
+        const result = await dialog.showOpenDialog({
+          title: '选择知识库文档',
+          properties: ['openFile', 'multiSelections'],
+          filters: [
+            { name: '知识库文档', extensions: ['doc', 'docx', 'wps', 'pdf', 'md', 'markdown', 'xls', 'xlsx'] },
+            { name: '所有文件', extensions: ['*'] },
+          ],
+        });
+        if (result.canceled || !result.filePaths.length) {
+          return { success: false, message: '已取消选择' };
+        }
+        selectedPaths = result.filePaths;
       }
 
       const created = [];
-      for (const filePath of result.filePaths) {
+      for (const filePath of selectedPaths) {
         const ext = path.extname(filePath).toLowerCase();
         if (!supportedExtensions.has(ext)) continue;
         const documentId = createId('doc');

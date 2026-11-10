@@ -750,7 +750,7 @@ export interface YibiaoBridge {
     deleteFolder: (folderId: string) => Promise<KnowledgeBaseMutationResult>;
     deleteDocument: (documentId: string) => Promise<KnowledgeBaseMutationResult>;
     moveDocument: (documentId: string, targetFolderId: string, targetDocumentId?: string | null, position?: 'before' | 'after') => Promise<KnowledgeBaseIndexMutationResult>;
-    uploadDocuments: (folderId: string) => Promise<KnowledgeBaseUploadResult>;
+    uploadDocuments: (folderId: string, filePaths?: string[]) => Promise<KnowledgeBaseUploadResult>;
     retryDocument: (documentId: string) => Promise<KnowledgeBaseRetryDocumentResult>;
     startMatching: (documentId: string, batchSize?: number) => Promise<KnowledgeBaseStartMatchingResult>;
     readMarkdown: (documentId: string) => Promise<string>;
