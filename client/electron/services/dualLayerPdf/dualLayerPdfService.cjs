@@ -135,9 +135,9 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
     worker = null;
   }
 
-  async function ensureWorker() {
+  function ensureWorker() {
     if (!worker || worker.isDestroyed()) {
-      worker = await createWorkerWindow({ getRendererWindowUrl });
+      worker = createWorkerWindow({ getRendererWindowUrl });
     }
     return worker;
   }
@@ -161,9 +161,9 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
       currentJob = { item, writer };
 
       const ocr = dependencyService.getInstalled(OCR_DEPENDENCY_ID);
-      const workerWindow = await ensureWorker();
-      // 窗口加载期间的取消找不到窗口可销毁，加载完成后在这里停下，由 runQueue 收尾时销毁。
       throwIfCanceling();
+      const workerWindow = ensureWorker();
+      await workerWindow.ready;
       const result = await workerWindow.convert({ pdfPath: exported.pdfPath, ocrDir: ocr?.installDir || '' });
       throwIfCanceling();
       await writer.finish({ outline: result.outline, title: path.parse(item.fileName).name });
