@@ -73,7 +73,7 @@ function ResourcesPage() {
         <section className="resources-shelf-panel" aria-label="资源列表">
           <div className="resources-shelf-head">
             <div>
-              <span className="section-kicker">资源下载</span>
+              <span className="section-kicker">其他功能</span>
               <h3>精选资源</h3>
             </div>
             <form className="resources-search-form" onSubmit={handleSearchSubmit}>

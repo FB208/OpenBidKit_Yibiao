@@ -24,7 +24,8 @@ export type SectionId =
   | 'developer-layout-budget-test'
   | 'developer-agent-test'
   | 'settings'
-  | 'plugin-manager';
+  | 'plugin-manager'
+  | 'dual-layer-pdf';
 
 export interface AppMenuNotice {
   message: string;

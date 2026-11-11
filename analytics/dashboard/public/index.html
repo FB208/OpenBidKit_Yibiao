@@ -41,6 +41,7 @@
           <button class="nav-item" type="button" data-tab-button="resources">资源管理</button>
           <button class="nav-item" type="button" data-tab-button="ads">广告管理</button>
           <button class="nav-item" type="button" data-tab-button="plugins">插件管理</button>
+          <button class="nav-item" type="button" data-tab-button="dependencies">依赖管理</button>
           <button class="nav-item" type="button" data-tab-button="model-info-cache">模型信息缓存</button>
         </div>
       </nav>
@@ -870,6 +871,66 @@
 
             <div id="pluginsStatus" class="notice-status"></div>
             <div id="pluginsTable" class="plugin-table-wrap"></div>
+          </section>
+        </section>
+
+        <!-- 依赖管理 -->
+        <section id="tab-dependencies" class="tab-panel" data-tab-panel="dependencies">
+          <section class="panel section">
+            <div class="section-head">
+              <div>
+                <h2>依赖管理</h2>
+                <p>客户端按需下载的功能组件。安装包请上传到 R2 的 dependencies/ 目录，不要放在 plugins/ 下（会被插件同步清理）。</p>
+              </div>
+            </div>
+
+            <form id="dependencyForm" class="plugin-form" autocomplete="off">
+              <label>
+                依赖 ID *
+                <input id="dependencyId" maxlength="80" placeholder="例如：ocr-v1" required />
+              </label>
+              <label>
+                适用平台
+                <select id="dependencyPlatform">
+                  <option value="all" selected>通用</option>
+                  <option value="win32-x64">Windows x64</option>
+                  <option value="darwin-x64">macOS Intel</option>
+                  <option value="darwin-arm64">macOS Apple 芯片</option>
+                </select>
+              </label>
+              <label>
+                状态
+                <select id="dependencyEnabled">
+                  <option value="true" selected>启用</option>
+                  <option value="false">停用</option>
+                </select>
+              </label>
+              <label>
+                名称 *
+                <input id="dependencyName" maxlength="120" placeholder="例如：文字识别组件" required />
+              </label>
+              <label>
+                版本 *
+                <input id="dependencyVersion" maxlength="40" placeholder="例如：1.0.0" required />
+              </label>
+              <label class="plugin-field-wide">
+                说明
+                <input id="dependencyDescription" maxlength="500" placeholder="客户端询问是否下载时显示" />
+              </label>
+              <label class="plugin-field-wide">
+                下载链接 *
+                <input id="dependencyDownloadUrl" maxlength="500" placeholder="例如：https://openbidkit-oss.agnet.top/dependencies/ocr-v1/ocr-v1-1.0.0.zip" required />
+                <small>保存时自动读取文件大小；同一依赖 ID 和平台只保留一条，再次保存即更新。</small>
+              </label>
+
+              <div class="plugin-actions">
+                <button id="resetDependencyButton" class="secondary-button" type="button">清空表单</button>
+                <button id="saveDependencyButton" type="submit">保存</button>
+              </div>
+            </form>
+
+            <div id="dependenciesStatus" class="notice-status"></div>
+            <div id="dependenciesTable" class="plugin-table-wrap"></div>
           </section>
         </section>
 

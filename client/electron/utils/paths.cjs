@@ -179,6 +179,11 @@ function getPlatformArchKey() {
   return `${process.platform}-${process.arch}`;
 }
 
+/** 按需下载的功能组件（如文字识别运行库和模型）根目录，每个依赖一个子目录。 */
+function getDependenciesDir(app) {
+  return path.join(getUserDataPath(app), 'dependencies');
+}
+
 function getBundledAgentToolsBinDir(app) {
   if (process.env.YIBIAO_AGENT_TOOLS_BIN_DIR) {
     return process.env.YIBIAO_AGENT_TOOLS_BIN_DIR;
@@ -256,6 +261,7 @@ module.exports = {
   getBundledDiagnosisSourceDir,
   getBundledOpenXmlHelperDir,
   getBundledOpenXmlHelperPath,
+  getDependenciesDir,
   getDeveloperLogsDir,
   getDiagnosisSourceDir,
   getDuplicateCheckContentDir,

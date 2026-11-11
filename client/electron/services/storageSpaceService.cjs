@@ -27,6 +27,7 @@ const { createPiEnvironmentLayout } = require('./pi/piEnvironment.cjs');
 // electron-builder 默认按 `${package.name}-updater` 命名更新缓存目录，安装包内的 app-update.yml 优先。
 const DEFAULT_UPDATER_CACHE_DIR_NAME = 'yibiao-client-updater';
 const PLUGIN_ENTRY_NAMES = ['plugins', 'plugin-configs', 'plugin-states.json'];
+const DEPENDENCY_ENTRY_NAMES = ['dependencies'];
 const BROWSER_CACHE_DIR_NAMES = ['Cache', 'Code Cache'];
 const RESTRICTED_HTML_ASSET_PREFIX = 'restricted-html-assets-';
 const DUPLICATE_CONTENT_IMAGE_PREFIX = 'duplicate-check-content-';
@@ -328,15 +329,17 @@ function createStorageSpaceService({ app, db, taskService, agentService, openXml
     const workspaceBytes = rootBytes(['workspace']) - databaseBytes - sumBytes(legacy) - itemBytes(temporary, ['openxml-jobs']);
     const agentBytes = rootBytes(['agent-runtime']) - itemBytes(temporary, ['agent-temp']);
     const pluginBytes = rootBytes(PLUGIN_ENTRY_NAMES);
+    const dependencyBytes = rootBytes(DEPENDENCY_ENTRY_NAMES);
     const partialDownloadBytes = await measurePaths((await listChildren(updatesDir)).filter((filePath) => filePath.toLowerCase().endsWith('.tmp')));
     const runtimeBytes = rootBytes([...rootSizes.keys()]) - configBytes
-      - rootBytes(['workspace', 'agent-runtime', 'logs', ...PLUGIN_ENTRY_NAMES, ...BROWSER_CACHE_DIR_NAMES]) - partialDownloadBytes;
+      - rootBytes(['workspace', 'agent-runtime', 'logs', ...PLUGIN_ENTRY_NAMES, ...DEPENDENCY_ENTRY_NAMES, ...BROWSER_CACHE_DIR_NAMES]) - partialDownloadBytes;
     return [
       { id: 'config', label: '配置与授权', description: '模型配置、API Key、许可证和账户登录状态', bytes: configBytes },
       { id: 'database', label: '业务数据库', description: '各功能的项目状态、目录和检查结果', bytes: databaseBytes },
       { id: 'workspace', label: '业务文件', description: '知识库、招标文件、资信库等正在使用的文件', bytes: workspaceBytes },
       { id: 'agent-sessions', label: '智能体会话', description: '可继续执行的智能体任务和运行环境', bytes: agentBytes },
       { id: 'plugins', label: '插件', description: '已安装的插件及其配置', bytes: pluginBytes },
+      { id: 'dependencies', label: '功能组件', description: '按需下载的文字识别等组件', bytes: dependencyBytes },
       { id: 'runtime', label: '软件运行数据', description: '界面运行状态、本地存储和待安装的更新', bytes: runtimeBytes },
     ].map((item) => ({ ...item, bytes: Math.max(0, item.bytes) }));
   }

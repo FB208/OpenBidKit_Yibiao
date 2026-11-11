@@ -11,6 +11,7 @@ import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { TechnicalPlanOutlineData as OutlineData } from './outline';
 import type { NoticeCachedMedia, NoticeMediaCacheRequest } from './notice';
+import type { DualLayerPdfEnvironment, DualLayerPdfState } from '../../features/dual-layer-pdf/types';
 
 /** 配置保存只更新提交字段，文本服务商档案也支持局部更新。 */
 export type ClientConfigPatch = Partial<Omit<ClientConfig, 'text_model_profiles'>> & {
@@ -606,6 +607,28 @@ export interface DeveloperLayoutFigureResult {
   elapsedMs: number;
 }
 
+/** 按需下载的功能组件的安装进度。 */
+export interface DependencyProgress {
+  id: string;
+  phase: 'downloading' | 'extracting' | 'done' | 'error';
+  percent: number;
+  message?: string;
+}
+
+/** 按需下载的功能组件（如文字识别运行库和模型）的状态。 */
+export interface DependencyStatus {
+  id: string;
+  installed: boolean;
+  installedVersion: string;
+  /** 线上登记的安装包；读取失败或没有适用于当前系统的安装包时为 null。 */
+  available: { name: string; description: string; version: string; size: number; platform: string } | null;
+  hasUpdate: boolean;
+  installing: boolean;
+  progress: DependencyProgress | null;
+  /** 线上信息读取失败的原因。 */
+  message: string;
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -931,6 +954,27 @@ export interface YibiaoBridge {
     refreshMarket: () => Promise<void>;
     clearUpdateFailedState: (pluginId: string) => Promise<boolean>;
     notifyEvent: (pluginId: string, event: string, payload?: unknown) => Promise<void>;
+  };
+  dependencies: {
+    getStatus: (dependencyId: string) => Promise<DependencyStatus>;
+    install: (dependencyId: string) => Promise<DependencyStatus>;
+    uninstall: (dependencyId: string) => Promise<DependencyStatus>;
+    onProgress: (callback: (progress: DependencyProgress) => void) => () => void;
+  };
+  dualLayerPdf: {
+    getState: () => Promise<DualLayerPdfState>;
+    getEnvironment: () => Promise<DualLayerPdfEnvironment>;
+    selectFiles: () => Promise<DualLayerPdfState>;
+    addFiles: (filePaths: string[]) => Promise<DualLayerPdfState>;
+    removeItem: (itemId: string) => Promise<DualLayerPdfState>;
+    retryItem: (itemId: string) => Promise<DualLayerPdfState>;
+    selectOutputDir: () => Promise<DualLayerPdfState>;
+    resetOutputDir: () => Promise<DualLayerPdfState>;
+    start: () => Promise<DualLayerPdfState>;
+    cancel: () => Promise<DualLayerPdfState>;
+    clear: () => Promise<DualLayerPdfState>;
+    showInFolder: (filePath: string) => Promise<void>;
+    onEvent: (callback: (state: DualLayerPdfState) => void) => () => void;
   };
 }
 

@@ -1,0 +1,110 @@
+/* 批量转双层 PDF（DualLayerPdfPage.tsx）：上传区复用 shared-upload.css，这里只补文件列表和环境提示。 */
+.dual-layer-pdf-page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dual-layer-pdf-scroll {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 84px;
+  overflow: auto;
+}
+
+.dual-layer-pdf-summary {
+  overflow: hidden;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dual-layer-pdf-environment {
+  display: grid;
+  gap: 6px;
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dual-layer-pdf-environment .is-danger {
+  color: var(--yb-danger);
+}
+
+.dual-layer-pdf-environment .is-warning {
+  color: var(--yb-warning-deep);
+}
+
+.dual-layer-pdf-list {
+  display: grid;
+  flex-shrink: 0;
+  gap: 10px;
+  padding: 18px 24px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(228, 233, 240, 0.88);
+  border-radius: var(--yb-radius-xl);
+  box-shadow: var(--yb-shadow);
+}
+
+.dual-layer-pdf-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-lg);
+}
+
+.dual-layer-pdf-item.is-error {
+  background: var(--yb-danger-soft);
+  border-color: var(--yb-danger-border);
+}
+
+.dual-layer-pdf-item-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+}
+
+.dual-layer-pdf-item-main strong {
+  overflow: hidden;
+  color: var(--yb-text);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dual-layer-pdf-item-main span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.dual-layer-pdf-item.is-error .dual-layer-pdf-item-main span {
+  color: var(--yb-danger-deep);
+}
+
+.dual-layer-pdf-item-main small {
+  color: var(--yb-warning-deep);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.dual-layer-pdf-item-main small.is-path {
+  color: var(--yb-text-muted);
+}
+
+.dual-layer-pdf-item-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}

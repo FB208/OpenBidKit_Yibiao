@@ -509,11 +509,14 @@ app.whenReady().then(() => {
     closeDeveloperTokenStatsWindow,
     openDeveloperAgentMonitorWindow,
     closeDeveloperAgentMonitorWindow,
+    getRendererWindowUrl: (windowName) => appendWindowQuery(rendererUrl || packagedIndexUrl, windowName),
   });
   setupAutoUpdate({ app, mainWindow });
   mainWindow.on('closed', () => {
     closeDeveloperTokenStatsWindow();
     closeDeveloperAgentMonitorWindow();
+    // 隐藏的转换工作窗口不关掉的话，应用不会因为窗口全部关闭而退出。
+    services?.closeHiddenWindows?.();
   });
   void checkBlockedIpAfterStartup();
   // 升级后在后台同步诊断资料，空转诊断前会等待同一次同步完成。

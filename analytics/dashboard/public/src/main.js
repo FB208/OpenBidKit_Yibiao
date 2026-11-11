@@ -15,6 +15,7 @@ import { loadOverview } from './pages/overview.js';
 import { bindResourceEvents, loadResources } from './pages/resources.js';
 import { bindSystemSettingsEvents, loadSystemSettings } from './pages/systemSettings.js';
 import { loadPlugins, setupPluginsPage } from './pages/plugins.js';
+import { loadDependencies, setupDependenciesPage } from './pages/dependencies.js';
 import { loadTraffic } from './pages/traffic.js';
 import { setError, setStatus, updateClientsPager, updateIpPager, updateLatestPager } from './render.js';
 import { appState, state } from './state.js';
@@ -38,6 +39,7 @@ const tabLoaders = {
   resources: () => loadResources(),
   ads: () => loadAds(),
   plugins: () => loadPlugins(),
+  dependencies: () => loadDependencies(),
   'model-info-cache': () => loadModelInfoCache(),
 };
 
@@ -146,6 +148,7 @@ function bindEvents() {
   bindResourceEvents();
   bindAdEvents();
   setupPluginsPage();
+  setupDependenciesPage();
   setupModelInfoCachePage();
   setupAgentErrorsPage();
   setupIpBlocksPage();

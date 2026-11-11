@@ -34,8 +34,8 @@ const PDF_GRID_MIN_HEIGHT = 12;
 const PDF_TEXT_DUPLICATE_TOLERANCE = 1;
 const PDF_TEXT_LINE_TOLERANCE = 3;
 const OFFICE_CONVERSION_TIMEOUT_MS = 180000;
-const WPS_WORD_PROG_IDS = ['Kwps.Application', 'KWPS.Application', 'wps.Application'];
-const MICROSOFT_WORD_PROG_IDS = ['Word.Application'];
+export const WPS_WORD_PROG_IDS = ['Kwps.Application', 'KWPS.Application', 'wps.Application'];
+export const MICROSOFT_WORD_PROG_IDS = ['Word.Application'];
 const POWERSHELL_OFFICE_CONVERT_SCRIPT = [
   'param(',
   '  [Parameter(Mandatory=$true)][string]$ProgId,',
@@ -1168,7 +1168,7 @@ async function findRegisteredComBackends(powershell, type, productName, progIds)
   return backends;
 }
 
-async function isComProgIdRegistered(progId) {
+export async function isComProgIdRegistered(progId) {
   try {
     await runProcess('reg.exe', ['query', `HKCR\\${progId}\\CLSID`], { timeoutMs: 10000 });
     return true;
@@ -1253,7 +1253,7 @@ async function getLegacyConversionSuffix(inputPath) {
   return suffix || '.doc';
 }
 
-async function findLibreOfficeCommand() {
+export async function findLibreOfficeCommand() {
   const candidates = [
     process.env.LIBREOFFICE_PATH,
     'soffice',
@@ -1285,7 +1285,7 @@ async function findLibreOfficeCommand() {
   return null;
 }
 
-async function findPowerShellCommand() {
+export async function findPowerShellCommand() {
   if (process.platform !== 'win32') {
     return null;
   }
@@ -1411,7 +1411,7 @@ async function runLibreOfficeConvert(soffice, inputPath, outputDir) {
   }
 }
 
-function runProcess(command, args, options = {}) {
+export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true });
     let stdout = '';

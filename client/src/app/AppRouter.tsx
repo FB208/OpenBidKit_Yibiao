@@ -15,6 +15,7 @@ import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheck
 import BlindCheckPage from '../features/blind-check/pages/BlindCheckPage';
 import ResourcesPage from '../features/resources/pages/ResourcesPage';
 import PluginsPage from '../features/plugins/pages/PluginsPage';
+import DualLayerPdfPage from '../features/dual-layer-pdf/pages/DualLayerPdfPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
 import TechnicalPlanHome from '../features/technical-plan/pages/TechnicalPlanHome';
 import FeasibilityReportHome from '../features/feasibility-report/pages/FeasibilityReportHome';
@@ -54,6 +55,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <ResourcesPage />;
     case 'plugin-manager':
       return <PluginsPage />;
+    case 'dual-layer-pdf':
+      return <DualLayerPdfPage />;
     case 'duplicate-check':
       return <DuplicateCheckPage />;
     case 'rejection-check':

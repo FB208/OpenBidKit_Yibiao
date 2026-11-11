@@ -23,6 +23,10 @@ const { registerFeasibilityReportIpc } = require('./feasibilityReportIpc.cjs');
 const { registerTemplateIpc } = require('./templateIpc.cjs');
 const { registerSystemFontIpc } = require('./systemFontIpc.cjs');
 const { registerPluginIpc } = require('./pluginIpc.cjs');
+const { registerDependencyIpc } = require('./dependencyIpc.cjs');
+const { registerDualLayerPdfIpc } = require('./dualLayerPdfIpc.cjs');
+const { createDependencyService } = require('../services/dependencyService.cjs');
+const { createDualLayerPdfService } = require('../services/dualLayerPdf/dualLayerPdfService.cjs');
 const pluginService = require('../services/pluginService.cjs');
 const { createAgentService } = require('../services/agentService.cjs');
 const { createTechnicalPlanExport } = require('../services/technicalPlanExport.cjs');
@@ -388,7 +392,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
 }
 
 // 装配应用服务与 IPC；公告缓存独立于工作区数据库生命周期。
-function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, isUpdateCacheInUse, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, closeDeveloperAgentMonitorWindow }) {
+function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, isUpdateCacheInUse, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, closeDeveloperAgentMonitorWindow, getRendererWindowUrl }) {
   void checkRequiredOnlineServices();
   const configStore = createConfigStore(app);
   initLocalImageRenderService({ configStore });
@@ -410,6 +414,16 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   let technicalPlanExport;
   const exportService = createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport: () => technicalPlanExport });
   const systemFontService = createSystemFontService();
+  const dependencyService = createDependencyService({
+    app,
+    onProgress: (payload) => sendToWebContents(mainWindow.webContents, 'dependencies:progress', payload),
+  });
+  const dualLayerPdfService = createDualLayerPdfService({
+    app,
+    dependencyService,
+    getRendererWindowUrl,
+    onEvent: (payload) => sendToWebContents(mainWindow.webContents, 'dual-layer-pdf:event', payload),
+  });
   const databaseStatus = registerWorkspaceDatabaseStatusIpc({ mainWindow });
   let workspaceDatabaseStarted = false;
   let gpuTrialRelaunchStarted = false;
@@ -423,6 +437,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     autoConfirmationService.close?.();
     await openXmlHelperService.close?.();
     await openXmlHelperService.closeBlindCheck?.();
+    dualLayerPdfService.close();
   };
 
   const closeServicesBeforeExit = async () => {
@@ -515,6 +530,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerFileIpc({ fileService });
   registerExportIpc({ exportService, donationService });
   registerSystemFontIpc({ systemFontService });
+  registerDependencyIpc({ dependencyService });
+  registerDualLayerPdfIpc({ dualLayerPdfService });
   registerPluginIpc(ipcMain, app, {
     agentService,
     taskService: null,
@@ -686,6 +703,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
 
   return {
     closeServices,
+    closeHiddenWindows: () => dualLayerPdfService.close(),
   };
 }
 

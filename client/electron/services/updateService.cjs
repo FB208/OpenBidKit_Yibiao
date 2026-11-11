@@ -1,7 +1,7 @@
 const fs = require('node:fs');
-const http = require('node:http');
 const https = require('node:https');
 const path = require('node:path');
+const { downloadFile } = require('../utils/downloadFile.cjs');
 
 const GITHUB_RELEASE_API = 'https://api.github.com/repos/FB208/OpenBidKit_Yibiao/releases/latest';
 const GITHUB_RELEASE_DOWNLOAD_URL = 'https://github.com/FB208/OpenBidKit_Yibiao/releases/latest';
@@ -370,103 +370,6 @@ function isDownloadedFileReady(filePath, expectedSize = 0) {
   }
 }
 
-function requestModuleForUrl(url) {
-  if (url.protocol === 'https:') return https;
-  if (url.protocol === 'http:') return http;
-  throw new Error(`不支持的下载地址协议：${url.protocol}`);
-}
-
-function downloadFile(url, destinationPath, options = {}, redirectCount = 0) {
-  const { expectedSize = 0, onProgress } = options;
-  return new Promise((resolve, reject) => {
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      reject(new Error('更新包下载地址无效'));
-      return;
-    }
-
-    let settled = false;
-    let tempPath = '';
-    const fail = (error) => {
-      if (settled) return;
-      settled = true;
-      if (tempPath) {
-        try { fs.rmSync(tempPath, { force: true }); } catch {}
-      }
-      reject(error);
-    };
-
-    let request;
-    try {
-      request = requestModuleForUrl(parsedUrl).get(parsedUrl, { headers: { 'User-Agent': 'yibiao-client' } }, (response) => {
-        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          response.resume();
-          if (redirectCount >= 5) {
-            fail(new Error('更新包下载重定向次数过多'));
-            return;
-          }
-          downloadFile(new URL(response.headers.location, parsedUrl).toString(), destinationPath, options, redirectCount + 1)
-            .then(resolve, reject);
-          return;
-        }
-
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          response.resume();
-          fail(new Error(`更新包下载失败：${response.statusCode}`));
-          return;
-        }
-
-        fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-        tempPath = `${destinationPath}.${process.pid}.${Date.now()}.tmp`;
-        const output = fs.createWriteStream(tempPath);
-        const total = Number(response.headers['content-length'] || expectedSize || 0);
-        let downloaded = 0;
-
-        response.on('data', (chunk) => {
-          downloaded += chunk.length;
-          if (total > 0) {
-            onProgress?.(Math.max(0, Math.min(100, (downloaded / total) * 100)));
-          }
-        });
-        response.on('error', fail);
-        output.on('error', fail);
-        output.on('finish', () => {
-          output.close(() => {
-            try {
-              fs.rmSync(destinationPath, { force: true });
-              fs.renameSync(tempPath, destinationPath);
-              tempPath = '';
-              if (expectedSize && fs.statSync(destinationPath).size !== expectedSize) {
-                throw new Error('更新包下载不完整，请重新检查更新');
-              }
-              onProgress?.(100);
-              settled = true;
-              resolve(destinationPath);
-            } catch (error) {
-              if (!tempPath) {
-                try { fs.rmSync(destinationPath, { force: true }); } catch {}
-              }
-              fail(error);
-            }
-          });
-        });
-
-        response.pipe(output);
-      });
-    } catch (error) {
-      fail(error);
-      return;
-    }
-
-    request.on('error', fail);
-    request.setTimeout(60000, () => {
-      request.destroy(new Error('下载更新包超时'));
-    });
-  });
-}
-
 // 下载可由系统直接启动的 Windows 或 macOS 更新安装包。
 async function runManualInstallerUpdateCheck(options, release, channel) {
   const { app, mainWindow, onProgress, onDownloaded, onError } = options;
@@ -493,6 +396,8 @@ async function runManualInstallerUpdateCheck(options, release, channel) {
     setProgressBar(mainWindow, 0);
     await downloadFile(installerFile.url, destinationPath, {
       expectedSize,
+      label: '更新包',
+      incompleteMessage: '更新包下载不完整，请重新检查更新',
       onProgress: (percent) => {
         setProgressBar(mainWindow, Math.max(0, Math.min(1, percent / 100)));
         onProgress?.(percent);

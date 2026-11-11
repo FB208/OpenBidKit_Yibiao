@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | Analytics Engine `agnet_analytics` | `ANALYTICS` | 详细事件、今天/7天/30天查询、最近事件、Cron 汇总来源 |
 | D1 `openbidkit-analytics` | `ANALYTICS_DB` | 新版 `stats_*` 长期统计表和全局 IP 封禁状态 |
-| D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理、公告、更新日志元数据 |
+| D1 `openbidkit-resources` | `RESOURCE_DB` | 资源管理、公告、更新日志元数据、插件和依赖登记 |
 | R2 `openbidkit` | `RESOURCE_BUCKET` | 资源图片、系统设置图片、插件当前版与上一版安装包 |
 | R2 `openbidkit-agent-errors` | `AGENT_ERROR_BUCKET` | gzip Agent 完整失败诊断包，保留 7 天 |
 | KV | `NOTICE_STORE` | 公告、授权配置、GitHub stats 缓存和模型信息精简索引；旧 IP 封禁列表仅用于一次性迁移 |
@@ -71,6 +71,9 @@
 | `POST /plugins/download` | `RESOURCE_DB` | 无 | 累计插件成功下载次数 |
 | `GET/POST/DELETE /api/plugins` | `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 插件管理；新增、更新和删除会同步维护 R2 安装包 |
 | `POST /api/plugins/sync` | GitHub + `RESOURCE_DB` + R2 | `ADMIN_TOKEN` | 从 GitHub 正式 Release 同步全部插件，并清理 R2 历史版本和孤立对象 |
+| `GET /dependencies` | `RESOURCE_DB` | 无 | 客户端按需下载的功能组件（如文字识别运行库和模型），只返回启用的安装包 |
+| `POST /dependencies/download` | `RESOURCE_DB` | 无 | 按依赖 ID 和平台累计成功下载次数 |
+| `GET/POST/DELETE /api/dependencies` | `RESOURCE_DB` | `ADMIN_TOKEN` | 依赖管理；保存时读取下载链接的文件大小，链接不可访问则拒绝保存 |
 
 旧 `/api/summary` 已删除。
 
@@ -120,6 +123,8 @@
 `GET /api/agent-runtime` 的 `agentRuntime` 保留总体计数，`retryRate/retrySuccessRate` 按 v4 模型口径任务计算；`runtimes[]` 和 `models[]` 同时返回 `modelRunCount`、模型重试统计及独立的历史结果修复统计。
 
 插件仍以 GitHub 最新正式 Release 为发布上游。Worker 同步时先在 D1 登记发布对象，再把 ZIP 写入 `plugins/.staging/` 临时对象并校验，然后发布到 `openbidkit` R2 的 `plugins/<插件ID>/<插件ID>-v<版本>.zip`；正式对象确认完整后才更新市场下载地址。同版本重复同步会直接复用完整的已发布对象，不覆盖线上包。新版本切换成功后，数据库记录当前版和上一版，R2 每个插件只保留这两个正式版本；全量同步结束会再次清理更早版本、已删除插件和遗留临时对象。插件发布、删除和全局清理通过 D1 租约锁跨 Worker 串行执行，清理前还会逐个检查 30 分钟有效的发布标记，避免删除并发发布中的临时键或正式键。客户端只接收 `https://openbidkit-oss.agnet.top` 下载地址，市场升级目标始终是最新版，上一版仅用于保障在途下载。
+
+依赖（`dependencies` 表）是客户端按需下载的功能组件，不走插件通道：安装包由管理员手工上传到 R2 后，在 Dashboard 的“依赖管理”登记依赖 ID、适用平台（`all` 或 `win32-x64` 等，与客户端的 `process.platform-process.arch` 一致）、版本和下载链接，Worker 不中转文件。同一依赖 ID 和平台只有一条记录，客户端优先取当前平台专用的安装包，没有再取 `all`。安装包必须放在 R2 的 `dependencies/` 前缀下，`plugins/` 前缀下不属于插件当前版和上一版的对象会被插件同步清理。
 
 首次部署该分发逻辑后，需要在 Dashboard 的“插件管理”中执行一次“同步全部插件”，把现有 GitHub 下载地址迁移为 R2 地址；迁移完成前，公共插件接口不会向客户端下发尚未镜像的插件。
 

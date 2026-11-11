@@ -41,6 +41,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-layout-budget-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
   'plugin-manager': PluginIcon,
+  'dual-layer-pdf': ResourcesIcon,
   settings: GearIcon,
 };
 
