@@ -1765,10 +1765,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
-    updateGenerationConfig({
-      referenceKnowledgeDocumentIds: [],
-      contentGenerationOptions: createDefaultGenerationConfig().contentGenerationOptions,
-    });
     updateMeta({
       step: 'bid-analysis',
       content_generation_runtime_json: null,

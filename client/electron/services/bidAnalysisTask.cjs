@@ -378,7 +378,6 @@ async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, check
       globalFactsAdjustmentTask: undefined,
       globalFacts: [],
       contentGenerationTask: undefined,
-      contentGenerationOptions: undefined,
       contentGenerationSections: {},
       contentGenerationPlans: {},
       contentGenerationRuntime: undefined,

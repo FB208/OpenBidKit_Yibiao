@@ -559,7 +559,6 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
             globalFactsAdjustmentTask: outlineDataReset ? undefined : prev.globalFactsAdjustmentTask,
             globalFacts: outlineDataReset ? [] : prev.globalFacts,
             contentGenerationTask: outlineDataReset ? undefined : prev.contentGenerationTask,
-            contentGenerationOptions: outlineDataReset ? undefined : prev.contentGenerationOptions,
             contentGenerationSections: outlineDataReset ? {} : prev.contentGenerationSections,
             contentGenerationPlans: outlineDataReset ? {} : prev.contentGenerationPlans,
             contentGenerationRuntime: outlineDataReset ? undefined : prev.contentGenerationRuntime,

@@ -3922,13 +3922,21 @@
   opacity: 0.68;
 }
 
+/* 左侧待选、右侧已选，两栏各自滚动，窗口较矮时待选列表不会被已选区挤掉。 */
 .outline-knowledge-grid {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(90px, 180px);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 34%);
   gap: 10px;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .outline-knowledge-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(90px, 180px);
+  }
 }
 
 .outline-knowledge-browser,

@@ -420,13 +420,7 @@ function OutlineEditPage({
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
       const nextOutlineExpansionMode = hasOriginalPlan ? outlineExpansionMode : 'ai-complement';
-      await window.yibiao?.tasks.startOutlineGeneration({
-        reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
-        outline_mode: outlineMode,
-        outline_expansion_mode: nextOutlineExpansionMode,
-        word_control_options: outlineWordControlOptions,
-        no_technical_score_mode: noTechnicalScoreMode,
-      });
+      await window.yibiao?.tasks.startOutlineGeneration({ no_technical_score_mode: noTechnicalScoreMode });
       trackConfigUsage({
         outline_mode: outlineMode,
         outline_expansion_mode: hasOriginalPlan ? nextOutlineExpansionMode : undefined,

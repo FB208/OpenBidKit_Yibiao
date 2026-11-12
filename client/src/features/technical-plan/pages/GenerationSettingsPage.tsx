@@ -355,12 +355,12 @@ function GenerationSettingsPage({
     document.getElementById(`generation-settings-tab-${activeTab}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeTab]);
 
+  // 只在进入知识库页签时加载索引；勾选保存后保留搜索和展开状态。
   useEffect(() => {
     if (activeTab !== 'knowledge') return;
-    setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
     setKnowledgeSearch('');
     void loadKnowledgeIndex();
-  }, [activeTab, referenceKnowledgeDocumentIds]);
+  }, [activeTab]);
 
   const resolveDroppedFilePaths = (files: FileList) =>
     Array.from(files).map((file) => window.yibiao?.file.getPathForFile(file) || '').filter(Boolean);

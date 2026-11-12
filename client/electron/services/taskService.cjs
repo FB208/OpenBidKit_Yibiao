@@ -407,7 +407,6 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
           'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
-          'contentGenerationOptions',
           'contentGenerationSections',
           'contentGenerationPlans',
           'contentGenerationRuntime',
@@ -430,12 +429,10 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         'outlineData',
         'outlineWordControlSnapshot',
         'outlineGenerationTask',
-        'referenceKnowledgeDocumentIds',
         'globalFactsTask',
         'globalFactsAdjustmentTask',
         'globalFacts',
         'contentGenerationTask',
-        'contentGenerationOptions',
         'contentGenerationSections',
         'contentGenerationPlans',
         'contentGenerationRuntime',
@@ -444,11 +441,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
 
     if (task.type === 'outline-generation') {
       copyPatchFields(patch, state, [
-        'outlineMode',
-        'outlineExpansionMode',
-        'outlineWordControlOptions',
         'outlineWordControlSnapshot',
-        'referenceKnowledgeDocumentIds',
         'globalFactsTask',
         'globalFactsAdjustmentTask',
         'globalFacts',
@@ -1649,12 +1642,10 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         outlineGenerationTask: undefined,
         outlineAdjustmentTask: undefined,
         bidTemplateExtractionTask: undefined,
-        referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
         globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
-        contentGenerationOptions: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
         contentGenerationRuntime: undefined,
@@ -1663,18 +1654,9 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     startBidAnalysis(payload) {
       return startManagedTask('bid-analysis', payload, runBidAnalysisTask);
     },
+    // 生成范围、原方案目录方式、字数和参考知识库只读第 2 步已保存的生成设置，启动时不回写。
     startOutlineGeneration(payload) {
-      const outlineMode = payload?.outline_mode === 'standalone-technical'
-        ? 'standalone-technical'
-        : payload?.outline_mode === 'standalone-business'
-          ? 'standalone-business'
-          : 'response-file';
-      const taskPayload = { ...payload, outline_mode: outlineMode };
-      return startManagedTask('outline-generation', taskPayload, runOutlineGenerationTaskV2, {
-        outlineMode,
-        outlineExpansionMode: payload?.outline_expansion_mode === 'original-only' ? 'original-only' : 'ai-complement',
-        outlineWordControlOptions: payload?.word_control_options,
-        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+      return startManagedTask('outline-generation', payload, runOutlineGenerationTaskV2, {
         bidTemplateExists: false,
         outlineData: null,
         outlineWordControlSnapshot: undefined,
