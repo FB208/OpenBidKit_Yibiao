@@ -1,4 +1,4 @@
-/* 批量转双层 PDF（DualLayerPdfPage.tsx）：上传区复用 shared-upload.css，这里只补文件列表和环境提示。 */
+/* Word 批量转换（DualLayerPdfPage.tsx）：上传区复用 shared-upload.css，这里只补输出内容、文件列表和环境提示。 */
 .dual-layer-pdf-page {
   position: relative;
   width: 100%;
@@ -23,6 +23,51 @@
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dual-layer-pdf-outputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dual-layer-pdf-output {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 8px 14px;
+  background: rgba(248, 250, 253, 0.86);
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  cursor: pointer;
+  transition: background var(--yb-duration-fast) ease, border-color var(--yb-duration-fast) ease;
+}
+
+.dual-layer-pdf-output.is-selected {
+  background: rgba(33, 116, 253, 0.08);
+  border-color: rgba(33, 116, 253, 0.3);
+}
+
+.dual-layer-pdf-output input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--yb-primary);
+}
+
+.dual-layer-pdf-output input:disabled {
+  cursor: not-allowed;
+}
+
+.dual-layer-pdf-output strong {
+  color: var(--yb-text);
+  font-size: 14px;
+}
+
+.dual-layer-pdf-output span {
+  color: var(--yb-text-soft);
+  font-size: 13px;
 }
 
 .dual-layer-pdf-environment {

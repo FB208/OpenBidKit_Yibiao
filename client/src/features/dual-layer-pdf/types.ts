@@ -10,11 +10,20 @@ export interface DualLayerPdfItem {
   pageDone: number;
   /** 实际使用的转换程序，如 Microsoft Word。 */
   backendLabel: string;
+  /** 双层 PDF 的路径；没有输出双层 PDF 时为空。 */
   outputPath: string;
+  /** 逐页图片所在文件夹；没有输出图片时为空。 */
+  imageDir: string;
   /** 失败原因。 */
   message: string;
   /** 转换成功但需要用户知道的情况，如未生成书签。 */
   warnings: string[];
+}
+
+/** 输出类型，整批文件共用，至少选一种。 */
+export interface DualLayerPdfOutputs {
+  pdf: boolean;
+  image: boolean;
 }
 
 export interface DualLayerPdfState {
@@ -22,6 +31,7 @@ export interface DualLayerPdfState {
   canceling: boolean;
   /** 输出文件夹；空字符串表示与源文件同目录。 */
   outputDir: string;
+  outputs: DualLayerPdfOutputs;
   items: DualLayerPdfItem[];
 }
 
@@ -37,6 +47,8 @@ export interface DualLayerPdfWorkerJob {
   pdfPath: string;
   /** 文字识别组件的安装目录；空字符串表示未安装，不做图片文字识别。 */
   ocrDir: string;
+  /** 是否需要文字层和书签；只输出图片时为 false，只渲染页面图片。 */
+  textLayer: boolean;
 }
 
 /** 一段不可见文字：matrix 把 1 个单位的字高映射到页面坐标（磅，原点在左下角），advance 是沿书写方向的宽度。 */

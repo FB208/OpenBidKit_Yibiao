@@ -30,7 +30,7 @@ const pageLabels = {
   'business-bid': '商务标（历史）',
   'knowledge-base': '知识库',
   'resource-download': '其他功能',
-  'dual-layer-pdf': '批量转双层PDF',
+  'dual-layer-pdf': 'Word批量转换（双层PDF、图片）',
   resources: '精选资源',
   'knowledge-base/library': '知识库 - 文档列表',
   'knowledge-base/viewer/items': '知识库 - 知识条目',

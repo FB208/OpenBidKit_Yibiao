@@ -154,8 +154,8 @@ async function convert(job: DualLayerPdfWorkerJob): Promise<DualLayerPdfWorkerRe
       canvas.height = Math.round(renderViewport.height);
       await page.render({ canvas, viewport: renderViewport, background: '#ffffff' }).promise;
 
-      const texts = await readPageTexts(page);
-      const imageRegions = await findImageRegions(page, pageViewport);
+      const texts = job.textLayer ? await readPageTexts(page) : [];
+      const imageRegions = job.textLayer ? await findImageRegions(page, pageViewport) : [];
       if (imageRegions.length) {
         imagePageCount += 1;
         if (job.ocrDir) {
@@ -182,7 +182,7 @@ async function convert(job: DualLayerPdfWorkerJob): Promise<DualLayerPdfWorkerRe
       page.cleanup();
     }
 
-    return { pageCount: pdf.numPages, outline: await readOutline(pdf), imagePageCount, ocrFailedPageCount };
+    return { pageCount: pdf.numPages, outline: job.textLayer ? await readOutline(pdf) : [], imagePageCount, ocrFailedPageCount };
   } finally {
     await pdf.destroy();
   }

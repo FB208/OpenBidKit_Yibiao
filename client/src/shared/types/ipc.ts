@@ -11,7 +11,7 @@ import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { TechnicalPlanOutlineData as OutlineData } from './outline';
 import type { NoticeCachedMedia, NoticeMediaCacheRequest } from './notice';
-import type { DualLayerPdfEnvironment, DualLayerPdfState } from '../../features/dual-layer-pdf/types';
+import type { DualLayerPdfEnvironment, DualLayerPdfOutputs, DualLayerPdfState } from '../../features/dual-layer-pdf/types';
 
 /** 配置保存只更新提交字段，文本服务商档案也支持局部更新。 */
 export type ClientConfigPatch = Partial<Omit<ClientConfig, 'text_model_profiles'>> & {
@@ -970,6 +970,7 @@ export interface YibiaoBridge {
     retryItem: (itemId: string) => Promise<DualLayerPdfState>;
     selectOutputDir: () => Promise<DualLayerPdfState>;
     resetOutputDir: () => Promise<DualLayerPdfState>;
+    setOutputs: (outputs: DualLayerPdfOutputs) => Promise<DualLayerPdfState>;
     start: () => Promise<DualLayerPdfState>;
     cancel: () => Promise<DualLayerPdfState>;
     clear: () => Promise<DualLayerPdfState>;

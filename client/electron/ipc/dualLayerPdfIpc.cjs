@@ -9,6 +9,7 @@ function registerDualLayerPdfIpc({ dualLayerPdfService }) {
   ipcMain.handle('dual-layer-pdf:retry-item', (_event, itemId) => dualLayerPdfService.retryItem(itemId));
   ipcMain.handle('dual-layer-pdf:select-output-dir', () => dualLayerPdfService.selectOutputDir());
   ipcMain.handle('dual-layer-pdf:reset-output-dir', () => dualLayerPdfService.resetOutputDir());
+  ipcMain.handle('dual-layer-pdf:set-outputs', (_event, outputs) => dualLayerPdfService.setOutputs(outputs));
   ipcMain.handle('dual-layer-pdf:start', () => dualLayerPdfService.start());
   ipcMain.handle('dual-layer-pdf:cancel', () => dualLayerPdfService.cancel());
   ipcMain.handle('dual-layer-pdf:clear', () => dualLayerPdfService.clear());

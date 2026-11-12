@@ -2,9 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import type { DependencyProgress, DependencyStatus } from '../../../shared/types/ipc';
 import { AppDialog, FloatingToolbar, ProgressBar, UploadBoard, UploadEmpty, UploadRow, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { DualLayerPdfEnvironment, DualLayerPdfItem, DualLayerPdfState } from '../types';
+import type { DualLayerPdfEnvironment, DualLayerPdfItem, DualLayerPdfOutputs, DualLayerPdfState } from '../types';
 
-const EMPTY_STATE: DualLayerPdfState = { running: false, canceling: false, outputDir: '', items: [] };
+const EMPTY_STATE: DualLayerPdfState = { running: false, canceling: false, outputDir: '', outputs: { pdf: true, image: false }, items: [] };
+
+const OUTPUT_OPTIONS: Array<{ key: keyof DualLayerPdfOutputs; label: string; hint: string }> = [
+  { key: 'pdf', label: '双层PDF', hint: '可搜索、可复制，带书签' },
+  { key: 'image', label: '图片', hint: '每页一张 JPG，放在与文档同名的文件夹里' },
+];
 
 function formatSize(bytes: number) {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -17,7 +22,7 @@ function describeItem(item: DualLayerPdfItem) {
     case 'rendering':
       return item.pageCount ? `正在生成页面 ${item.pageDone}/${item.pageCount}` : '正在准备生成页面';
     case 'done':
-      return `已完成，共 ${item.pageCount} 页，由 ${item.backendLabel} 导出`;
+      return `已完成，共 ${item.pageCount} 页`;
     case 'error':
       return item.message || '转换失败';
     case 'canceled':
@@ -33,7 +38,7 @@ function getItemProgress(item: DualLayerPdfItem) {
   return item.status === 'exporting' || item.status === 'rendering' ? 5 : 0;
 }
 
-/** 批量转双层 PDF：文件列表和进度保存在 Main，离开页面不中断，回来后从 Main 读回。 */
+/** Word 批量转换（双层 PDF、图片）：文件列表和进度保存在 Main，离开页面不中断，回来后从 Main 读回。 */
 function DualLayerPdfPage() {
   const { showToast } = useToast();
   const [state, setState] = useState<DualLayerPdfState>(EMPTY_STATE);
@@ -50,7 +55,8 @@ function DualLayerPdfPage() {
   useEffect(() => {
     let disposed = false;
     const bridge = window.yibiao.dualLayerPdf;
-    void bridge.getState().then((next) => { if (!disposed) setState(next); });
+    const initialState = bridge.getState();
+    void initialState.then((next) => { if (!disposed) setState(next); });
     const offEvent = bridge.onEvent((next) => setState(next));
 
     void bridge.getEnvironment()
@@ -58,12 +64,13 @@ function DualLayerPdfPage() {
         if (disposed) return;
         setEnvironment(env);
         const status = await window.yibiao.dependencies.getStatus(env.ocrDependencyId);
+        const { outputs } = await initialState;
         if (disposed) return;
         setOcrStatus(status);
         setOcrInstalling(status.installing);
         setOcrProgress(status.progress);
-        // 没有安装文字识别组件且线上有可用安装包时，询问是否下载。
-        if (!status.installed && status.available) setOcrDialogOpen(true);
+        // 要输出双层 PDF、没有安装文字识别组件且线上有可用安装包时，询问是否下载；只输出图片用不到它。
+        if (outputs.pdf && !status.installed && status.available) setOcrDialogOpen(true);
       })
       .catch((error) => reportError(error, '读取转换环境失败'));
 
@@ -94,6 +101,12 @@ function DualLayerPdfPage() {
     } finally {
       setOcrInstalling(false);
     }
+  };
+
+  /** 至少保留一种输出类型。 */
+  const toggleOutput = (key: keyof DualLayerPdfOutputs) => {
+    const next = { ...state.outputs, [key]: !state.outputs[key] };
+    if (next.pdf || next.image) run(() => window.yibiao.dualLayerPdf.setOutputs(next), '修改输出内容失败');
   };
 
   const hasBackend = Boolean(environment?.backends.length);
@@ -129,8 +142,8 @@ function DualLayerPdfPage() {
       <div className="dual-layer-pdf-scroll">
         <UploadBoard
           kicker="其他功能"
-          title="批量转双层PDF"
-          subtitle="每页生成一张 150 dpi 的图片，下面叠一层位置对齐的文字，可搜索、可复制，并按标题生成书签。"
+          title="Word批量转换（双层PDF、图片）"
+          subtitle="每页生成一张 150 dpi 的图片。双层PDF在图片下叠一层位置对齐的文字，可搜索、可复制，并按标题生成书签；图片按页另存为 JPG。"
         >
           <UploadRow
             index="01"
@@ -155,10 +168,26 @@ function DualLayerPdfPage() {
             )}
           </UploadRow>
 
+          <UploadRow index="02" title="输出内容" note="可多选，至少选一种" actions={null}>
+            <div className="dual-layer-pdf-outputs">
+              {OUTPUT_OPTIONS.map((option) => {
+                const checked = state.outputs[option.key];
+                const isLast = checked && !OUTPUT_OPTIONS.some((other) => other.key !== option.key && state.outputs[other.key]);
+                return (
+                  <label key={option.key} className={`dual-layer-pdf-output${checked ? ' is-selected' : ''}`}>
+                    <input type="checkbox" checked={checked} disabled={state.running || isLast} onChange={() => toggleOutput(option.key)} />
+                    <strong>{option.label}</strong>
+                    <span>{option.hint}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </UploadRow>
+
           <UploadRow
-            index="02"
+            index="03"
             title="保存位置"
-            note="同名文件不会被覆盖"
+            note="同名文件和文件夹不会被覆盖"
             actions={(
               <>
                 {state.outputDir ? (
@@ -172,9 +201,9 @@ function DualLayerPdfPage() {
           </UploadRow>
 
           <UploadRow
-            index="03"
+            index="04"
             title="转换环境"
-            actions={ocrAvailable && (!ocrStatus?.installed || ocrStatus.hasUpdate) ? (
+            actions={state.outputs.pdf && ocrAvailable && (!ocrStatus?.installed || ocrStatus.hasUpdate) ? (
               <button type="button" className="secondary-action" disabled={ocrInstalling || state.running} onClick={() => setOcrDialogOpen(true)}>
                 {ocrStatus?.installed ? '更新文字识别组件' : '下载文字识别组件'}
               </button>
@@ -190,7 +219,7 @@ function DualLayerPdfPage() {
               ) : (
                 <span>正在检查本机的转换程序</span>
               )}
-              {ocrStatus?.installed ? (
+              {!state.outputs.pdf ? null : ocrStatus?.installed ? (
                 <span>文字识别组件：已安装 {ocrStatus.installedVersion}{ocrStatus.hasUpdate ? `，有新版本 ${ocrStatus.available?.version}` : ''}</span>
               ) : ocrStatus ? (
                 <span className="is-warning">
@@ -214,13 +243,16 @@ function DualLayerPdfPage() {
                       <ProgressBar value={getItemProgress(item)} active={active} tone={item.status === 'done' ? 'success' : 'primary'} label={describeItem(item)} />
                     ) : null}
                     {item.warnings.map((warning) => <small key={warning}>{warning}</small>)}
-                    {item.status === 'done' ? <small className="is-path" title={item.outputPath}>{item.outputPath}</small> : null}
+                    {item.status === 'done' && item.outputPath ? <small className="is-path" title={item.outputPath}>双层PDF：{item.outputPath}</small> : null}
+                    {item.status === 'done' && item.imageDir ? <small className="is-path" title={item.imageDir}>图片：{item.imageDir}</small> : null}
                   </div>
                   <div className="dual-layer-pdf-item-actions">
                     {item.status === 'done' ? (
                       <>
-                        <button type="button" className="text-button" onClick={() => void window.yibiao.export.openFile(item.outputPath).catch((error) => reportError(error, '打开文件失败'))}>打开</button>
-                        <button type="button" className="text-button" onClick={() => run(() => window.yibiao.dualLayerPdf.showInFolder(item.outputPath), '打开文件夹失败')}>所在文件夹</button>
+                        {item.outputPath ? (
+                          <button type="button" className="text-button" onClick={() => void window.yibiao.export.openFile(item.outputPath).catch((error) => reportError(error, '打开文件失败'))}>打开</button>
+                        ) : null}
+                        <button type="button" className="text-button" onClick={() => run(() => window.yibiao.dualLayerPdf.showInFolder(item.outputPath || item.imageDir), '打开文件夹失败')}>所在文件夹</button>
                       </>
                     ) : null}
                     {item.status === 'error' || item.status === 'canceled' ? (
@@ -237,7 +269,7 @@ function DualLayerPdfPage() {
         ) : null}
       </div>
 
-      <FloatingToolbar groups={toolbarGroups} label="批量转双层PDF工具条" />
+      <FloatingToolbar groups={toolbarGroups} label="Word批量转换工具条" />
 
       <AppDialog
         open={ocrDialogOpen}

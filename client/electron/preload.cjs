@@ -408,6 +408,7 @@ const bridge = {
     retryItem: (itemId) => ipcRenderer.invoke('dual-layer-pdf:retry-item', itemId),
     selectOutputDir: () => ipcRenderer.invoke('dual-layer-pdf:select-output-dir'),
     resetOutputDir: () => ipcRenderer.invoke('dual-layer-pdf:reset-output-dir'),
+    setOutputs: (outputs) => ipcRenderer.invoke('dual-layer-pdf:set-outputs', outputs),
     start: () => ipcRenderer.invoke('dual-layer-pdf:start'),
     cancel: () => ipcRenderer.invoke('dual-layer-pdf:cancel'),
     clear: () => ipcRenderer.invoke('dual-layer-pdf:clear'),

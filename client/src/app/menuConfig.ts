@@ -92,8 +92,8 @@ export const appMenuItems: AppMenuItem[] = [
     children: [
       {
         id: 'dual-layer-pdf',
-        label: '批量转双层PDF',
-        description: '把 Word 批量转换成可搜索、可复制的双层 PDF',
+        label: 'Word批量转换（双层PDF、图片）',
+        description: '把 Word 批量转换成双层 PDF 或逐页图片',
         icon: 'export',
       },
       {

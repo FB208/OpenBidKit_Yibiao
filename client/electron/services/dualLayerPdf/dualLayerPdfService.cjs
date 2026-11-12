@@ -14,11 +14,13 @@ const ACTIVE_STATUSES = ['exporting', 'rendering'];
 class CanceledError extends Error {}
 
 /**
- * 批量转双层 PDF：文件逐个处理，先用本机 Office 导出单层 PDF，再交给隐藏工作窗口逐页生成图片和文字层，
- * 由 pdfWriter 流式写出。文件列表和进度只保存在内存里，离开页面不中断，重启软件后不恢复。
+ * Word 批量转换（双层 PDF、图片）：文件逐个处理，先用本机 Office 导出单层 PDF，再交给隐藏工作窗口逐页生成图片和文字层，
+ * 双层 PDF 由 pdfWriter 流式写出，图片把同一张页面图片逐页存盘。
+ * 文件列表和进度只保存在内存里，离开页面不中断，重启软件后不恢复。
  */
 function createDualLayerPdfService({ app, dependencyService, getRendererWindowUrl, onEvent }) {
-  const state = { running: false, canceling: false, outputDir: '', items: [] };
+  // outputs 是整批共用的输出类型，每份文件开始处理时读取。
+  const state = { running: false, canceling: false, outputDir: '', outputs: { pdf: true, image: false }, items: [] };
   let worker = null;
   let currentJob = null;
   let officeExportModule = null;
@@ -28,6 +30,7 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
       running: state.running,
       canceling: state.canceling,
       outputDir: state.outputDir,
+      outputs: { ...state.outputs },
       items: state.items.map((item) => ({ ...item, warnings: [...item.warnings] })),
     };
   }
@@ -71,6 +74,7 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
         pageDone: 0,
         backendLabel: '',
         outputPath: '',
+        imageDir: '',
         message: '',
         warnings: [],
       });
@@ -90,7 +94,7 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
 
   async function selectOutputDir() {
     const result = await dialog.showOpenDialog({
-      title: '选择双层 PDF 的保存位置',
+      title: '选择保存位置',
       properties: ['openDirectory', 'createDirectory'],
     });
     if (!result.canceled && result.filePaths[0]) {
@@ -102,6 +106,12 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
 
   function resetOutputDir() {
     state.outputDir = '';
+    emit();
+    return getState();
+  }
+
+  function setOutputs(outputs) {
+    state.outputs = { pdf: Boolean(outputs.pdf), image: Boolean(outputs.image) };
     emit();
     return getState();
   }
@@ -119,13 +129,13 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
     return getState();
   }
 
-  /** 输出文件与源文件同名；已有同名文件时加序号，不覆盖。 */
-  function resolveOutputPath(item) {
+  /** 输出与源文件同名（PDF 带 .pdf，图片文件夹不带扩展名）；已有同名文件或文件夹时加序号，不覆盖。 */
+  function resolveOutputPath(item, extension) {
     const dir = state.outputDir || path.dirname(item.sourcePath);
     const name = path.parse(item.fileName).name;
-    let candidate = path.join(dir, `${name}.pdf`);
+    let candidate = path.join(dir, `${name}${extension}`);
     for (let index = 1; fs.existsSync(candidate); index += 1) {
-      candidate = path.join(dir, `${name}(${index}).pdf`);
+      candidate = path.join(dir, `${name}(${index})${extension}`);
     }
     return candidate;
   }
@@ -148,40 +158,52 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
 
   async function processItem(item) {
     const workDir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'yibiao-dual-layer-pdf-'));
+    const outputs = { ...state.outputs };
     let writer = null;
+    // 本次新建的图片文件夹；转换成功后清空，失败或取消时整个删除。
+    let imageDir = '';
     try {
-      updateItem(item, { status: 'exporting', pageCount: 0, pageDone: 0, backendLabel: '', outputPath: '', message: '', warnings: [] });
+      updateItem(item, { status: 'exporting', pageCount: 0, pageDone: 0, backendLabel: '', outputPath: '', imageDir: '', message: '', warnings: [] });
       const { exportWordToPdf } = await loadOfficeExport();
       const exported = await exportWordToPdf(item.sourcePath, workDir);
       throwIfCanceling();
 
       updateItem(item, { status: 'rendering', backendLabel: exported.backend.label });
-      const outputPath = resolveOutputPath(item);
-      writer = await createDualLayerPdfWriter(outputPath);
-      currentJob = { item, writer };
+      const outputPath = outputs.pdf ? resolveOutputPath(item, '.pdf') : '';
+      if (outputs.pdf) writer = await createDualLayerPdfWriter(outputPath);
+      if (outputs.image) {
+        imageDir = resolveOutputPath(item, '');
+        await fs.promises.mkdir(imageDir, { recursive: true });
+      }
+      currentJob = { item, writer, imageDir };
 
-      const ocr = dependencyService.getInstalled(OCR_DEPENDENCY_ID);
+      const ocr = outputs.pdf ? dependencyService.getInstalled(OCR_DEPENDENCY_ID) : null;
       throwIfCanceling();
       const workerWindow = ensureWorker();
       await workerWindow.ready;
-      const result = await workerWindow.convert({ pdfPath: exported.pdfPath, ocrDir: ocr?.installDir || '' });
+      const result = await workerWindow.convert({ pdfPath: exported.pdfPath, ocrDir: ocr?.installDir || '', textLayer: outputs.pdf });
       throwIfCanceling();
-      await writer.finish({ outline: result.outline, title: path.parse(item.fileName).name });
-      writer = null;
 
       const warnings = [];
-      if (!result.outline.length) {
-        warnings.push(exported.bookmarks ? '文档没有使用标题样式，未生成书签' : `${exported.backend.label} 导出时没有带出标题，未生成书签`);
+      if (writer) {
+        await writer.finish({ outline: result.outline, title: path.parse(item.fileName).name });
+        writer = null;
+        if (!result.outline.length) {
+          warnings.push(exported.bookmarks ? '文档没有使用标题样式，未生成书签' : `${exported.backend.label} 导出时没有带出标题，未生成书签`);
+        }
+        if (result.imagePageCount > 0 && !ocr) {
+          warnings.push(`有 ${result.imagePageCount} 页含图片，未安装文字识别组件，图片中的文字无法搜索和复制`);
+        }
+        if (result.ocrFailedPageCount > 0) {
+          warnings.push(`有 ${result.ocrFailedPageCount} 页的图片文字识别失败，这些图片中的文字无法搜索和复制`);
+        }
       }
-      if (result.imagePageCount > 0 && !ocr) {
-        warnings.push(`有 ${result.imagePageCount} 页含图片，未安装文字识别组件，图片中的文字无法搜索和复制`);
-      }
-      if (result.ocrFailedPageCount > 0) {
-        warnings.push(`有 ${result.ocrFailedPageCount} 页的图片文字识别失败，这些图片中的文字无法搜索和复制`);
-      }
-      updateItem(item, { status: 'done', outputPath, warnings });
+      const finishedImageDir = imageDir;
+      imageDir = '';
+      updateItem(item, { status: 'done', outputPath, imageDir: finishedImageDir, warnings });
     } catch (error) {
       await writer?.abort().catch(() => undefined);
+      if (imageDir) await fs.promises.rm(imageDir, { recursive: true, force: true }).catch(() => undefined);
       if (state.canceling || error instanceof CanceledError) {
         updateItem(item, { status: 'canceled', message: '' });
       } else {
@@ -241,15 +263,23 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
   /** 工作窗口提交的一页：写入完成后才返回，工作窗口据此逐页推进。 */
   async function handleWorkerPage(sender, payload) {
     if (!currentJob || sender !== worker?.webContents) return;
-    const { item, writer } = currentJob;
-    await writer.addPage({
-      width: payload.width,
-      height: payload.height,
-      jpeg: Buffer.from(payload.jpeg.buffer, payload.jpeg.byteOffset, payload.jpeg.byteLength),
-      imageWidth: payload.imageWidth,
-      imageHeight: payload.imageHeight,
-      texts: payload.texts,
-    });
+    const { item, writer, imageDir } = currentJob;
+    const jpeg = Buffer.from(payload.jpeg.buffer, payload.jpeg.byteOffset, payload.jpeg.byteLength);
+    if (writer) {
+      await writer.addPage({
+        width: payload.width,
+        height: payload.height,
+        jpeg,
+        imageWidth: payload.imageWidth,
+        imageHeight: payload.imageHeight,
+        texts: payload.texts,
+      });
+    }
+    if (imageDir) {
+      // 序号至少 3 位，页数更多时按总页数补齐，保证按文件名排序就是页码顺序。
+      const pageNumber = String(payload.index + 1).padStart(Math.max(3, String(payload.pageCount).length), '0');
+      await fs.promises.writeFile(path.join(imageDir, `${path.parse(item.fileName).name}_${pageNumber}.jpg`), jpeg);
+    }
     updateItem(item, { pageCount: payload.pageCount, pageDone: payload.index + 1 });
   }
 
@@ -276,6 +306,7 @@ function createDualLayerPdfService({ app, dependencyService, getRendererWindowUr
     retryItem,
     selectFiles,
     selectOutputDir,
+    setOutputs,
     showInFolder,
     start,
   };
