@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
@@ -8,10 +7,8 @@ import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, Cli
 import type { SettingsPageRequest, SettingsPageState, SettingsTab } from '../types';
 import ChangelogDialog from '../../changelog/components/ChangelogDialog';
 import { useChangelogUnread } from '../../changelog/hooks/useChangelogUnread';
-import OfficialAccountControls from '../components/OfficialAccountControls';
-import OfficialInvoicePanel from '../components/OfficialInvoicePanel';
-import OfficialOrdersPanel from '../components/OfficialOrdersPanel';
-import OfficialTransactionsPanel from '../components/OfficialTransactionsPanel';
+import OfficialApiPanel from '../components/OfficialApiPanel';
+import type { OfficialApiTab } from '../components/OfficialApiPanel';
 import StorageSpaceDialog from '../components/StorageSpaceDialog';
 
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
@@ -69,13 +66,6 @@ const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
   { value: 'agnes', label: 'Agnes AI' },
   { value: 'custom', label: '自定义' },
 ];
-
-const officialApiTabs = [
-  { id: 'statement', label: '声明' },
-  { id: 'orders', label: '订单' },
-  { id: 'transactions', label: '流水' },
-  { id: 'invoice', label: '开票信息' },
-] as const;
 
 const aiRequestModeOptions: Array<{ value: AiRequestMode; label: string }> = [
   { value: 'normal', label: '普通请求' },
@@ -218,6 +208,7 @@ function textProfileFromState(textModel: SettingsPageState['textModel']): TextMo
 }
 
 const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
+  { value: 'official', label: '易标官方API' },
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'google-ai-studio', label: 'Google AI Studio' },
@@ -291,6 +282,18 @@ function normalizeImageSize(provider: ImageModelProvider, value?: string): Image
 }
 
 const imageProviderDefaults: ImageModelProfiles = {
+  official: {
+    provider: 'official',
+    base_url: textProviderDefaults.official.base_url,
+    api_key: '',
+    model_name: 'IMAGE_GENERATION',
+    image_size: '1024x1024',
+    request_mode: 'stream',
+    concurrency_limit: 50,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
   jinlong: {
     provider: 'jinlong',
     base_url: 'https://img-api.jlaudeapi.com/v1',
@@ -369,6 +372,7 @@ const imageProviderDefaults: ImageModelProfiles = {
 };
 
 const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
+  official: '',
   jinlong: 'https://s.markup.com.cn/jl',
   volcengine: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
@@ -378,6 +382,7 @@ const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
 };
 
 const imageProviderLabels: Record<ImageModelProvider, string> = {
+  official: '易标官方API',
   jinlong: '金龙中转站',
   volcengine: '火山方舟',
   'google-ai-studio': 'Google AI Studio',
@@ -429,8 +434,17 @@ function createDefaultImageModelProfiles(): ImageModelProfiles {
   }), {} as ImageModelProfiles);
 }
 
+// 固定官方生图运行参数，并保留档案中的测试结果。
 function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Partial<ImageModelConfig>): ImageModelConfig {
   const defaults = imageProviderDefaults[provider];
+  if (provider === 'official') {
+    return {
+      ...defaults,
+      status: profile?.status ?? defaults.status,
+      tested_at: profile?.tested_at ?? defaults.tested_at,
+      last_error: profile?.last_error ?? defaults.last_error,
+    };
+  }
   const useProviderDefaultImageModel = provider === 'jinlong' && !String(profile?.model_name ?? '').trim();
   return {
     provider,
@@ -510,7 +524,15 @@ function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): Im
   }), {} as ImageModelProfiles);
 }
 
+// 从设置草稿生成待保存档案，官方服务使用固定配置。
 function imageProfileFromState(imageModel: SettingsPageState['imageModel']): ImageModelConfig {
+  if (imageModel.provider === 'official') {
+    return normalizeImageModelProfile('official', {
+      status: imageModel.status,
+      tested_at: imageModel.tested_at,
+      last_error: imageModel.last_error,
+    });
+  }
   return {
     provider: imageModel.provider,
     base_url: imageModel.provider === 'custom' || imageModel.provider === 'comfyui' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
@@ -652,13 +674,13 @@ interface SettingsPageProps {
   registerLeaveGuard?: (guard: ((nextSection?: string) => Promise<boolean>) | null) => void;
 }
 
-// 管理设置草稿，并在离开文本模型设置时提示尚未填写的上下文长度。
+// 管理设置草稿、模型配置和文本与生图共用的官方账户面板。
 function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, registerLeaveGuard }: SettingsPageProps) {
   const [state, setState] = useState<SettingsPageState>(initialState);
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => request?.tab ?? 'general');
   const [rechargeRequested, setRechargeRequested] = useState(false);
   const [savedConfig, setSavedConfig] = useState<ClientConfig | null>(null);
-  const [officialApiTab, setOfficialApiTab] = useState<typeof officialApiTabs[number]['id']>('statement');
+  const [officialApiTab, setOfficialApiTab] = useState<OfficialApiTab>('statement');
   const [textModels, setTextModels] = useState<string[]>([]);
   const [reasoningEfforts, setReasoningEfforts] = useState<string[]>([]);
   const [imageModels, setImageModels] = useState<string[]>([]);
@@ -1069,21 +1091,6 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
       officialApiModelType: modelType,
       textModel: { ...prev.textModel, model_name: modelType === 'high-quality' ? 'REASONING' : 'TEXT_GENERATION' },
     }));
-  };
-
-  // 用方向键及首尾键切换官方账户页签，并同步键盘焦点。
-  const handleOfficialApiTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = officialApiTabs.findIndex((tab) => tab.id === officialApiTab);
-    const nextIndex = event.key === 'ArrowRight' ? (index + 1) % officialApiTabs.length
-      : event.key === 'ArrowLeft' ? (index + officialApiTabs.length - 1) % officialApiTabs.length
-      : event.key === 'Home' ? 0
-      : event.key === 'End' ? officialApiTabs.length - 1
-      : -1;
-    if (nextIndex === -1) return;
-    event.preventDefault();
-    const nextTab = officialApiTabs[nextIndex].id;
-    setOfficialApiTab(nextTab);
-    event.currentTarget.querySelector<HTMLButtonElement>(`#official-api-tab-${nextTab}`)?.focus();
   };
 
   const updateTextModelConfig = (partial: Partial<Omit<SettingsPageState['textModel'], 'provider'>>, options: { clearModels?: boolean } = {}) => {
@@ -1896,8 +1903,10 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
             </label>
           </div>
           {state.textModel.provider === 'official' ? (
-            <>
-              <div className="settings-list">
+            <OfficialApiPanel
+              tab={officialApiTab}
+              onTabChange={setOfficialApiTab}
+              modelControls={(
                 <label className="settings-row">
                   <div className="settings-row-copy"><strong>模型类型</strong></div>
                   <select
@@ -1908,65 +1917,10 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                     <option value="high-quality">高质量优先</option>
                   </select>
                 </label>
-                <OfficialAccountControls
-                  onViewOrders={() => setOfficialApiTab('orders')}
-                  rechargeRequested={configLoaded && rechargeRequested}
-                  onRechargeRequestHandled={() => setRechargeRequested(false)}
-                />
-              </div>
-              <div className="official-api-details">
-                <div className="official-api-tabs" role="tablist" aria-label="官方账户信息" onKeyDown={handleOfficialApiTabKeyDown}>
-                  {officialApiTabs.map((tab) => (
-                    <button
-                      type="button"
-                      className={`official-api-tab${officialApiTab === tab.id ? ' is-active' : ''}`}
-                      role="tab"
-                      id={`official-api-tab-${tab.id}`}
-                      aria-controls={`official-api-panel-${tab.id}`}
-                      aria-selected={officialApiTab === tab.id}
-                      tabIndex={officialApiTab === tab.id ? 0 : -1}
-                      key={tab.id}
-                      onClick={() => setOfficialApiTab(tab.id)}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-                <div
-                  className="official-api-tab-content"
-                  role="tabpanel"
-                  id={`official-api-panel-${officialApiTab}`}
-                  aria-labelledby={`official-api-tab-${officialApiTab}`}
-                  tabIndex={0}
-                >
-                  {officialApiTab === 'statement' ? (
-                    <div className="settings-row">
-                      <div className="settings-row-copy official-api-statement" style={{ gridColumn: '1 / -1' }}>
-                        <strong>充值即代表您认可以下协议</strong>
-                        <ul>
-                          <li>为简化操作流程，允许无账号充值（最多100元），但该模式一旦您的电脑出现故障，换设备、重装软件、清理缓存等，会导致余额无法找回，<strong>长期使用一定要绑定邮箱</strong>！</li>
-                          <li>官方API特色：为保证高可用，<strong>彻底解决模型报错、标书生成一半就失败的问题</strong>。官方API采用多供应商、多模型路由的模式，故成本不确定，具体费用取决于您当时被路由到的模型服务商。</li>
-                          <li>关于计费：我们会在您被路由到的模型<strong>成本上额外增加30%</strong>，用作服务器运维、税费、利润等。易标会甄选优质服务商，并大批量采购以拿到更优惠的成本价，可以确定的是即使增加了30%，性价比优先模式下，也<strong>比DeepSeek官网的价格更低。</strong></li>
-                          <li>
-                            模型类型：
-                            <ul>
-                              <li>性价比优先：会优选价格最低的模型，当低价模型不可用时按价格由低到高排序逐个重试</li>
-                              <li>高质量优先：会优选质量更高的模型，当高质量模型不可用时，按性能从高到低逐个重试</li>
-                            </ul>
-                          </li>
-                        </ul>
-                      </div>
-                    </div>
-                  ) : officialApiTab === 'orders' ? (
-                    <OfficialOrdersPanel />
-                  ) : officialApiTab === 'invoice' ? (
-                    <OfficialInvoicePanel />
-                  ) : (
-                    <OfficialTransactionsPanel />
-                  )}
-                </div>
-              </div>
-            </>
+              )}
+              rechargeRequested={configLoaded && rechargeRequested}
+              onRechargeRequestHandled={() => setRechargeRequested(false)}
+            />
           ) : (
             <>
               <div className="settings-list">
@@ -2160,7 +2114,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
       )}
 
       {activeTab === 'image-model' && (
-        <section className="settings-page-section">
+        <section className={`settings-page-section${state.imageModel.provider === 'official' ? ' settings-official-api' : ''}`}>
           <div className={`image-model-status is-${imageModelStatus}`}>
             <div>
               <strong>接口状态：{currentImageStatus.label}</strong>
@@ -2175,7 +2129,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>服务提供商</strong>
-                <span>各家生图接口不统一，先选择服务商再配置模型</span>
+                {state.imageModel.provider !== 'official' && <span>各家生图接口不统一，先选择服务商再配置模型</span>}
               </div>
               <select
                 value={state.imageModel.provider}
@@ -2189,181 +2143,208 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 ))}
               </select>
             </label>
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>Base URL</strong>
-                <span>{getImageBaseUrlDescription(state.imageModel.provider)}</span>
-              </div>
-              <input
-                type="text"
-                value={state.imageModel.base_url || ''}
-                placeholder={state.imageModel.provider === 'custom' ? 'https://api.example.com/v1' : state.imageModel.provider === 'comfyui' ? 'http://127.0.0.1:8188' : imageProviderDefaults[state.imageModel.provider].base_url}
-                onChange={(event) => updateImageModelConfig({ base_url: event.target.value }, { clearModels: true })}
-                disabled={state.imageModel.provider !== 'custom' && state.imageModel.provider !== 'comfyui'}
-              />
-            </label>
-            {state.imageModel.provider !== 'comfyui' && (
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>API Key</strong>
-                <span>{getImageApiKeyDescription(state.imageModel.provider)}</span>
-              </div>
-              <InputWithAction
-                type="password"
-                value={state.imageModel.api_key}
-                placeholder="请输入生图服务 API Key"
-                onChange={(event) => updateImageModelConfig({ api_key: event.target.value }, { clearModels: true })}
-                actionLabel="获取"
-                actionTitle="打开当前生图服务商的 API Key 获取页面"
-                onAction={() => { void openImageProviderApiKeyPage(); }}
-              />
-            </label>
-            )}
-            {state.imageModel.provider === 'comfyui' && (
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>工作流 JSON</strong>
-                <span>{getImageModelDescription(state.imageModel.provider)}</span>
-              </div>
-              <textarea
-                rows={6}
-                value={state.imageModel.comfyui_workflow || ''}
-                placeholder={getImageModelPlaceholder(state.imageModel.provider)}
-                onChange={(event) => updateImageModelConfig({ comfyui_workflow: event.target.value })}
-              />
-            </label>
-            )}
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>模型名称</strong>
-                <span>{state.imageModel.provider === 'comfyui' ? 'ComfyUI 由工作流决定模型，无需填写模型名称' : getImageModelDescription(state.imageModel.provider)}</span>
-              </div>
-              <div className="settings-control-with-action">
-                {state.imageModel.provider !== 'comfyui' && (imageModels.length > 0 ? (
-                  <select
-                    value={state.imageModel.model_name}
-                    onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
-                  >
-                    {imageModels.map((model) => <option value={model} key={model}>{model}</option>)}
-                  </select>
-                ) : (
+            {state.imageModel.provider !== 'official' && (
+              <>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>Base URL</strong>
+                    <span>{getImageBaseUrlDescription(state.imageModel.provider)}</span>
+                  </div>
                   <input
                     type="text"
-                    value={state.imageModel.model_name}
-                    placeholder={getImageModelPlaceholder(state.imageModel.provider)}
-                    onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
+                    value={state.imageModel.base_url || ''}
+                    placeholder={state.imageModel.provider === 'custom' ? 'https://api.example.com/v1' : state.imageModel.provider === 'comfyui' ? 'http://127.0.0.1:8188' : imageProviderDefaults[state.imageModel.provider].base_url}
+                    onChange={(event) => updateImageModelConfig({ base_url: event.target.value }, { clearModels: true })}
+                    disabled={state.imageModel.provider !== 'custom' && state.imageModel.provider !== 'comfyui'}
                   />
-                ))}
+                </label>
                 {state.imageModel.provider !== 'comfyui' && (
-                <button
-                  type="button"
-                  className="inline-action"
-                  onClick={fetchImageModels}
-                  disabled={loadingModels === 'image'}
-                >
-                  {loadingModels === 'image' && <InlineSpinner />}
-                  {loadingModels === 'image' ? '获取中' : '获取'}
-                </button>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>API Key</strong>
+                    <span>{getImageApiKeyDescription(state.imageModel.provider)}</span>
+                  </div>
+                  <InputWithAction
+                    type="password"
+                    value={state.imageModel.api_key}
+                    placeholder="请输入生图服务 API Key"
+                    onChange={(event) => updateImageModelConfig({ api_key: event.target.value }, { clearModels: true })}
+                    actionLabel="获取"
+                    actionTitle="打开当前生图服务商的 API Key 获取页面"
+                    onAction={() => { void openImageProviderApiKeyPage(); }}
+                  />
+                </label>
                 )}
-                <button type="button" className="inline-action" onClick={testImageConfig} disabled={testingImageModel}>
-                  {testingImageModel && <InlineSpinner />}
-                  {testingImageModel ? '测试中' : '测试'}
-                </button>
-              </div>
-            </label>
+                {state.imageModel.provider === 'comfyui' && (
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>工作流 JSON</strong>
+                    <span>{getImageModelDescription(state.imageModel.provider)}</span>
+                  </div>
+                  <textarea
+                    rows={6}
+                    value={state.imageModel.comfyui_workflow || ''}
+                    placeholder={getImageModelPlaceholder(state.imageModel.provider)}
+                    onChange={(event) => updateImageModelConfig({ comfyui_workflow: event.target.value })}
+                  />
+                </label>
+                )}
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>模型名称</strong>
+                    <span>{state.imageModel.provider === 'comfyui' ? 'ComfyUI 由工作流决定模型，无需填写模型名称' : getImageModelDescription(state.imageModel.provider)}</span>
+                  </div>
+                  <div className="settings-control-with-action">
+                    {state.imageModel.provider !== 'comfyui' && (imageModels.length > 0 ? (
+                      <select
+                        value={state.imageModel.model_name}
+                        onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
+                      >
+                        {imageModels.map((model) => <option value={model} key={model}>{model}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={state.imageModel.model_name}
+                        placeholder={getImageModelPlaceholder(state.imageModel.provider)}
+                        onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
+                      />
+                    ))}
+                    {state.imageModel.provider !== 'comfyui' && (
+                    <button
+                      type="button"
+                      className="inline-action"
+                      onClick={fetchImageModels}
+                      disabled={loadingModels === 'image'}
+                    >
+                      {loadingModels === 'image' && <InlineSpinner />}
+                      {loadingModels === 'image' ? '获取中' : '获取'}
+                    </button>
+                    )}
+                    <button type="button" className="inline-action" onClick={testImageConfig} disabled={testingImageModel}>
+                      {testingImageModel && <InlineSpinner />}
+                      {testingImageModel ? '测试中' : '测试'}
+                    </button>
+                  </div>
+                </label>
+              </>
+            )}
           </div>
 
-          <div className="settings-group-title">高级参数</div>
-          <div className="settings-list">
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>图片尺寸</strong>
-                <span>{state.imageModel.provider === 'google-ai-studio'
-                  ? '使用 Google AI Studio 官方 imageSize 枚举'
-                  : state.imageModel.provider === 'comfyui'
-                    ? '尺寸会注入工作流的 Latent 节点（宽×高）'
-                    : state.imageModel.provider === 'agnes' && state.imageModel.model_name === 'agnes-image-2.1-flash'
-                      ? 'Agnes Image 2.1 Flash 使用 1K 至 4K 尺寸档位'
-                      : state.imageModel.provider === 'agnes'
-                        ? 'Agnes Image 2.0 Flash 使用官方支持的具体尺寸'
-                        : '使用 OpenAI Image API 官方常用尺寸枚举'}</span>
-              </div>
-              <select
-                value={state.imageModel.image_size}
-                onChange={(event) => updateImageModelConfig({ image_size: event.target.value as ImageModelSize })}
-              >
-                {!currentImageSizeSupported && (
-                  <option value={state.imageModel.image_size} disabled>
-                    {state.imageModel.image_size}（当前模型不支持，请重新选择）
-                  </option>
-                )}
-                {currentImageSizeOptions.map((option) => (
-                  <option value={option.value} key={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            {state.imageModel.provider === 'agnes' && state.imageModel.model_name === 'agnes-image-2.1-flash' && (
-              <label className="settings-row">
-                <div className="settings-row-copy">
-                  <strong>图片宽高比</strong>
-                  <span>与 1K 至 4K 尺寸档位配合使用</span>
+          {state.imageModel.provider === 'official' ? (
+            <OfficialApiPanel
+              tab={officialApiTab}
+              onTabChange={setOfficialApiTab}
+              modelControls={(
+                <div className="settings-row">
+                  <div className="settings-row-copy"><strong>模型类型</strong></div>
+                  <div className="settings-control-with-action">
+                    <span>性价比优先</span>
+                    <button type="button" className="inline-action" onClick={testImageConfig} disabled={testingImageModel}>
+                      {testingImageModel && <InlineSpinner />}
+                      {testingImageModel ? '测试中' : '测试'}
+                    </button>
+                  </div>
                 </div>
-                <select
-                  value={state.imageModel.image_ratio || '1:1'}
-                  onChange={(event) => updateImageModelConfig({ image_ratio: event.target.value as ImageModelRatio })}
-                >
-                  {agnesImageRatioOptions.map((option) => (
-                    <option value={option.value} key={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>并发上限</strong>
-                <span>全局生图 AI 请求同时执行的最大数量，超出后自动排队</span>
+              )}
+              rechargeRequested={configLoaded && rechargeRequested}
+              onRechargeRequestHandled={() => setRechargeRequested(false)}
+            />
+          ) : (
+            <>
+              <div className="settings-group-title">高级参数</div>
+              <div className="settings-list">
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>图片尺寸</strong>
+                    <span>{state.imageModel.provider === 'google-ai-studio'
+                      ? '使用 Google AI Studio 官方 imageSize 枚举'
+                      : state.imageModel.provider === 'comfyui'
+                        ? '尺寸会注入工作流的 Latent 节点（宽×高）'
+                        : state.imageModel.provider === 'agnes' && state.imageModel.model_name === 'agnes-image-2.1-flash'
+                          ? 'Agnes Image 2.1 Flash 使用 1K 至 4K 尺寸档位'
+                          : state.imageModel.provider === 'agnes'
+                            ? 'Agnes Image 2.0 Flash 使用官方支持的具体尺寸'
+                            : '使用 OpenAI Image API 官方常用尺寸枚举'}</span>
+                  </div>
+                  <select
+                    value={state.imageModel.image_size}
+                    onChange={(event) => updateImageModelConfig({ image_size: event.target.value as ImageModelSize })}
+                  >
+                    {!currentImageSizeSupported && (
+                      <option value={state.imageModel.image_size} disabled>
+                        {state.imageModel.image_size}（当前模型不支持，请重新选择）
+                      </option>
+                    )}
+                    {currentImageSizeOptions.map((option) => (
+                      <option value={option.value} key={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                {state.imageModel.provider === 'agnes' && state.imageModel.model_name === 'agnes-image-2.1-flash' && (
+                  <label className="settings-row">
+                    <div className="settings-row-copy">
+                      <strong>图片宽高比</strong>
+                      <span>与 1K 至 4K 尺寸档位配合使用</span>
+                    </div>
+                    <select
+                      value={state.imageModel.image_ratio || '1:1'}
+                      onChange={(event) => updateImageModelConfig({ image_ratio: event.target.value as ImageModelRatio })}
+                    >
+                      {agnesImageRatioOptions.map((option) => (
+                        <option value={option.value} key={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>并发上限</strong>
+                    <span>全局生图 AI 请求同时执行的最大数量，超出后自动排队</span>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={state.imageModel.concurrency_limit}
+                    placeholder="2"
+                    onChange={(event) => updateImageModelConfig({ concurrency_limit: parseImageConcurrencyLimitInput(event.target.value) })}
+                  />
+                </label>
+                {state.imageModel.provider !== 'comfyui' && (
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>请求方式</strong>
+                    <span>{state.imageModel.provider === 'agnes'
+                      ? 'Agnes 生图接口使用普通请求'
+                      : '流式请求只影响后端调用方式，应用仍等待完整图片生成后继续流程'}</span>
+                  </div>
+                  <select
+                    value={state.imageModel.request_mode}
+                    onChange={(event) => updateImageModelConfig({ request_mode: event.target.value as AiRequestMode })}
+                  >
+                    {aiRequestModeOptions.map((option) => (
+                      <option value={option.value} key={option.value} disabled={state.imageModel.provider === 'agnes' && option.value === 'stream'}>
+                        {option.label}{state.imageModel.provider === 'agnes' && option.value === 'stream' ? '（Agnes 不支持）' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                )}
+                {state.imageModel.provider === 'volcengine' && (
+                <div className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>去除AI生成水印</strong>
+                    <span>开启后生成的图片右下角不再添加“AI 生成”标识；请确保使用场景符合 AI 内容标识要求</span>
+                  </div>
+                  <div className="settings-action-cell">
+                    <AppSwitch aria-label="去除AI生成水印" checked={state.imageModel.image_watermark === false} onCheckedChange={(checked) => updateImageModelConfig({ image_watermark: !checked })} />
+                  </div>
+                </div>
+                )}
               </div>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={state.imageModel.concurrency_limit}
-                placeholder="2"
-                onChange={(event) => updateImageModelConfig({ concurrency_limit: parseImageConcurrencyLimitInput(event.target.value) })}
-              />
-            </label>
-            {state.imageModel.provider !== 'comfyui' && (
-            <label className="settings-row">
-              <div className="settings-row-copy">
-                <strong>请求方式</strong>
-                <span>{state.imageModel.provider === 'agnes'
-                  ? 'Agnes 生图接口使用普通请求'
-                  : '流式请求只影响后端调用方式，应用仍等待完整图片生成后继续流程'}</span>
-              </div>
-              <select
-                value={state.imageModel.request_mode}
-                onChange={(event) => updateImageModelConfig({ request_mode: event.target.value as AiRequestMode })}
-              >
-                {aiRequestModeOptions.map((option) => (
-                  <option value={option.value} key={option.value} disabled={state.imageModel.provider === 'agnes' && option.value === 'stream'}>
-                    {option.label}{state.imageModel.provider === 'agnes' && option.value === 'stream' ? '（Agnes 不支持）' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            )}
-            {state.imageModel.provider === 'volcengine' && (
-            <div className="settings-row">
-              <div className="settings-row-copy">
-                <strong>去除AI生成水印</strong>
-                <span>开启后生成的图片右下角不再添加“AI 生成”标识；请确保使用场景符合 AI 内容标识要求</span>
-              </div>
-              <div className="settings-action-cell">
-                <AppSwitch aria-label="去除AI生成水印" checked={state.imageModel.image_watermark === false} onCheckedChange={(checked) => updateImageModelConfig({ image_watermark: !checked })} />
-              </div>
-            </div>
-            )}
-          </div>
+            </>
+          )}
           {imageTestPreview && (
             <div className="image-test-preview">
               <div>

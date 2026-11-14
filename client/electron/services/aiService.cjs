@@ -43,6 +43,12 @@ const ANALYTICS_ENDPOINT = 'https://analytics.agnet.top/track';
 const ANALYTICS_PROJECT_NAME = 'yibiao-client';
 const MODEL_INFO_ENDPOINT = 'https://analytics.agnet.top/model-info';
 const OPENAI_IMAGE_PROVIDER_META = {
+  official: {
+    label: '易标官方API',
+    defaultBaseUrl: 'https://v3.yibiao.pro/qhp-ai/anonymous/openai/v1',
+    logProvider: 'official',
+    modelLabel: '生图模型名称',
+  },
   jinlong: {
     label: '金龙中转站',
     defaultBaseUrl: 'https://img-api.jlaudeapi.com/v1',
@@ -271,6 +277,16 @@ function createOpenAICompatibleImageRequestBody(provider, imageConfig, prompt, r
   const model = String(imageConfig?.model_name || '').trim();
   const size = normalizeOpenAICompatibleImageSize(imageConfig, requestSize);
 
+  if (provider === 'official') {
+    return {
+      model: 'IMAGE_GENERATION',
+      prompt,
+      n: 1,
+      size,
+      stream: true,
+    };
+  }
+
   if (provider !== 'agnes') {
     return {
       model,
@@ -351,12 +367,12 @@ async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS
   }
 }
 
-// 构造模型请求头，仅官方文本服务附带开源客户端标识。
-function createHeaders(apiKey, textModelProvider) {
+// 构造文本和生图请求头，官方服务附带开源客户端标识。
+function createHeaders(apiKey, provider) {
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
-    ...(textModelProvider === 'official' ? { 'X-Yibiao-Client-Type': 'open-source' } : {}),
+    ...(provider === 'official' ? { 'X-Yibiao-Client-Type': 'open-source' } : {}),
   };
 }
 
@@ -413,8 +429,20 @@ function imageExtensionFromMime(mimeType) {
   return 'png';
 }
 
+// 官方生图使用现有官方账户密钥。
+function getEffectiveImageModelConfig(config) {
+  const imageConfig = config.image_model;
+  if (imageConfig.provider !== 'official') return imageConfig;
+
+  return {
+    ...imageConfig,
+    api_key: config.text_model_profiles.official.api_key,
+  };
+}
+
+// 按已保存的测试状态和实际请求配置判断生图是否可用。
 function getImageModelAvailability(config) {
-  const imageConfig = config.image_model || {};
+  const imageConfig = getEffectiveImageModelConfig(config);
   if (imageConfig.status !== 'available') {
     return { available: false, status: imageConfig.status || 'untested', message: '生图模型未测试可用' };
   }
@@ -427,7 +455,7 @@ function getImageModelAvailability(config) {
   }
 
   if (!imageConfig.api_key) {
-    return { available: false, status: 'unavailable', message: '请先填写生图模型 API Key' };
+    return { available: false, status: 'unavailable', message: imageConfig.provider === 'official' ? '官方账户尚未就绪，请稍后重试或重新登录' : '请先填写生图模型 API Key' };
   }
 
   if (!imageConfig.model_name) {
@@ -571,12 +599,13 @@ async function ensureOk(response, fallbackMessage, options = {}) {
   throw await createAiHttpErrorFromResponse(response, fallbackMessage, { source: options.source || 'ai-service' });
 }
 
+// 发送兼容接口生图请求，并标记官方 HTTP 错误以复用余额不足跳转。
 async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, fallbackMessage, options = {}) {
   const sendRequest = async (body) => {
     try {
       return await fetchWithRedirect(`${baseUrl}/images/generations`, {
         method: 'POST',
-        headers: createHeaders(apiKey),
+        headers: createHeaders(apiKey, options.provider),
         body: JSON.stringify(body),
         signal: options.signal,
       });
@@ -591,6 +620,7 @@ async function fetchOpenAICompatibleImageResponse(baseUrl, apiKey, requestBody, 
 
   const error = await createAiHttpErrorFromResponse(response, fallbackMessage, {
     source: options.source || 'openai-compatible-image-model',
+    official: options.provider === 'official',
     responseFormatUnsupportedChecker: isResponseFormatUnsupported,
   });
 
@@ -1675,14 +1705,15 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
   }
 }
 
+// 使用服务商实际配置测试生图，并返回现有图片预览结果。
 async function testOpenAICompatibleImageModel(app, config, provider) {
-  const imageConfig = config.image_model || {};
+  const imageConfig = getEffectiveImageModelConfig(config);
   const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
   let responseData = null;
   let analyticsTracked = false;
 
   if (!imageConfig.api_key) {
-    throw new Error(`请先填写${meta.label} API Key`);
+    throw new Error(provider === 'official' ? '官方账户尚未就绪，请稍后重试或重新登录' : `请先填写${meta.label} API Key`);
   }
 
   if (!imageConfig.model_name) {
@@ -1718,7 +1749,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
           imageConfig.api_key,
           requestBody,
           `${meta.label}生图测试失败`,
-          { signal },
+          { signal, provider, ...(provider === 'official' ? { source: 'official-image-model' } : {}) },
         ),
         AI_REQUEST_TIMEOUT_MS,
       ));
@@ -1771,7 +1802,9 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
     if (!analyticsTracked) {
       trackAiRequest(app, config, { ai_request_type: 'image' });
     }
-    const errorMessage = error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || '生图模型测试失败';
+    const errorMessage = error?.name === 'AbortError'
+      ? provider === 'official' ? '官方生图测试超时，请稍后重试' : IMAGE_MODEL_TEST_TIMEOUT_MESSAGE
+      : error?.message || '生图模型测试失败';
     writeAiLog(app, config, {
       request_id: requestId,
       log_title: logTitle,
@@ -1884,8 +1917,9 @@ async function testGoogleImageModel(app, config) {
   }
 }
 
+// 经现有兼容接口生成图片，并压缩保存供正文引用。
 async function generateOpenAICompatibleImage(app, config, request, provider) {
-  const imageConfig = config.image_model || {};
+  const imageConfig = getEffectiveImageModelConfig(config);
   const meta = OPENAI_IMAGE_PROVIDER_META[provider] || OPENAI_IMAGE_PROVIDER_META.volcengine;
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, request.title ? `AI生图-${request.title}` : 'AI生图');
@@ -1918,7 +1952,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
         imageConfig.api_key,
         requestBody,
         `${meta.label}生图失败`,
-        { signal, source: `${meta.logProvider}-image-model` },
+        { signal, provider, source: `${meta.logProvider}-image-model` },
       ),
       AI_REQUEST_TIMEOUT_MS,
       request.signal,
@@ -2525,13 +2559,14 @@ async function testComfyUIImageModel(app, config) {
     mime_type: image.mime_type || 'image/png',
   };
 }
+// 按当前生图服务商分发正式图片请求。
 async function generateImageWithConfig(app, config, request) {
   const availability = getImageModelAvailability(config);
   if (!availability.available) {
     throw new Error(availability.message);
   }
 
-  if (config.image_model?.provider === 'jinlong' || config.image_model?.provider === 'volcengine' || config.image_model?.provider === 'agnes' || config.image_model?.provider === 'custom') {
+  if (config.image_model?.provider === 'official' || config.image_model?.provider === 'jinlong' || config.image_model?.provider === 'volcengine' || config.image_model?.provider === 'agnes' || config.image_model?.provider === 'custom') {
     return generateOpenAICompatibleImage(app, config, request, config.image_model.provider);
   }
 
@@ -2686,15 +2721,17 @@ function createAiService({ app, configStore }) {
       };
     },
 
+    // 官方生图测试从 Main 最新配置取得共用密钥。
     async testImageModel(config) {
       const currentConfig = configStore.load();
       const trackedConfig = {
         ...config,
+        ...(config.image_model.provider === 'official' ? { text_model_profiles: currentConfig.text_model_profiles } : {}),
         analytics_client_id: config.analytics_client_id || currentConfig.analytics_client_id,
         analytics_created_at: config.analytics_created_at || currentConfig.analytics_created_at,
       };
 
-      if (trackedConfig.image_model?.provider === 'jinlong' || trackedConfig.image_model?.provider === 'volcengine' || trackedConfig.image_model?.provider === 'agnes' || trackedConfig.image_model?.provider === 'custom') {
+      if (trackedConfig.image_model?.provider === 'official' || trackedConfig.image_model?.provider === 'jinlong' || trackedConfig.image_model?.provider === 'volcengine' || trackedConfig.image_model?.provider === 'agnes' || trackedConfig.image_model?.provider === 'custom') {
         return testOpenAICompatibleImageModel(app, trackedConfig, trackedConfig.image_model.provider);
       }
 

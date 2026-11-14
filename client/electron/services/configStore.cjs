@@ -5,7 +5,7 @@ const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 const { defaultExportFormat, normalizeExportFormat } = require('./exportFormatDefaults.cjs');
 
 const textModelProviders = ['official', 'jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
-const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
+const imageModelProviders = ['official', 'jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare', 'atomgit'];
 const DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT = 400000;
@@ -112,6 +112,18 @@ const defaultTextModelProfiles = {
 };
 
 const defaultImageModelProfiles = {
+  official: {
+    provider: 'official',
+    base_url: textProviderBaseUrls.official,
+    api_key: '',
+    model_name: 'IMAGE_GENERATION',
+    image_size: '1024x1024',
+    request_mode: 'stream',
+    concurrency_limit: 50,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
   jinlong: {
     provider: 'jinlong',
     base_url: 'https://img-api.jlaudeapi.com/v1',
@@ -429,9 +441,18 @@ function normalizeImageRatio(value) {
   return agnesImageRatios.includes(value) ? value : '1:1';
 }
 
+// 固定官方生图运行参数，并保存各服务商的测试结果。
 function normalizeImageModelProfile(provider, profile) {
   const defaults = defaultImageModelProfiles[provider];
   const source = profile || {};
+  if (provider === 'official') {
+    return {
+      ...defaults,
+      status: source.status ?? defaults.status,
+      tested_at: source.tested_at ?? defaults.tested_at,
+      last_error: source.last_error ?? defaults.last_error,
+    };
+  }
   const useProviderDefaultImageModel = provider === 'jinlong' && !String(source.model_name ?? '').trim();
   return {
     provider,

@@ -2,6 +2,7 @@ import { assertReady, buildRangeQuery, getEncodedProjectAndDays, loadProjectOpti
 import { escapeHtml, formatNumber } from '../render.js';
 import { state } from '../state.js';
 
+// 将配置统计取值转换为中文名称，包含官方生图服务。
 function labelConfigValue(groupKey, value) {
   const labels = {
     fileParserProviders: {
@@ -16,7 +17,7 @@ function labelConfigValue(groupKey, value) {
       agnes: 'Agnes AI',
       custom: '自定义文本服务',
     },
-    imageProviders: { jinlong: '金龙中转站', volcengine: '火山方舟', 'google-ai-studio': 'Google AI Studio', agnes: 'Agnes AI', custom: '自定义生图服务' },
+    imageProviders: { official: '易标官方API', jinlong: '金龙中转站', volcengine: '火山方舟', 'google-ai-studio': 'Google AI Studio', agnes: 'Agnes AI', custom: '自定义生图服务' },
     imageModelStatuses: { untested: '未测试', available: '可用', unavailable: '不可用' },
     bidAnalysisModes: { key: '只解析关键项', full: '完整解析' },
     outlineModes: {

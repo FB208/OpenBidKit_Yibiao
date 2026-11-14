@@ -987,7 +987,7 @@ fieldset.settings-list {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin: 0 24px 12px;
+  margin: 16px 24px 12px;
   padding: 12px 16px;
   background: #ffffff;
   border: 1px solid var(--yb-border-soft);
