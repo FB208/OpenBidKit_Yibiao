@@ -21,6 +21,10 @@ interface ContentEditPageProps {
   outlineWordControlSnapshot?: OutlineWordControlOptions;
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
+  adjustmentTask?: BackgroundTaskState;
+  /** 已启用投标文件 AI 调整：小节修改交给调整任务，主按钮只做全文重新生成。 */
+  documentAdjustmentEnabled?: boolean;
+  documentExporting?: boolean;
   rulePageCompileTask?: BackgroundTaskState;
   contentGenerationRuntime?: ContentGenerationRuntimeState;
   contentGenerationOptions?: ContentGenerationOptions;
@@ -232,6 +236,9 @@ function ContentEditPage({
   task,
   rulePageCompileTask,
   contentGenerationRuntime,
+  adjustmentTask,
+  documentAdjustmentEnabled = false,
+  documentExporting = false,
   contentGenerationOptions,
   exportTemplateId,
   sections,
@@ -275,7 +282,8 @@ function ContentEditPage({
   const selectedIsWord = selectedIsLeaf && selectedItem?.content_mode === 'ai-generate';
   // 清空、目录变化或新任务使旧预览失效；扫描和正式转换进度不触发临时转换。
   const hasContentTask = Boolean(task || contentGenerationRuntime?.html_output);
-  const wordContentContext = useMemo(() => ({}), [outlineData, hasContentTask, task?.task_id]);
+  const wordContentContext = useMemo(() => ({}), [outlineData, hasContentTask, task?.task_id,
+    contentGenerationRuntime?.content_revision, adjustmentTask?.task_id, adjustmentTask?.status]);
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
   const paused = task?.status === 'paused';
@@ -288,7 +296,9 @@ function ContentEditPage({
     const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [taskInFlight]);
-  const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting || generationSubmitting;
+  const documentAdjusting = adjustmentTask?.status === 'running' || adjustmentTask?.status === 'pausing';
+  const documentWriteBusy = documentAdjusting || documentExporting;
+  const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting || generationSubmitting || documentWriteBusy;
   const contentStats = task?.stats?.content;
   const previewReadySectionIds = useMemo(() => new Set(contentStats?.preview_ready_section_ids || []), [contentStats?.preview_ready_section_ids]);
   const originalRestoration = hasOriginalPlan && typeof contentStats?.original_restoration?.total_words === 'number' && contentStats.original_restoration.source_hash === originalPlanContentHash
@@ -348,9 +358,6 @@ function ContentEditPage({
   const currentWords = contentStats?.current_words ?? totalWords;
   const retryingTableCleanup = taskFailed && contentStats?.phase === 'table-cleaning';
   const retryingLayoutCheck = taskFailed && contentStats?.phase === 'layout-checking';
-  const exportRepairing = contentStats?.phase === 'export-repair';
-  const retryingExportRepair = taskFailed && exportRepairing;
-  const exportRepairCompleted = task?.status === 'success' && exportRepairing;
   const retryingWordConversion = taskFailed && ['sections-completed', 'word-converting'].includes(contentStats?.phase || '');
   const retryingConsistency = taskFailed && contentStats?.phase === 'auditing';
   const retryingSectionModification = taskFailed && Boolean(contentGenerationRuntime?.target_item_id) && contentStats?.phase === 'generating';
@@ -423,11 +430,9 @@ function ContentEditPage({
     ? '小节修改完成，Word 已更新。'
     : `正文生成全部完成：共 ${currentProgressDetail?.total || 0} 个小节，实际 ${contentStats?.generated_html_words || 0} 字${completedImageCount ? `，新增配图 ${completedImageCount} 张` : ''}，Word 已全部生成。`;
   const displayProgress = htmlOutputProgress ? task?.progress || 0 : currentProgressDetail ? currentProgressDetail.phase_progress : planning ? planningProgress : contentCorrecting ? contentCorrectionProgress : progress;
-  const displayProgressLabel = exportRepairCompleted ? '导出修复结束' : contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
+  const displayProgressLabel = contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '编排统计' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '生成统计';
   // 编辑类步骤按累计完成数展示，不以随分批派发增长的已派发数作分母。
-  const displayProgressCount = exportRepairing
-    ? exportRepairCompleted ? '已结束' : taskFailed ? '失败' : paused ? '已暂停' : '处理中'
-    : currentProgressDetail?.cumulative && currentProgressDetail.unit
+  const displayProgressCount = currentProgressDetail?.cumulative && currentProgressDetail.unit
     ? `已完成 ${currentProgressDetail.completed} ${currentProgressDetail.unit}${currentProgressDetail.failed ? `，失败 ${currentProgressDetail.failed} ${currentProgressDetail.unit}` : ''}`
     : currentProgressDetail?.unit
     ? `${currentProgressDetail.completed}/${currentProgressDetail.total}${currentProgressDetail.unit}`
@@ -440,8 +445,8 @@ function ContentEditPage({
     : contentCorrecting
       ? contentCorrectionCount
           : `${completedCount}/${leaves.length}`;
-  const progressPhaseLabel = exportRepairCompleted ? '导出修复结束' : contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '正文生成';
-  const progressTone = planning || contentCompleted || exportRepairCompleted
+  const progressPhaseLabel = contentCompleted ? completedLabel : currentProgressDetail ? currentProgressDetail.phase_label : planning ? '正文编排' : restoring ? '原方案还原' : contentCorrecting ? '内容矫正' : '正文生成';
+  const progressTone = planning || contentCompleted
     ? 'success'
     : contentCorrecting
       ? 'sky'
@@ -464,11 +469,6 @@ function ContentEditPage({
     ? `${progressPhaseLabel}阶段已完成。可继续下一阶段，或从正文编排重新执行全部阶段。`
     : taskFailed
     ? taskErrorMessage
-    : exportRepairing
-    ? exportRepairCompleted ? '导出修复已结束，请重新点击导出。'
-      : paused ? '导出修复已暂停，继续时沿用原正文会话。'
-      : pausing ? '正在暂停导出修复。'
-      : currentProgressDetail?.step_label || '正在修复导出正文。'
     : contentCompleted
     ? completedDescription
     : workflowDescription
@@ -576,8 +576,6 @@ function ContentEditPage({
       ? '暂停'
       : paused
         ? '继续'
-        : retryingExportRepair
-          ? '重试导出修复'
         : retryingSectionModification
           ? '重试小节修改'
         : retryingBodyGeneration
@@ -593,7 +591,10 @@ function ContentEditPage({
         : retryingBusinessFill
           ? '重试商务模版填写'
         : businessOnly
-          ? businessFill?.phase === 'completed' ? '重新填写商务模版' : '填写商务模版'
+          ? businessFill?.phase === 'completed' || documentAdjustmentEnabled ? '重新填写商务模版' : '填写商务模版'
+          // 启用 AI 调整后只能全文重新生成（同时退出 AI 调整），小节补写和修改通过 AI 调整完成。
+          : documentAdjustmentEnabled
+            ? '重新生成正文'
           : completedCount === leaves.length && leaves.length
               ? businessFillPending ? '填写商务模版' : '重新生成正文'
               : completedCount > 0
@@ -705,13 +706,11 @@ function ContentEditPage({
 
   // 失败重试续接原正文会话及后处理阶段，转换失败则只续转 Word。
   const retryFailedSections = async () => {
-    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingBusinessFill && !retryingExportRepair)) return;
+    if (taskBlocksGeneration || (!retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck && !retryingBusinessFill)) return;
     try {
       await window.yibiao?.tasks.startContentGeneration({ retryFailedSections: true });
       trackConfigUsage({ content_generation_action: 'retry_failed_sections' });
-      showToast(retryingExportRepair
-        ? '导出修复已从原会话继续'
-        : retryingBusinessFill && !retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck
+      showToast(retryingBusinessFill && !retryingWordConversion && !retryingConsistency && !retryingSectionModification && !retryingBodyGeneration && !retryingTableCleanup && !retryingLayoutCheck
         ? '商务模版填写已从原会话继续'
         : retryingLayoutCheck ? '格式自检已从原进度继续' : retryingTableCleanup ? '去表格已从原会话继续' : retryingSectionModification ? '小节修改已从原会话继续' : retryingBodyGeneration ? '正文生成已从原会话继续' : retryingConsistency ? '一致性审计已从原会话继续' : retryingWordConversion ? 'Word 转换重试已在后台启动' : '失败小节重试任务已在后台启动', 'success');
     } catch (error) {
@@ -729,7 +728,7 @@ function ContentEditPage({
       void resumeGeneration();
       return;
     }
-    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingBusinessFill || retryingExportRepair) {
+    if (retryingWordConversion || retryingConsistency || retryingSectionModification || retryingBodyGeneration || retryingTableCleanup || retryingLayoutCheck || retryingBusinessFill) {
       void retryFailedSections();
       return;
     }
@@ -817,9 +816,10 @@ function ContentEditPage({
         ? await resolveAiImageOptions(normalizedOptions, nextImageModelAvailable, 'generation', disableAiImages)
         : normalizedOptions;
       if (!savedGenerationOptions) return;
-      const regenerate = leaves.length > 0
+      // 启用 AI 调整后主按钮只做全文重新生成。
+      const regenerate = documentAdjustmentEnabled || (leaves.length > 0
         ? completedCount === leaves.length && !businessFillPending
-        : businessFill?.phase === 'completed';
+        : businessFill?.phase === 'completed');
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
           : completedCount > 0
@@ -851,11 +851,19 @@ function ContentEditPage({
         disableAiImages,
       );
       if (!savedGenerationOptions) return;
-      await window.yibiao?.tasks.startContentGeneration({
-        regenerate: true,
-        targetItemId: requirementItem.id,
-        requirement: regenerateRequirement,
-      });
+      // 启用 AI 调整前由原正文会话修改小节；启用后交给投标文件调整任务。
+      if (documentAdjustmentEnabled) {
+        await window.yibiao?.tasks.startBidDocumentAdjustment({
+          sectionIds: [requirementItem.id],
+          requirement: regenerateRequirement,
+        });
+      } else {
+        await window.yibiao?.tasks.startContentGeneration({
+          regenerate: true,
+          targetItemId: requirementItem.id,
+          requirement: regenerateRequirement,
+        });
+      }
       trackConfigUsage({
         table_requirement: savedGenerationOptions.tableRequirement,
         use_mermaid_images: savedGenerationOptions.useMermaidImages,
@@ -868,9 +876,9 @@ function ContentEditPage({
       setSelectedItemId(requirementItem.id);
       setRequirementItem(null);
       setRegenerateRequirement('');
-      showToast('小节重新生成任务已在后台启动', 'success');
+      showToast(documentAdjustmentEnabled ? '小节修改已交给 AI 调整，正在后台处理' : '小节重新生成任务已在后台启动', 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '启动小节重新生成失败', 'error');
+      showToast(error instanceof Error ? error.message : '启动小节修改失败', 'error');
     } finally {
       setSectionSubmitting(false);
     }
@@ -1005,7 +1013,7 @@ function ContentEditPage({
               type="button"
               className="secondary-action"
               onClick={() => setBusinessReviewMode(awaitingBusinessReview ? 'confirm' : 'edit')}
-              disabled={!businessReviewEditable}
+              disabled={!businessReviewEditable || documentWriteBusy}
               title={businessReviewEditable ? undefined : '商务模版字段值填写完成或等待确认时可编辑'}
             >
               编辑提取结果
@@ -1016,7 +1024,7 @@ function ContentEditPage({
               type="button"
               className="danger-action"
               onClick={() => setResetDialogOpen(true)}
-              disabled={resetPending}
+              disabled={resetPending || documentExporting}
             >
               {resetPending ? '正在重置...' : '重置正文阶段'}
             </button>
@@ -1027,7 +1035,7 @@ function ContentEditPage({
                 type="button"
                 className="secondary-action"
                 onClick={() => void restartContentGeneration()}
-                disabled={Boolean(developerStageActionPending)}
+                disabled={documentWriteBusy || Boolean(developerStageActionPending)}
               >
                 {developerStageActionPending === 'restart' ? '正在重新执行...' : '从正文编排重新执行'}
               </button>
@@ -1035,13 +1043,13 @@ function ContentEditPage({
                 type="button"
                 className="primary-action"
                 onClick={() => void resumeGeneration()}
-                disabled={Boolean(developerStageActionPending)}
+                disabled={documentWriteBusy || Boolean(developerStageActionPending)}
               >
                 {developerStageActionPending === 'continue' ? '正在继续...' : '继续下一阶段'}
               </button>
             </>
           ) : (
-            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={generationSubmitting || sectionSubmitting || pausing || (!leaves.length && !bidTemplateExists)}>
+            <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={documentWriteBusy || generationSubmitting || sectionSubmitting || pausing || (!leaves.length && !bidTemplateExists)}>
               {generationButtonLabel}
             </button>
           )}
@@ -1056,7 +1064,10 @@ function ContentEditPage({
           </div>
           <div className={`content-outline-stats${statsCollapsed ? ' is-collapsed' : ''}`}>
             <button type="button" onClick={() => setStatsCollapsed((prev) => !prev)} aria-expanded={!statsCollapsed}>
-              <span>{businessPanel?.label ?? displayProgressLabel}</span>
+              <span>{documentAdjusting ? ({
+                preparing: '准备调整', diagnosing: '诊断导出问题', adjusting: 'AI调整中',
+                refreshing: '刷新内容', verifying: '复核整本转换',
+              } as Record<string, string>)[adjustmentTask?.stats?.adjustment?.phase || ''] || 'AI调整中' : businessPanel?.label ?? displayProgressLabel}</span>
               <strong>{businessPanel?.count ?? displayProgressCount}</strong>
               <em>{statsCollapsed ? '展开' : '折叠'}</em>
             </button>
@@ -1069,6 +1080,18 @@ function ContentEditPage({
                   label={`${businessPanel?.label ?? progressPhaseLabel}进度 ${businessPanel?.progress ?? displayProgress}%`}
                 />
                 <p>{businessPanel?.description ?? progressDescription}</p>
+                {documentAdjustmentEnabled && <p>已启用 AI 调整：目录和正文请通过“AI调整”修改；如需手动调整，请重置正文阶段。</p>}
+                {adjustmentTask?.status === 'error' && <>
+                  <p role="alert">{adjustmentTask.error}</p>
+                  <button type="button" className="secondary-action" disabled={taskBlocksGeneration} onClick={async () => {
+                    try {
+                      await window.yibiao!.tasks.startBidDocumentAdjustment({ resume: true });
+                    } catch (error) {
+                      showToast(error instanceof Error ? error.message : '继续调整失败', 'error');
+                    }
+                  }}>继续调整</button>
+                </>}
+                {documentAdjusting && <p>{adjustmentTask?.logs.at(-1)}</p>}
                 {businessPanel?.rulePage && <p>{businessPanel.rulePage}</p>}
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>

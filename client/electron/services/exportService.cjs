@@ -2748,101 +2748,132 @@ async function buildDocxBuffer(payload, options = {}) {
 
 function createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport } = {}) {
   return {
-    // 导出前检查技术方案正文，问题交给原正文任务后结束本次导出。
+    // 导出与后台写任务互斥；正式导出的预检和真实转换错误交给独立调整任务。
     async exportWord(payload = {}, onProgress) {
       const technicalExport = payload.source === 'technical-plan' ? getTechnicalPlanExport?.() : null;
-      if (payload.source === 'technical-plan') {
-        if (!technicalExport) throw new Error('本地数据库尚未就绪');
-        payload = technicalExport.prepare({ exportFormat: payload.export_format });
-      }
-      const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
-      const developerLogger = createDeveloperLogger({
-        app,
-        config: loadDeveloperConfig(configStore),
-        moduleName: 'export',
-        name: 'word-export',
-        meta: {
+      // “长嘛样”的投标文件导出测试携带编辑中的模板配置，只提示问题，不启动导出修复、不保留失败现场。
+      const repairable = Boolean(technicalExport) && !payload.export_format;
+      const releaseExport = technicalExport?.beginExport?.();
+      try {
+        if (payload.source === 'technical-plan') {
+          if (!technicalExport) throw new Error('本地数据库尚未就绪');
+          payload = technicalExport.prepare({ exportFormat: payload.export_format });
+        }
+        const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
+        const developerLogger = createDeveloperLogger({
+          app,
+          config: loadDeveloperConfig(configStore),
+          moduleName: 'export',
+          name: 'word-export',
+          meta: {
+            project_name: sanitizeFilename(payload.project_name || '投标技术文件'),
+            stats,
+          },
+        });
+        developerLogger.write('export.word.started', {
           project_name: sanitizeFilename(payload.project_name || '投标技术文件'),
           stats,
-        },
-      });
-      developerLogger.write('export.word.started', {
-        project_name: sanitizeFilename(payload.project_name || '投标技术文件'),
-        stats,
-        content_metrics: countOutlineContentMetrics(Array.isArray(payload.outline) ? payload.outline : []),
-      });
-      if (!payload.template_html && (!Array.isArray(payload.outline) || !payload.outline.length)) {
-        const error = new Error('没有可导出的目录内容');
-        developerLogger.write('export.word.error', { error: compactLogError(error) });
-        throw error;
-      }
-
-      const progressContext = { onProgress, warnings: [], stats };
-      reportProgress(progressContext, 2, '正在准备 Word 导出。');
-      // 问题交给原正文任务修复，本次不继续打开保存对话框或转换 Word。
-      if (technicalExport) {
-        const issues = technicalExport.inspect(payload);
-        if (issues.length) {
-          developerLogger.write('export.word.structure_issues', {
-            section_count: issues.length,
-            issue_count: issues.reduce((sum, item) => sum + item.problems.length, 0),
-          });
-          technicalExport.repair(issues);
-          return { success: false, message: `发现 ${issues.length} 个问题小节，已交给正文 Agent 修复。请在正文任务结束后重新导出。` };
+          content_metrics: countOutlineContentMetrics(Array.isArray(payload.outline) ? payload.outline : []),
+        });
+        if (!payload.template_html && (!Array.isArray(payload.outline) || !payload.outline.length)) {
+          const error = new Error('没有可导出的目录内容');
+          developerLogger.write('export.word.error', { error: compactLogError(error) });
+          throw error;
         }
-      }
-      const defaultFilename = `${sanitizeFilename(payload.project_name || (payload.feasibility_options ? '可行性研究报告' : '标书文档'))}_${formatExportTimestamp()}.docx`;
-      const defaultDir = app?.getPath ? app.getPath('downloads') : process.env.USERPROFILE || process.cwd();
-      const result = await dialog.showSaveDialog({
-        title: '导出 Word 文档',
-        defaultPath: path.join(defaultDir, defaultFilename),
-        filters: [{ name: 'Word 文档', extensions: ['docx'] }],
-      });
 
-      if (result.canceled || !result.filePath) {
-        reportProgress(progressContext, 0, '已取消导出。', { phase: 'canceled' });
-        developerLogger.write('export.word.canceled', { stats });
-        return { success: false, canceled: true, message: '已取消导出' };
-      }
-
-      try {
-        const warnings = [];
-        // 模板样张复用预览生成器，但不参与预览请求合并，固定使用本次导出的设置。
-        const buildResult = technicalExport
-          ? await technicalExport.build(payload, { onProgress, stats, developerLogger })
-          : payload.template_html
-          ? {
-            buffer: Buffer.from((await openXmlHelperService.createRestrictedHtmlDocx(payload.template_html, payload.export_format)).bytes),
-            warnings,
-            stats,
+        const progressContext = { onProgress, warnings: [], stats };
+        reportProgress(progressContext, 2, '正在准备 Word 导出。');
+        // 已启用 AI 调整时直接开始修复；未启用时返回失败现场，由页面确认启用后再修复。
+        const handOverFailure = (error, failedMessage, issues) => {
+          releaseExport?.();
+          const outcome = technicalExport.repair(error, payload, issues);
+          if (outcome.started) {
+            reportProgress(progressContext, 0, '已开始诊断并修复投标文件。', { phase: 'error' });
+            return { success: false, message: '已开始诊断并修复投标文件，请在 AI 调整结束后重新导出。' };
           }
-          : await buildDocxResult(payload, { onProgress, warnings, developerLogger });
-        reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 96, '正在写入 Word 文件。');
-        developerLogger.write('export.word.write.started', {
-          output_file_name: path.basename(result.filePath),
-          output_extension: path.extname(result.filePath).toLowerCase(),
-          buffer_bytes: buildResult.buffer.length,
+          reportProgress(progressContext, 0, failedMessage, { phase: 'error' });
+          return { success: false, message: failedMessage, adjustment_failure_id: outcome.failureId };
+        };
+        // 预检问题本次不继续打开保存对话框。
+        if (technicalExport) {
+          let issues;
+          try {
+            issues = technicalExport.inspect(payload);
+          } catch (error) {
+            if (!repairable) throw error;
+            return handOverFailure(error, `导出前检查失败：${error.message}`);
+          }
+          if (issues.length) {
+            developerLogger.write('export.word.structure_issues', {
+              section_count: issues.length,
+              issue_count: issues.reduce((sum, item) => sum + item.problems.length, 0),
+            });
+            const message = `导出前发现 ${issues.length} 个问题小节，本次未导出：${issues.map(issue => `${issue.section}（${issue.problems.join('；')}）`).join('；')}`;
+            if (!repairable) {
+              reportProgress(progressContext, 0, message, { phase: 'error' });
+              return { success: false, message };
+            }
+            return handOverFailure(new Error(`导出前发现 ${issues.length} 个问题小节`), message, issues);
+          }
+        }
+        const defaultFilename = `${sanitizeFilename(payload.project_name || (payload.feasibility_options ? '可行性研究报告' : '标书文档'))}_${formatExportTimestamp()}.docx`;
+        const defaultDir = app?.getPath ? app.getPath('downloads') : process.env.USERPROFILE || process.cwd();
+        const result = await dialog.showSaveDialog({
+          title: '导出 Word 文档',
+          defaultPath: path.join(defaultDir, defaultFilename),
+          filters: [{ name: 'Word 文档', extensions: ['docx'] }],
         });
-        fs.writeFileSync(result.filePath, buildResult.buffer);
-        const message = buildResult.message || (buildResult.warnings.length
-          ? `Word 已导出，但有 ${buildResult.warnings.length} 处图片未能插入，请打开文档核对。`
-          : 'Word 已导出，请打开文档核对图片、表格和版式。');
-        reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 100, message, { phase: 'success' });
-        developerLogger.write('export.word.completed', {
-          output_file_name: path.basename(result.filePath),
-          output_extension: path.extname(result.filePath).toLowerCase(),
-          buffer_bytes: buildResult.buffer.length,
-          warning_count: buildResult.warnings.length,
-          stats: buildResult.stats,
-        });
-        return { success: true, path: result.filePath, message, warnings: buildResult.warnings };
-      } catch (error) {
-        developerLogger.write('export.word.error', {
-          output_file_name: path.basename(result.filePath),
-          output_extension: path.extname(result.filePath).toLowerCase(),
-          error: compactLogError(error),
-        });
-        throw error;
+
+        if (result.canceled || !result.filePath) {
+          reportProgress(progressContext, 0, '已取消导出。', { phase: 'canceled' });
+          developerLogger.write('export.word.canceled', { stats });
+          return { success: false, canceled: true, message: '已取消导出' };
+        }
+
+        let writingOutput = false;
+        try {
+          const warnings = [];
+          // 模板样张复用预览生成器，但不参与预览请求合并，固定使用本次导出的设置。
+          const buildResult = technicalExport
+            ? await technicalExport.build(payload, { onProgress, stats, developerLogger, captureFailures: repairable })
+            : payload.template_html
+            ? {
+              buffer: Buffer.from((await openXmlHelperService.createRestrictedHtmlDocx(payload.template_html, payload.export_format)).bytes),
+              warnings,
+              stats,
+            }
+            : await buildDocxResult(payload, { onProgress, warnings, developerLogger });
+          reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 96, '正在写入 Word 文件。');
+          developerLogger.write('export.word.write.started', {
+            output_file_name: path.basename(result.filePath),
+            output_extension: path.extname(result.filePath).toLowerCase(),
+            buffer_bytes: buildResult.buffer.length,
+          });
+          writingOutput = true;
+          fs.writeFileSync(result.filePath, buildResult.buffer);
+          const message = buildResult.message || (buildResult.warnings.length
+            ? `Word 已导出，但有 ${buildResult.warnings.length} 处图片未能插入，请打开文档核对。`
+            : 'Word 已导出，请打开文档核对图片、表格和版式。');
+          reportProgress({ onProgress, warnings: buildResult.warnings, stats: buildResult.stats }, 100, message, { phase: 'success' });
+          developerLogger.write('export.word.completed', {
+            output_file_name: path.basename(result.filePath),
+            output_extension: path.extname(result.filePath).toLowerCase(),
+            buffer_bytes: buildResult.buffer.length,
+            warning_count: buildResult.warnings.length,
+            stats: buildResult.stats,
+          });
+          return { success: true, path: result.filePath, message, warnings: buildResult.warnings };
+        } catch (error) {
+          developerLogger.write('export.word.error', {
+            output_file_name: path.basename(result.filePath),
+            output_extension: path.extname(result.filePath).toLowerCase(),
+            error: compactLogError(error),
+          });
+          if (repairable && !writingOutput) return handOverFailure(error, `导出失败：${error.message}`);
+          throw error;
+        }
+      } finally {
+        releaseExport?.();
       }
     },
   };

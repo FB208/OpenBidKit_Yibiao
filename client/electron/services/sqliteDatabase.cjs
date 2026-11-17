@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 44;
+const schemaVersion = 45;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -278,6 +278,11 @@ function addTechnicalPlanBidSectionOptimization(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_sections_json', 'TEXT');
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_status', "TEXT NOT NULL DEFAULT 'idle'");
   addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_extraction_error', 'TEXT');
+}
+
+// 用户确认启用投标文件 AI 调整的时间；为空表示仍由正文会话处理目录和正文变更。
+function addTechnicalPlanDocumentAdjustmentFlag(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'document_adjustment_enabled_at', 'TEXT');
 }
 
 function addTechnicalPlanTenderFiles(db) {
@@ -2088,6 +2093,11 @@ const migrations = [
     version: 44,
     description: '资信库企业资料新增邮编、传真、法定代表人身份证号和上年度规模指标',
     up: addCredentialLibraryProfileFields,
+  },
+  {
+    version: 45,
+    description: '技术方案新增投标文件 AI 调整启用标记',
+    up: addTechnicalPlanDocumentAdjustmentFlag,
   },
 ];
 

@@ -33,6 +33,8 @@ const initialState: TechnicalPlanState = {
   globalFactsAdjustmentTask: undefined,
   globalFacts: [],
   contentGenerationTask: undefined,
+  bidDocumentAdjustmentTask: undefined,
+  documentAdjustmentEnabled: false,
   exportTemplateId: '',
   exportTemplateScope: 'ai-only',
   contentGenerationSections: {},

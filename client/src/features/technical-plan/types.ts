@@ -5,10 +5,10 @@ export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
-export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'rule-page-compile' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation';
+export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'rule-page-compile' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation' | 'bid-document-adjustment';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
 export type ContentGenerationSectionStatus = 'idle' | 'running' | 'success' | 'error';
-export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'business-filling' | 'export-repair' | 'done';
+export type ContentGenerationPhase = 'planning' | 'restoring' | 'generating' | 'sections-completed' | 'word-converting' | 'word-completed' | 'auditing' | 'table-cleaning' | 'layout-checking' | 'business-filling' | 'done';
 export type ContentTableRequirement = 'none' | 'light' | 'moderate' | 'heavy';
 export type SaveOutlineReason = 'sort' | 'edit' | 'delete' | 'add-root' | 'add-child' | 'replace';
 export type OutlineAttribute = '通用' | '商务/资信' | '技术' | '其他' | '目录' | '报价' | '业绩';
@@ -110,7 +110,7 @@ export interface ContentGenerationWorkflowProgress {
 }
 
 export interface ContentGenerationProgressDetail {
-  mode: 'full' | 'single' | 'html' | 'html-single' | 'correction' | 'business';
+  mode: 'full' | 'html' | 'html-single' | 'correction' | 'business';
   phase: ContentGenerationPhase;
   phase_label: string;
   phase_progress: number;
@@ -143,6 +143,19 @@ export interface BackgroundTaskState {
   updated_at: string;
   error?: string;
   stats?: {
+    adjustment?: {
+      origin?: 'user' | 'export';
+      requirement?: string;
+      section_ids?: string[];
+      phase?: string;
+      summary?: string;
+      failure_id?: string;
+      changed_node_ids?: string[];
+      content_revision?: string;
+      rule_page_recompile?: boolean;
+      export_verified?: boolean;
+      warnings?: string[];
+    };
     agent?: {
       task_key: string;
       run_id: string;
@@ -445,6 +458,8 @@ export interface BusinessFillReviewSubmission {
 }
 
 export interface ContentGenerationRuntimeState {
+  /** 独立调整修改正式文件后使技术、商务预览同时失效。 */
+  content_revision?: string;
   /** 已确认的 HTML 实际字数，按稳定小节 ID 保存，不保存 HTML 正文。 */
   section_words?: Record<string, number>;
   /** HTML 位于 Agent 会话目录；Word 文件相对于独立的业务输出目录。 */
@@ -552,6 +567,9 @@ export interface TechnicalPlanState {
   globalFactsAdjustmentTask?: BackgroundTaskState;
   globalFacts: GlobalFactGroupState[];
   contentGenerationTask?: BackgroundTaskState;
+  bidDocumentAdjustmentTask?: BackgroundTaskState;
+  /** 用户已确认启用投标文件 AI 调整：目录和正文只通过 AI 调整修改，重置正文阶段后恢复。 */
+  documentAdjustmentEnabled?: boolean;
   exportTemplateId: string;
   exportTemplateScope: ExportTemplateScope;
   contentGenerationOptions?: ContentGenerationOptions;

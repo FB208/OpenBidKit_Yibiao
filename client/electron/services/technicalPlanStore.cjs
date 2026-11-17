@@ -30,6 +30,7 @@ const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = requ
 // 与 rulePageCompileTask.cjs 的 RULE_PAGE_TABLES_VERSION 一致；此处不引用任务模块，避免 Store 加载 Agent 依赖。
 const RULE_PAGE_TABLES_VERSION = 3;
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
+const { BID_DOCUMENT_ADJUSTMENT_KEY } = require('./bidDocumentAdjustmentContext.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
@@ -97,6 +98,8 @@ const initialState = {
   globalFactsTask: undefined,
   globalFacts: [],
   contentGenerationTask: undefined,
+  bidDocumentAdjustmentTask: undefined,
+  documentAdjustmentEnabled: false,
   exportTemplateId: defaultExportTemplateId,
   exportTemplateScope: 'ai-only',
   contentGenerationOptions: { ...defaultContentGenerationOptions },
@@ -108,6 +111,7 @@ const initialState = {
 };
 
 const taskFieldTypes = {
+  bidDocumentAdjustmentTask: 'bid-document-adjustment',
   bidSectionExtractionTask: 'bid-section-extraction',
   bidAnalysisTask: 'bid-analysis',
   outlineGenerationTask: 'outline-generation',
@@ -483,7 +487,23 @@ function mapOutlineItems(items, mapper) {
 }
 
 function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore, configStore }) {
+  // 项目失效时同时清理独立调整会话、失败现场和启用标记，目录和正文恢复手动调整。
+  function clearDocumentAdjustment() {
+    agentService.deletePersistentTask(BID_DOCUMENT_ADJUSTMENT_KEY);
+    db.prepare("DELETE FROM technical_plan_tasks WHERE type = 'bid-document-adjustment'").run();
+    updateMeta({ document_adjustment_enabled_at: null });
+    fs.rmSync(path.join(getTechnicalPlanDir(app), 'export-failures'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // 用户确认后启用：此后正文会话不再续接，目录和正文只通过投标文件 AI 调整修改。
+  function enableDocumentAdjustment() {
+    updateMeta({ document_adjustment_enabled_at: now() });
+    notifyAgentWorkspaceChange();
+  }
+  function isDocumentAdjustmentEnabled() {
+    return Boolean(ensureMetaRow().document_adjustment_enabled_at);
+  }
   function deleteOutlineAgentTask() {
+    clearDocumentAdjustment();
     agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
     agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
@@ -504,7 +524,8 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const hasOutline = Boolean(db.prepare('SELECT 1 FROM technical_plan_outline_nodes LIMIT 1').get());
     const hasFacts = Boolean(db.prepare('SELECT 1 FROM technical_plan_global_fact_groups LIMIT 1').get());
     const hasContentPlans = Boolean(db.prepare('SELECT 1 FROM technical_plan_content_plans LIMIT 1').get());
-    return `${meta.step || ''}|${hasOutline ? 1 : 0}|${hasFacts ? 1 : 0}|${hasContentPlans ? 1 : 0}`;
+    const adjustment = db.prepare("SELECT task_id, status FROM technical_plan_tasks WHERE type = 'bid-document-adjustment'").get();
+    return `${meta.step || ''}|${hasOutline ? 1 : 0}|${hasFacts ? 1 : 0}|${hasContentPlans ? 1 : 0}|${adjustment?.task_id || ''}|${adjustment?.status || ''}|${meta.document_adjustment_enabled_at ? 1 : 0}`;
   }
   function notifyAgentWorkspaceChange(options = {}) {
     const signal = getAgentWorkspaceSignal();
@@ -1776,6 +1797,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   }
 
   function clearContentGenerationState(wordChanges) {
+    clearDocumentAdjustment();
     stageContentWordRemoval(wordChanges);
     stageBusinessTemplateReset(wordChanges);
     agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
@@ -1800,12 +1822,38 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     };
   }
 
-  function assertOutlineMutationAllowed() {
+  function assertOutlineMutationAllowed(reason) {
     const task = db.prepare("SELECT status FROM technical_plan_tasks WHERE type = 'content-generation'").get();
     if (['running', 'pausing', 'paused'].includes(task?.status)) {
       throw new Error('正文生成任务正在运行或暂停中，请结束后再调整目录');
     }
+    // 启用 AI 调整后只允许排序；整目录替换会清空正文并退出 AI 调整。
+    if (!['sort', 'replace'].includes(reason) && isDocumentAdjustmentEnabled()) {
+      throw new Error('已启用 AI 调整，目录修改请通过 AI 调整完成；如需手动调整，请先重置正文阶段');
+    }
     assertRulePageCompileIdle('调整目录');
+  }
+
+  // 规则和页码按目录编制：清除编制结果、运行时及正文任务统计中的状态和编制会话，变为待编制。
+  function resetRulePageState(wordChanges) {
+    stageRulePageReset(wordChanges);
+    const runtime = safeJsonParse(readMetaRow().content_generation_runtime_json, null);
+    if (runtime?.rule_page) {
+      const { rule_page: _rulePage, ...rest } = runtime;
+      updateMeta({ content_generation_runtime_json: JSON.stringify(rest) });
+    }
+    // 保留的正文任务统计里也有编制状态，一并清除，避免页面回退到旧的已编制状态。
+    const taskStats = safeJsonParse(db.prepare("SELECT stats_json FROM technical_plan_tasks WHERE type = 'content-generation'").get()?.stats_json, null);
+    if (taskStats?.content?.rule_page) {
+      const { rule_page: _taskRulePage, ...content } = taskStats.content;
+      db.prepare("UPDATE technical_plan_tasks SET stats_json = ? WHERE type = 'content-generation'").run(JSON.stringify({ ...taskStats, content }));
+    }
+  }
+
+  // AI 调整改变目录结构后使规则和页码失效，由调整结束后的重新编制补齐。
+  function invalidateRulePage() {
+    createContentWordTransaction(resetRulePageState)();
+    agentService.deletePersistentTask(RULE_PAGE_AGENT_TASK_KEY);
   }
 
   // 正文页“重新编制”单独运行时，目录变更和全局事实保存会清掉它正在写的结果与会话，须等编制结束；应用重启后中断的编制已转为 error。
@@ -2079,6 +2127,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     return {
       ...initialState,
       step: isValidStep(meta.step) ? meta.step : 'document-analysis',
+      documentAdjustmentEnabled: Boolean(meta.document_adjustment_enabled_at),
       tenderFile,
       tenderFiles,
       originalPlanFile,
@@ -2255,25 +2304,14 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
     let savedOutlineData = outlineData;
     const transaction = createContentWordTransaction((wordChanges) => {
-      assertOutlineMutationAllowed();
+      assertOutlineMutationAllowed(reason);
       if (preservesContentTask) {
         if (reason === 'edit') {
           // 编辑只更新标题和描述，保留正文、处理模式及编排。
           const updateDetails = db.prepare('UPDATE technical_plan_outline_nodes SET title = ?, description = ?, updated_at = ? WHERE node_id = ? AND (title <> ? OR description <> ?)');
           const timestamp = now();
           for (const row of flattenOutlineItems(outlineData?.outline || [])) updateDetails.run(row.title, row.description, timestamp, row.node_id, row.title, row.description);
-          stageRulePageReset(wordChanges);
-          const runtime = safeJsonParse(readMetaRow().content_generation_runtime_json, null);
-          if (runtime?.rule_page) {
-            const { rule_page: _rulePage, ...rest } = runtime;
-            updateMeta({ content_generation_runtime_json: JSON.stringify(rest) });
-          }
-          // 保留的正文任务统计里也有编制状态，一并清除，避免页面回退到旧的已编制状态。
-          const taskStats = safeJsonParse(db.prepare("SELECT stats_json FROM technical_plan_tasks WHERE type = 'content-generation'").get()?.stats_json, null);
-          if (taskStats?.content?.rule_page) {
-            const { rule_page: _taskRulePage, ...content } = taskStats.content;
-            db.prepare("UPDATE technical_plan_tasks SET stats_json = ? WHERE type = 'content-generation'").run(JSON.stringify({ ...taskStats, content }));
-          }
+          resetRulePageState(wordChanges);
         } else {
           saveSortedOutline(outlineData);
         }
@@ -2336,6 +2374,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (invalidatesContentTask) {
       agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
       if (clearAll) {
+        clearDocumentAdjustment();
         agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
         agentService.deletePersistentTask(BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY);
       }
@@ -2345,6 +2384,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const savedContentTask = preservesContentTask ? loadTask('content-generation') : undefined;
     return {
       outlineData: savedOutlineData,
+      bidDocumentAdjustmentTask: loadTask('bid-document-adjustment'),
       contentGenerationTask: savedContentTask,
       contentGenerationRuntime: savedContentRuntime,
       contentGenerationSections: loadContentSections(savedOutlineData),
@@ -2829,6 +2869,11 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     saveGlobalFacts,
     saveContentGenerationOptions,
     clearBidTemplate,
+    clearDocumentAdjustment,
+    enableDocumentAdjustment,
+    isDocumentAdjustmentEnabled,
+    invalidateRulePage,
+    readDocumentAdjustmentTask: () => loadTask('bid-document-adjustment'),
     // 正文 Word 直接保存到技术方案业务目录，独立于 Agent 会话。
     getContentWordOutputDir() {
       return getTechnicalPlanDir(app);

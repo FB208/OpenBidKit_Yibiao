@@ -2,7 +2,6 @@ const crypto = require('node:crypto');
 const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask, prepareContentGenerationStart } = require('./contentGenerationTask.cjs');
-const { runContentSectionRegenerationTask } = require('./contentSectionRegenerationTask.cjs');
 const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
@@ -34,8 +33,15 @@ const {
 const { runFeasibilityOutlineTask } = require('./feasibilityOutlineTask.cjs');
 const { runFeasibilityOutlineAdjustmentTask } = require('./feasibilityOutlineAdjustmentTask.cjs');
 const { normalizeLogs } = require('./taskLogStore.cjs');
+const { runBidDocumentAdjustmentTask } = require('./bidDocumentAdjustmentTask.cjs');
+const { readExportFailure } = require('./bidDocumentExportFailure.cjs');
+const { runContentSectionRegenerationTask } = require('./contentSectionRegenerationTask.cjs');
 
 const taskDefinitions = {
+  'bid-document-adjustment': {
+    label: '投标文件AI调整', group: 'technical-plan', groupLabel: '技术方案',
+    step: 5, lockPolicy: 'group-exclusive', stateKey: 'technicalPlan', field: 'bidDocumentAdjustmentTask',
+  },
   'bid-section-extraction': {
     label: '多标段识别',
     group: 'technical-plan',
@@ -308,6 +314,14 @@ function clearOutlineContentByIds(items, interruptedIds) {
   });
 }
 
+// 未成功或尚无确认字数的 AI 叶子仍待正文任务生成。
+function collectPendingSectionIds(technicalPlan, items = technicalPlan.outlineData?.outline || []) {
+  return items.flatMap(item => item.children?.length ? collectPendingSectionIds(technicalPlan, item.children)
+    : item.content_mode === 'ai-generate'
+      && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
+        || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)) ? [item.id] : []);
+}
+
 function normalizeInterruptedContentSections(technicalPlan) {
   const sections = technicalPlan?.contentGenerationSections || {};
   const interruptedIds = new Set();
@@ -371,11 +385,107 @@ function createTask(type, payload) {
 // 依赖待检文档的暗标任务；从招标文件提取预设与待检文档无关，换文档时不取消。
 const BLIND_CHECK_DOCUMENT_TASK_TYPES = ['blind-check-run', 'blind-check-fix'];
 
-function createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService }) {
+function createTaskService({ app, technicalPlanExport, templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
   const activeTaskControls = new Map();
+  let exportOccupied = false;
+
+  // 正式导出与后台写任务双向互斥；内部转换复核不重复申请占用。
+  function beginTechnicalPlanExport() {
+    if (exportOccupied) throw new Error('投标文件正在导出');
+    const busy = [...activeTasks.values()].find(task => task.group === 'technical-plan' && isActiveTaskStatus(task.status));
+    if (busy || technicalPlanStore.loadTechnicalPlan().contentGenerationTask?.status === 'paused') {
+      throw new Error('当前投标任务未结束，请完成后再导出');
+    }
+    exportOccupied = true;
+    let released = false;
+    return () => { if (!released) { released = true; exportOccupied = false; } };
+  }
+
+  // 人工写入也使用同一互斥状态，不影响调整 runner 自己的 Store 提交。
+  function assertDocumentMutationIdle() {
+    if (exportOccupied || isActiveTaskStatus(activeTasks.get('bid-document-adjustment')?.status)) {
+      throw new Error('投标文件正在调整或导出，请完成后再操作');
+    }
+  }
+
+  function findBusyTechnicalPlanTask() {
+    return [...activeTasks.values()].find(task => task.group === 'technical-plan' && isActiveTaskStatus(task.status));
+  }
+
+  // 启用前正文须由正文任务完整生成：新增或未完成的小节仍交给正文会话增量生成。
+  function getDocumentAdjustmentEnableBlocker() {
+    if (exportOccupied) return '投标文件正在导出，请完成后再启用 AI 调整';
+    const busy = findBusyTechnicalPlanTask();
+    if (busy) return `${getTaskDefinition(busy.type).label}任务执行中，请等待完成`;
+    const plan = technicalPlanStore.loadTechnicalPlan();
+    if (!plan.outlineData?.outline?.length) return '当前没有可调整的投标文件';
+    if (plan.contentGenerationTask?.status !== 'success') return '请先完成正文生成，再启用 AI 调整';
+    if (collectPendingSectionIds(plan).length) return '有新增或未完成的小节，请先点击“继续生成正文”';
+    return '';
+  }
+
+  // 启用后正文任务不再运行，调整只受导出和其他技术方案任务互斥。
+  function getDocumentAdjustmentBlocker() {
+    if (!technicalPlanStore.isDocumentAdjustmentEnabled()) return '请先在正文页点击“AI调整”并确认启用';
+    if (exportOccupied) return '投标文件正在导出，请完成后再调整';
+    const busy = findBusyTechnicalPlanTask();
+    if (busy) return `${getTaskDefinition(busy.type).label}任务执行中，请等待完成`;
+    if (!technicalPlanStore.loadTechnicalPlan().outlineData?.outline?.length) return '当前没有可调整的投标文件';
+    return '';
+  }
+
+  // 正文页“重新编制”与调整后的自动重新编制共用；正文任务运行或暂停时不允许，避免与正文副流程同时写模版。
+  function startRulePageCompile(payload) {
+    const contentStatus = technicalPlanStore.loadTechnicalPlan().contentGenerationTask?.status;
+    if (isActiveTaskStatus(contentStatus) || contentStatus === 'paused') {
+      throw new Error('正文任务未结束，请完成或重置后再重新编制');
+    }
+    return startManagedTask('rule-page-compile', payload, runRulePageCompileTask, {}, { primarySession: true });
+  }
+
+  // AI 调整改变目录结构后规则和页码已失效，调整结束后自动重新编制；启动失败保持待编制，可手动“重新编制”。
+  function recompileRulePageAfterAdjustment() {
+    const plan = technicalPlanStore.loadTechnicalPlan();
+    if (!plan.bidDocumentAdjustmentTask?.stats?.adjustment?.rule_page_recompile) return;
+    if (!hasRulePageChapters(technicalPlanStore, plan.outlineData?.outline)) return;
+    try {
+      startRulePageCompile();
+    } catch (error) {
+      console.error('[task-service] 调整后重新编制规则和页码启动失败:', error);
+    }
+  }
+
+  // 每条要求单独登记受管任务，底层持久 Session 持续复用。
+  function startBidDocumentAdjustment(payload) {
+    if (isActiveTaskStatus(activeTasks.get('bid-document-adjustment')?.status)) throw new Error('上一条调整要求正在处理中');
+    if (payload.resume) {
+      const previous = technicalPlanStore.readDocumentAdjustmentTask()?.stats?.adjustment;
+      if (!previous) throw new Error('没有可继续的调整任务');
+      payload = { origin: previous.origin, requirement: previous.requirement, sectionIds: previous.section_ids,
+        failureId: previous.failure_id, exportOptions: previous.export_options };
+    }
+    const blocker = getDocumentAdjustmentBlocker();
+    if (blocker) throw new Error(blocker);
+    return startManagedTask('bid-document-adjustment', payload, runBidDocumentAdjustmentTask, {}, {
+      primarySession: true, afterSettled: recompileRulePageAfterAdjustment,
+    });
+  }
+
+  // 用户确认后启用 AI 调整；导出失败时确认启用的同时开始修复这次失败。
+  function enableDocumentAdjustment({ exportFailureId } = {}) {
+    const blocker = getDocumentAdjustmentEnableBlocker();
+    if (blocker) throw new Error(blocker);
+    technicalPlanStore.enableDocumentAdjustment();
+    if (exportFailureId) {
+      const { snapshot } = readExportFailure(app, exportFailureId);
+      startBidDocumentAdjustment({ origin: 'export', failureId: exportFailureId,
+        exportOptions: { exportFormat: snapshot.export_format, exportTemplateScope: snapshot.export_template_scope } });
+    }
+    return technicalPlanStore.loadTechnicalPlan();
+  }
 
   function emit(task, snapshot) {
     const event = { task, ...snapshot };
@@ -391,6 +501,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
 
   function buildTechnicalPlanSnapshot(task, state = {}, eventPatch = {}) {
     const patch = { ...(eventPatch.technicalPlanPatch || {}) };
+    patch.bidDocumentAdjustmentTask = technicalPlanStore.readDocumentAdjustmentTask();
+    patch.documentAdjustmentEnabled = technicalPlanStore.isDocumentAdjustmentEnabled();
     const taskField = getTaskField(task.type);
     if (taskField) {
       patch[taskField] = task || state?.[taskField];
@@ -633,6 +745,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   }
 
   function assertTaskCanStart(type, payload) {
+    if (getTaskDefinition(type).group === 'technical-plan' && exportOccupied) throw new Error('投标文件正在导出，请完成后再启动任务');
     const conflict = getActiveTaskConflict(type, payload);
     if (!conflict) {
       const definition = getTaskDefinition(type);
@@ -1016,11 +1129,12 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         signal: taskControl.signal,
       },
     );
-    runner({ templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, credentialLibraryService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
+    runner({ app, technicalPlanExport, templateStore, aiService: runnerAiService, agentService: runnerAgentService, ordinaryAgentService: runnerOrdinaryAgentService, workspaceStore: runnerWorkspaceStore, knowledgeBaseService, openXmlHelperService, credentialLibraryService, updateTask, checkpointTask, payload, taskControl, previousState }).catch((error) => {
       if (!taskControl.signal.aborted) {
         checkpointTask({ status: 'error', error: error.message || '任务执行失败' });
       }
     }).finally(() => {
+      const aborted = taskControl.signal.aborted;
       taskControl.dispose();
       if (aiService?.resumeQueueScope) {
         aiService.resumeQueueScope(queueScopeId);
@@ -1028,6 +1142,8 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       if (activeTasks.get(type) === currentTask) activeTasks.delete(type);
       if (activeTaskControls.get(type) === taskControl) activeTaskControls.delete(type);
       resolveSettled();
+      // 后续任务在本任务移出活动列表后启动；取消（如重置）时不衔接。
+      if (!aborted) startOptions.afterSettled?.();
     });
 
     return currentTask;
@@ -1035,6 +1151,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
 
   // 取消技术方案任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
   async function cancelTechnicalPlanTasks(reason, taskTypes) {
+    if (exportOccupied) throw new Error('投标文件正在导出，请完成后再操作');
     const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
     const controls = [];
     for (const [type, task] of activeTasks.entries()) {
@@ -1603,6 +1720,13 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   }
 
   const technicalPlanRecoveryState = technicalPlanStore.loadTechnicalPlan() || {};
+  if (isActiveTaskStatus(technicalPlanRecoveryState.bidDocumentAdjustmentTask?.status)) {
+    technicalPlanStore.updateTechnicalPlanWithoutReload({ bidDocumentAdjustmentTask: {
+      ...technicalPlanRecoveryState.bidDocumentAdjustmentTask, status: 'error',
+      error: '上次投标文件调整已中断，已保存的内容保留，可在 AI 对话中继续。',
+      updated_at: now(),
+    } });
+  }
   const rejectionCheckRecoveryState = rejectionCheckStore.loadRejectionCheck() || {};
   const duplicateCheckRecoveryState = duplicateCheckStore.loadDuplicateCheck() || {};
   const feasibilityReportRecoveryState = feasibilityReportStore?.loadFeasibilityReport?.() || {};
@@ -1624,6 +1748,12 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
   recoverInterruptedFeasibilityTasks(feasibilityReportRecoveryState);
 
   return {
+    beginTechnicalPlanExport,
+    assertDocumentMutationIdle,
+    getDocumentAdjustmentEnableBlocker,
+    getDocumentAdjustmentBlocker,
+    startBidDocumentAdjustment,
+    enableDocumentAdjustment,
     subscribe,
     subscribeCallback,
     startBidSectionExtraction(payload) {
@@ -1669,9 +1799,11 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         contentGenerationSections: {},
         contentGenerationPlans: {},
         contentGenerationRuntime: undefined,
+        bidDocumentAdjustmentTask: undefined,
       }, {
         primarySession: true,
         beforeStart: () => {
+          technicalPlanStore.clearDocumentAdjustment();
           agentService.deletePersistentTask(OUTLINE_AGENT_TASK_KEY);
           agentService.deletePersistentTask(TEMPLATE_EXTRACTION_AGENT_TASK_KEY);
           agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
@@ -1689,6 +1821,10 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     },
     // 目录变更后按当前目录重新提取投标模版（新会话，不依赖目录会话）；先清空旧模版，避免旧产物让提取校验误判完成。
     startBidTemplateExtraction(payload) {
+      // 启用 AI 调整后正文任务不再运行，重新提取会使商务填写无法补齐。
+      if (technicalPlanStore.isDocumentAdjustmentEnabled()) {
+        throw new Error('已启用 AI 调整，不能重新提取商务模版；如需重新提取，请先重置正文阶段');
+      }
       return startManagedTask('bid-template-extraction', payload, runBidTemplateExtractionTask, {}, {
         primarySession: true,
         beforeStart: () => {
@@ -1697,14 +1833,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         },
       });
     },
-    // 正文页“重新编制”：单独运行规则和页码编制；正文任务运行或暂停时不允许，避免与正文副流程同时写模版。
-    startRulePageCompile(payload) {
-      const contentStatus = technicalPlanStore.loadTechnicalPlan().contentGenerationTask?.status;
-      if (isActiveTaskStatus(contentStatus) || contentStatus === 'paused') {
-        throw new Error('正文任务未结束，请完成或重置后再重新编制');
-      }
-      return startManagedTask('rule-page-compile', payload, runRulePageCompileTask, {}, { primarySession: true });
-    },
+    startRulePageCompile,
     startGlobalFactsGeneration(payload) {
       return startManagedTask('global-facts-generation', payload, runGlobalFactsTaskV2, {
         invalidateContentGeneration: true,
@@ -1724,22 +1853,11 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         primarySession: agentService.isPrimarySession({ task_key: GLOBAL_FACTS_AGENT_TASK_KEY }),
       });
     },
-    // 正文生成、单节修改和导出修复共用任务管理，修复不重置生成状态。
+    // 正文生成、单节修改共用任务管理；启用 AI 调整后只允许全文重新生成（同时退出 AI 调整）。
     startContentGeneration(payload) {
       const technicalPlan = technicalPlanStore.loadTechnicalPlan();
-      const runtime = technicalPlan.contentGenerationRuntime || {};
-      const continuingRepair = Boolean((payload?.resume || payload?.retryFailedSections || payload?.retry_failed_sections)
-        && runtime.phase === 'export-repair');
-      if (payload?.exportRepair || continuingRepair) {
-        if (isActiveTaskStatus(activeTasks.get('content-generation')?.status)) {
-          throw new Error('当前正文任务正在执行，请等待完成后再导出');
-        }
-        return startManagedTask('content-generation', payload, runContentGenerationTask, {
-          contentGenerationRuntime: {
-            ...runtime, phase: 'export-repair', target_item_id: '',
-            regenerate_requirement: payload.exportRepair || runtime.regenerate_requirement,
-          },
-        }, { primarySession: true });
+      if (technicalPlan.documentAdjustmentEnabled && (payload?.targetItemId || !(payload?.regenerate || payload?.developerRestart))) {
+        throw new Error('已启用 AI 调整，后续修改请通过 AI 调整完成；如需重新生成，请先重置正文阶段');
       }
       if (!technicalPlan.outlineWordControlSnapshot) {
         throw new Error('当前目录没有字数控制生效快照，请重新生成目录');
@@ -1754,23 +1872,18 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       const continuing = taskPayload?.resume || [
         'retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections',
       ].some(field => taskPayload?.[field]);
-      // 普通生成没有待办时直接返回已有结果，避免 beforeStart 删除产物会话。
-      function hasPendingSections(items) {
-        return items.some(item => item.children?.length ? hasPendingSections(item.children)
-          : item.content_mode === 'ai-generate'
-            && (technicalPlan.contentGenerationSections?.[item.id]?.status !== 'success'
-              || !Object.hasOwn(technicalPlan.contentGenerationRuntime?.section_words || {}, item.id)));
-      }
+      const pendingSectionIds = collectPendingSectionIds(technicalPlan);
       // 商务模版尚未填写完成、规则和页码尚未编制时同样需要启动，由正文任务按需只执行副 Agent。
       const businessFillPending = technicalPlanStore.hasBidTemplate()
         && technicalPlan.contentGenerationRuntime?.business_fill?.phase !== 'completed';
       const rulePagePending = hasRulePageChapters(technicalPlanStore, technicalPlan.outlineData?.outline)
         && technicalPlan.contentGenerationRuntime?.rule_page?.phase !== 'completed';
+      // 普通生成没有待办时直接返回已有结果，避免 beforeStart 删除产物会话。
       if (!sectionRegeneration && !continuing && !taskPayload?.regenerate
         && technicalPlan.contentGenerationTask?.status === 'success'
         && !businessFillPending
         && !rulePagePending
-        && !hasPendingSections(technicalPlan.outlineData?.outline || [])) {
+        && !pendingSectionIds.length) {
         const task = technicalPlan.contentGenerationTask;
         emit(task, { technicalPlanPatch: technicalPlan });
         return task;
@@ -1782,8 +1895,11 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
         primarySession: true,
         beforeStart: () => {
           if (sectionRegeneration) return;
-          // 只有明确全文重生才删除正文会话；局部新增继续使用原 Session。
-          if (!continuing && taskPayload?.regenerate) agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+          // 只有明确全文重生才删除正文会话并退出 AI 调整；局部新增继续使用原 Session。
+          if (!continuing && taskPayload?.regenerate) {
+            agentService.deletePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY);
+            technicalPlanStore.clearDocumentAdjustment();
+          }
           if (technicalPlan.originalPlanFile?.markdownPath && !continuing) {
             agentService.deletePersistentTask(ORIGINAL_RESTORATION_AGENT_TASK_KEY);
           }
@@ -1926,6 +2042,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     },
     // 商务模版填写完成后编辑字段值；与正文并行不冲突，正文任务运行中时同步任务内存中的状态，避免后续 checkpoint 覆盖。
     async saveBusinessFillReview(payload = {}) {
+      assertDocumentMutationIdle();
       const editor = activeTaskControls.get('content-generation')?.businessFillEditor;
       const state = editor ? editor.getState() : technicalPlanStore.readContentGenerationRuntime()?.business_fill;
       if (state?.phase !== 'completed') throw new Error('商务模版尚未填写完成，暂不能编辑');
@@ -1948,7 +2065,7 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
     // 仅重置正文阶段，保留目录、全局事实和生成配置。
     async resetContentGeneration() {
       // 正文页单独运行的“重新编制”也使用正文会话和运行时，一并取消并等待结束后再清理。
-      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation', 'rule-page-compile']);
+      await cancelTechnicalPlanTasks('正文生成阶段已重置，后台任务已取消', ['content-generation', 'rule-page-compile', 'bid-document-adjustment']);
       technicalPlanStore.updateTechnicalPlanWithoutReload({ invalidateContentGeneration: true });
       return technicalPlanStore.loadTechnicalPlan();
     },
@@ -1969,9 +2086,11 @@ function createTaskService({ templateStore, aiService, agentService, autoConfirm
       });
     },
     importOriginalPlanDocument(filePaths) {
+      assertDocumentMutationIdle();
       return technicalPlanStore.importOriginalPlanDocument(filePaths);
     },
     removeOriginalPlanDocument() {
+      assertDocumentMutationIdle();
       return technicalPlanStore.removeOriginalPlanDocument();
     },
     async resetRejectionCheck() {

@@ -186,23 +186,23 @@ static partial class RestrictedHtmlWordInserter
             var sizeName = (figure.GetAttribute("data-yb-size") ?? "").Trim();
             if (!FigureSizes.TryGetValue(sizeName, out var size))
             {
-                throw new InvalidOperationException("figure 缺少合法 data-yb-size");
+                throw new InvalidOperationException($"figure 缺少合法 data-yb-size{DescribeLocation(document, figure)}");
             }
 
             var images = figure.Children.Where(item => item.LocalName == "img").ToList();
             if (images.Count != 1)
             {
-                throw new InvalidOperationException("figure 必须包含一个 img");
+                throw new InvalidOperationException($"figure 必须包含一个 img{DescribeLocation(document, figure)}");
             }
             var image = images[0];
             var assetRef = (image.GetAttribute("data-yb-asset-ref") ?? "").Trim();
             if (assetRef.Length == 0)
             {
-                throw new InvalidOperationException("导出 figure 时 img 必须包含 data-yb-asset-ref");
+                throw new InvalidOperationException($"导出 figure 时 img 必须包含 data-yb-asset-ref{DescribeLocation(document, figure)}");
             }
             if (assetRef.Contains('\\') || Path.IsPathRooted(assetRef) || assetRef.Split('/').Contains("..", StringComparer.Ordinal))
             {
-                throw new InvalidOperationException("data-yb-asset-ref 必须是工作区内的相对路径");
+                throw new InvalidOperationException($"data-yb-asset-ref 必须是工作区内的相对路径{DescribeLocation(document, figure)}");
             }
 
             var assetPath = WordWorkspace.ResolveWorkspacePath(workspace, assetRef);
@@ -254,9 +254,9 @@ static partial class RestrictedHtmlWordInserter
             figure.Remove();
         }
 
-        if (document.QuerySelector("img") is not null)
+        if (document.QuerySelector("img") is { } strayImage)
         {
-            throw new InvalidOperationException("img 必须位于 figure 内");
+            throw new InvalidOperationException($"img 必须位于 figure 内{DescribeLocation(document, strayImage)}");
         }
         foreach (var template in document.QuerySelectorAll("template").ToList()) template.Remove();
         return new PreparedHtml(document.Body?.InnerHtml ?? "", figures);
@@ -920,6 +920,32 @@ static partial class RestrictedHtmlWordInserter
         byte[]? Bytes);
     sealed record PreparedHtml(string Html, IReadOnlyList<FigureSpec> Figures);
 
+    /// <summary>报错定位：元素自身的 id、图片说明和引用，以及它前面最近的标题，便于按小节找到出错的正文。</summary>
+    static string DescribeLocation(IDocument document, IElement element)
+    {
+        var parts = new List<string>();
+        var id = element.GetAttribute("id")?.Trim();
+        if (!string.IsNullOrEmpty(id)) parts.Add($"id={id}");
+        var image = element.LocalName == "img" ? element : element.Children.FirstOrDefault(item => item.LocalName == "img");
+        var alt = image?.GetAttribute("alt")?.Trim();
+        if (!string.IsNullOrEmpty(alt)) parts.Add($"图片“{alt}”");
+        var assetRef = image?.GetAttribute("data-yb-asset-ref")?.Trim();
+        if (!string.IsNullOrEmpty(assetRef)) parts.Add($"引用 {assetRef}");
+        var heading = document.QuerySelectorAll("h1,h2,h3,h4,h5,h6")
+            .LastOrDefault(item => item.CompareDocumentPosition(element).HasFlag(DocumentPositions.Following));
+        if (heading is not null)
+        {
+            // 整本导出时标题前带有程序插入的标题标记，只保留标题文字。
+            var number = heading.GetAttribute("data-yb-outline-number")?.Trim();
+            var title = HeadingMarkerPattern().Replace(heading.TextContent, "").Trim();
+            parts.Add($"位于标题“{(string.IsNullOrEmpty(number) ? "" : $"{number} ")}{title}”之后");
+        }
+        return parts.Count == 0 ? "" : $"（{string.Join("，", parts)}）";
+    }
+
     [GeneratedRegex("^[A-Za-z][A-Za-z0-9_-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex TargetIdPattern();
+
+    [GeneratedRegex(@"^YIBIAOHEADING\d+:", RegexOptions.CultureInvariant)]
+    private static partial Regex HeadingMarkerPattern();
 }

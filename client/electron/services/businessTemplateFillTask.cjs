@@ -1279,7 +1279,7 @@ async function editBusinessFillValues({ workspaceStore, credentialLibraryService
 
 // 整本导出用：以空白底稿和已确认的字段值临时生成一份商务模版，签章位置留白；用户在 Word 中对 bid-template.docx 的修改不带入。
 // 清单表未使用的行删除（一行都没填时保留第一行的占位），返回的字段带导出时的留空结果，未填写项统计与 Word 中的标记一致。
-async function renderBusinessTemplateForExport({ workspaceStore, credentialLibraryService, openXmlHelperService }) {
+async function renderBusinessTemplateForExport({ workspaceStore, credentialLibraryService, openXmlHelperService, signal, onFailure }) {
   workspaceStore.ensureBidTemplateBlank();
   const template = workspaceStore.readBidTemplateFields();
   const { fields, idleFieldIds } = applyListRowMarks(template.fields || []);
@@ -1289,10 +1289,11 @@ async function renderBusinessTemplateForExport({ workspaceStore, credentialLibra
   const cleanup = () => fs.rmSync(outputPath, { force: true });
   try {
     const missingImages = await renderBusinessTemplate({
-      workspaceStore, credentialLibraryService, openXmlHelperService, fields, output, forExport: true, removeRowFieldIds: idleFieldIds,
+      workspaceStore, credentialLibraryService, openXmlHelperService, fields, output, signal, forExport: true, removeRowFieldIds: idleFieldIds,
     });
     return { input: output, chapters: template.chapters || [], fields, missingImages, cleanup };
   } catch (error) {
+    onFailure?.(error);
     cleanup();
     throw error;
   }

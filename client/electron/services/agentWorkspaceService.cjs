@@ -2,6 +2,8 @@ const crypto = require('node:crypto');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
 const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
+const { BID_DOCUMENT_ADJUSTMENT_KEY } = require('./bidDocumentAdjustmentContext.cjs');
+const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = require('./businessTemplateFillAgentConfig.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 
 function now() {
@@ -28,8 +30,11 @@ function hasGeneratedBody(items, plan = {}) {
 const STEP_WORKSPACE_IDS = Object.freeze({
   'outline-generation': OUTLINE_AGENT_TASK_KEY,
   'global-facts': GLOBAL_FACTS_AGENT_TASK_KEY,
-  'content-edit': CONTENT_GENERATION_AGENT_TASK_KEY,
+  'content-edit': BID_DOCUMENT_ADJUSTMENT_KEY,
 });
+
+// 正文阶段的程序会话成为主会话时，桌宠统一显示投标文件调整工作区。
+const DOCUMENT_STAGE_TASK_KEYS = new Set([CONTENT_GENERATION_AGENT_TASK_KEY, BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY]);
 
 const TECHNICAL_PLAN_SECTIONS = new Set(['technical-plan']);
 
@@ -50,7 +55,7 @@ function getMappedWorkspaceId(view) {
 
 /**
  * 通用 Agent 工作空间服务：向插件暴露持久 Agent 工作空间。
- * 可调整任务通过 provider 的 sendMessage 接入，正文生成当前只注册只读工作空间。
+ * 可调整任务通过 provider 的 sendMessage 接入；正文阶段统一由投标文件调整工作区承接。
  */
 function createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore }) {
   const chatSubscribers = new Set();
@@ -59,6 +64,8 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   const primaryWorkspaceChangeSubscribers = new Set();
   // 当前可见页；未上报前无生效工作空间。不写库。
   let currentView = { section: '', step: '' };
+  // 用户显式选中的待启动聊天目标；真正建立 Session 后由主会话登记接管。
+  let pendingPrimaryWorkspaceId = null;
   // workspaceId -> { messages, pending, pending_task_id }
   const chatStates = new Map();
 
@@ -83,7 +90,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
         console.error('[agent-workspace] chat 事件回调失败:', error);
       }
     }
-    if (agentService.isPrimarySession({ task_key: workspaceId })) {
+    if (getPrimaryWorkspaceId() === workspaceId) {
       for (const callback of primaryChatSubscribers) {
         try {
           callback(event);
@@ -114,6 +121,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   }
 
   const technicalPlanTaskLabels = {
+    'bid-document-adjustment': '投标文件AI调整',
     'bid-section-extraction': '多标段识别',
     'bid-analysis': '招标文件解析',
     'outline-generation': '目录生成',
@@ -229,43 +237,6 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     },
   };
 
-  const contentGenerationWorkspaceProvider = {
-    id: CONTENT_GENERATION_AGENT_TASK_KEY,
-    buildDescriptor() {
-      const plan = technicalPlanStore.loadTechnicalPlan() || {};
-      const activeTasks = taskService.getActiveTasks();
-      const busyTask = activeTasks.find((task) => task.group === 'technical-plan' && isActiveTaskStatus(task.status));
-      const hasSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
-      if (!hasSession) {
-        if (busyTask?.type === 'content-generation') {
-          return {
-            id: this.id,
-            title: '正文生成',
-            status: 'busy',
-            busy_reason: '正文生成任务正在准备或执行中',
-            has_generated_content: false,
-            empty_hint: '正文生成工作空间将在 Agent 启动后保留。',
-          };
-        }
-        return null;
-      }
-      const taskReason = busyTask
-        ? `${technicalPlanTaskLabels[busyTask.type] || busyTask.type}任务执行中，请等待完成`
-        : '正文生成工作空间已保留，暂不支持继续调整';
-      return {
-        id: this.id,
-        title: '正文生成',
-        status: 'busy',
-        busy_reason: taskReason,
-        has_generated_content: hasGeneratedBody(plan.outlineData?.outline, plan),
-        empty_hint: '正文生成工作空间已保留，暂不支持继续调整。',
-      };
-    },
-    sendMessage() {
-      throw new Error('正文生成工作空间暂不支持 AI 调整');
-    },
-  };
-
   const feasibilityOutlineWorkspaceProvider = {
     id: FEASIBILITY_OUTLINE_AGENT_TASK_KEY,
     buildDescriptor() {
@@ -313,7 +284,35 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     },
   };
 
-  const providers = [outlineWorkspaceProvider, globalFactsWorkspaceProvider, contentGenerationWorkspaceProvider, feasibilityOutlineWorkspaceProvider];
+  // 正文页唯一的对话工作区：正文、商务填写和规则编制会话成为主会话时也显示在这里，任务结束后直接接受调整要求。
+  const documentAdjustmentProvider = {
+    id: BID_DOCUMENT_ADJUSTMENT_KEY,
+    buildDescriptor() {
+      const plan = technicalPlanStore.loadTechnicalPlan();
+      if (!plan.outlineData?.outline?.length) return null;
+      // 未启用时不能从桌宠直接发消息，须先在正文页确认启用。
+      const reason = plan.documentAdjustmentEnabled
+        ? taskService.getDocumentAdjustmentBlocker()
+        : taskService.getDocumentAdjustmentEnableBlocker() || '请先在正文页点击“AI调整”并确认启用';
+      return { id: this.id, title: '投标文件AI调整', status: reason ? 'busy' : 'ready', busy_reason: reason,
+        has_generated_content: hasGeneratedBody(plan.outlineData.outline, plan) || plan.bidTemplateExists,
+        empty_hint: '请输入投标文件调整要求。' };
+    },
+    sendMessage(requirement) {
+      return taskService.startBidDocumentAdjustment({ origin: 'user', requirement });
+    },
+  };
+  const providers = [outlineWorkspaceProvider, globalFactsWorkspaceProvider, documentAdjustmentProvider, feasibilityOutlineWorkspaceProvider];
+
+  // 首次打开只选择会话目标，不发模型请求、不伪造主 Session。
+  function activateWorkspace(workspaceId) {
+    const descriptor = providers.find(provider => provider.id === workspaceId)?.buildDescriptor();
+    if (!descriptor) throw new Error('当前没有可调整的投标文件');
+    if (descriptor.status !== 'ready') throw new Error(descriptor.busy_reason);
+    pendingPrimaryWorkspaceId = workspaceId;
+    emitWorkspacesChanged();
+    return { success: true };
+  }
 
   function buildWorkspaceEntry(provider) {
     const descriptor = provider.buildDescriptor();
@@ -340,7 +339,12 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   }
 
   function getPrimaryWorkspaceId() {
-    const taskKey = String(agentService.getPrimarySession()?.task_key || '');
+    if (pendingPrimaryWorkspaceId) {
+      if (providers.find(provider => provider.id === pendingPrimaryWorkspaceId)?.buildDescriptor()) return pendingPrimaryWorkspaceId;
+      pendingPrimaryWorkspaceId = null;
+    }
+    const primaryKey = String(agentService.getPrimarySession()?.task_key || '');
+    const taskKey = DOCUMENT_STAGE_TASK_KEYS.has(primaryKey) ? BID_DOCUMENT_ADJUSTMENT_KEY : primaryKey;
     return providers.some((provider) => provider.id === taskKey) ? taskKey : null;
   }
 
@@ -364,6 +368,10 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   }
 
   function emitWorkspacesChanged() {
+    if (!technicalPlanStore.loadTechnicalPlan().bidDocumentAdjustmentTask && !agentService.hasPersistentTaskSession(BID_DOCUMENT_ADJUSTMENT_KEY)) {
+      const state = getChatState(BID_DOCUMENT_ADJUSTMENT_KEY);
+      if (state.messages.length) resetChatState(BID_DOCUMENT_ADJUSTMENT_KEY);
+    }
     const workspaces = listAgentWorkspaces();
     const event = {
       active_workspace_id: workspaces.find((item) => item.active)?.id || null,
@@ -460,16 +468,42 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
     return () => primaryWorkspaceChangeSubscribers.delete(callback);
   }
 
-  agentService.onPrimarySessionChanged(() => emitPrimaryWorkspacesChanged());
+  agentService.onPrimarySessionChanged(() => {
+    pendingPrimaryWorkspaceId = null;
+    emitPrimaryWorkspacesChanged();
+  });
 
   // 新建持久 Agent 工作空间时同步重置对应的内存聊天记录。
   let lastOutlineGenerationTaskId = null;
   let lastGlobalFactsGenerationTaskId = null;
-  let lastContentGenerationTaskId = null;
   let lastFeasibilityOutlineTaskId = null;
 
   taskService.subscribeCallback((event) => {
     const task = event?.task;
+    if (task?.type === 'bid-document-adjustment') {
+      const state = getChatState(BID_DOCUMENT_ADJUSTMENT_KEY);
+      if (isActiveTaskStatus(task.status)) {
+        if (!state.pending) {
+          pendingPrimaryWorkspaceId = BID_DOCUMENT_ADJUSTMENT_KEY;
+          appendMessage(BID_DOCUMENT_ADJUSTMENT_KEY, 'agent', '正在处理投标文件调整任务。');
+        }
+        state.pending = true;
+        state.pending_task_id = task.task_id;
+        emitChatEvent(BID_DOCUMENT_ADJUSTMENT_KEY);
+        emitPrimaryWorkspacesChanged();
+      } else if (task.task_id === state.pending_task_id) {
+        state.pending = false;
+        state.pending_task_id = null;
+        const adjustment = task.stats?.adjustment;
+        appendMessage(BID_DOCUMENT_ADJUSTMENT_KEY, task.status === 'success' ? 'agent' : 'error',
+          task.status === 'success'
+            ? `${adjustment?.summary || '投标文件已调整。'}${adjustment?.export_verified ? '\n整本转换已通过，可以重新导出。' : ''}`
+            : task.error || '投标文件调整未完成');
+        emitChatEvent(BID_DOCUMENT_ADJUSTMENT_KEY);
+        emitPrimaryWorkspacesChanged();
+      }
+      return;
+    }
     if (task?.type === 'outline-generation') {
       if (task.task_id && task.task_id !== lastOutlineGenerationTaskId) {
         lastOutlineGenerationTaskId = task.task_id;
@@ -481,15 +515,6 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
       if (task.task_id && task.task_id !== lastGlobalFactsGenerationTaskId) {
         lastGlobalFactsGenerationTaskId = task.task_id;
         resetChatState(GLOBAL_FACTS_AGENT_TASK_KEY);
-      }
-      return;
-    }
-    if (task?.type === 'content-generation') {
-      if (task.task_id && task.task_id !== lastContentGenerationTaskId) {
-        lastContentGenerationTaskId = task.task_id;
-        if (!agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
-          resetChatState(CONTENT_GENERATION_AGENT_TASK_KEY);
-        }
       }
       return;
     }
@@ -549,6 +574,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
   });
 
   return {
+    activateWorkspace,
     listAgentWorkspaces,
     listPrimaryAgentWorkspaces,
     sendAgentWorkspaceMessage,

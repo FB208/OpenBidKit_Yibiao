@@ -1418,7 +1418,8 @@ function createPiRuntimeService({ app, configStore, aiService, isMonitorActive, 
 2. 使用 bash 工具执行 node -e "console.log('YIBIAO_PI_NODE_OK')"。
 3. 使用 write 工具将 JSON 写入 ${SELF_CHECK_OUTPUT_FILE}，格式为 {"message":"YIBIAO_PI_AGENT_SELF_CHECK_OK","input":"YIBIAO_PI_AGENT_SELF_CHECK_INPUT","node":"YIBIAO_PI_NODE_OK"}。
 4. 使用 json-validation 工具校验 ${SELF_CHECK_OUTPUT_FILE}。程序已预置 Schema，只传 file_path，不要传入 schema。
-5. 不要访问当前工作区以外的文件。`,
+5. 不要访问当前工作区以外的文件。
+完成上述步骤后结束本任务。`,
         json_validation_schemas: { [SELF_CHECK_OUTPUT_FILE]: SELF_CHECK_OUTPUT_SCHEMA },
         timeout_ms: 5 * 60 * 1000,
         max_retries: 0,

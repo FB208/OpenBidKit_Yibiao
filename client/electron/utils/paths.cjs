@@ -249,7 +249,13 @@ function getDiagnosisSourceDir(app) {
   return path.join(__dirname, '..', '..', '..');
 }
 
+/** 导出失败后才建立现场目录，与当前投标项目一起清理。 */
+function getTechnicalPlanExportFailureDir(app, failureId = '') {
+  return path.join(getTechnicalPlanDir(app), 'export-failures', failureId);
+}
+
 module.exports = {
+  getTechnicalPlanExportFailureDir,
   getAgentRuntimeDir,
   getAiLogsDir,
   getAiRawLogsDir,

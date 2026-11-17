@@ -96,7 +96,7 @@ async function convertContentSections({ result, outputDir, openXmlHelperService,
         onActivity?.({ progress: { step: 'word-converting', label: `正在转换 ${section.number} ${section.title}` } });
         const { html: body, problems, repairs } = convertibleHtml(fs.readFileSync(path.join(workspaceDir, section.file), 'utf8'));
         const rendered = await openXmlHelperService.createRestrictedHtmlDocx(body, template.config, {
-          assetRoot: workspaceDir, copyAssets: true,
+          assetRoot: workspaceDir, copyAssets: true, signal,
         });
         signal.throwIfAborted();
         fs.writeFileSync(`${target}.tmp`, rendered.bytes);

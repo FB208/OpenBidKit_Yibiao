@@ -244,6 +244,8 @@ const bridge = {
   },
   technicalPlan: {
     loadState: () => ipcRenderer.invoke('technical-plan:load-state'),
+    activateAdjustment: () => ipcRenderer.invoke('technical-plan:activate-adjustment'),
+    enableDocumentAdjustment: (payload) => ipcRenderer.invoke('technical-plan:enable-document-adjustment', payload),
     loadGenerationConfig: () => ipcRenderer.invoke('technical-plan:load-generation-config'),
     saveGenerationConfig: (partial) => ipcRenderer.invoke('technical-plan:save-generation-config', partial),
     importTenderDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-tender-document', filePaths),
@@ -341,6 +343,7 @@ const bridge = {
     startRulePageCompile: () => ipcRenderer.invoke('tasks:start-rule-page-compile'),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
+    startBidDocumentAdjustment: (payload) => ipcRenderer.invoke('tasks:start-bid-document-adjustment', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),
     startRejectionItemsExtraction: (payload) => ipcRenderer.invoke('tasks:start-rejection-items-extraction', payload),
     startRejectionCheck: (payload) => ipcRenderer.invoke('tasks:start-rejection-check', payload),

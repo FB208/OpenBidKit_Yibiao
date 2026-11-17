@@ -116,7 +116,9 @@ function imageToolNames(kinds) {
 }
 
 // imageKinds 为已开启的生成方式：只注册对应的生成和转图工具，描述、清单统计和任务校验也只覆盖这些方式。
-function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, imageKinds = [], sections = [], getSections = () => sections, beforeApply = () => {}, failTask = () => {}, taskDir = TASK_DIR, listDir = LIST_DIR }, { Type, workspaceDir }) {
+function createContentGenerationImageTools({ aiService, signal, localImageRenderService, onActivity, htmlImageOptimization = false, imageKinds = [], sections = [], getSections = () => sections, beforeApply = () => {}, failTask = () => {}, taskDir = TASK_DIR, listDir = LIST_DIR, resourceWorkspaceDir }, { Type, workspaceDir: taskWorkspaceDir }) {
+  // 调整会话把任务清单留在自己的工作区，正文、图片和源码保留正式资源根。
+  const workspaceDir = resourceWorkspaceDir || taskWorkspaceDir;
   const generations = allowedImageGenerations(imageKinds);
   // 进度只发给业务程序，不增加模型上下文或工具调用；已有图片跳过的项按完成展示。
   const report = (step, label, items, extra = {}) => onActivity?.({ progress: { step, label, unit: '张', items, ...extra } });
@@ -280,7 +282,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     return output;
   }
 
-  // 主流程在编排与还原后提供最终目标；单节修改仍直接传入固定目标。
+  // 主流程在编排与还原后提供最终目标；单节修改直接传入固定目标；投标文件调整按当前目录读取 AI 小节。
   const getTargets = () => new Map(getSections().map(section => [section.id, section]));
   const listFile = `${listDir}/正文图片清单.json`;
   const taskFile = key => taskFilePath(key, taskDir);
@@ -301,7 +303,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     sourceKinds.length ? '有 source_file 的失败项直接修复并调用 render 工具，不重新生成源码；无源码的失败项才重试生成。' : '',
     '暂停结果保留已完成产物，恢复仅补未完成项。',
   ].join('');
-  return [{
+  const tools = [{
     name: 'list-section-images', label: '读取正文图片清单', executionMode: 'sequential',
     description: `读取本轮目标小节的最新 HTML，整理每张图片的 image_id、生成方式、比例、适配方式、提示词、图注、当前引用及文件存在状态；没有图片的小节不列出。不传 section_ids 时读取全部目标，完整清单写入 ${listFile}，返回 summary：本轮新增图片数、生成方式分布、各布局组数，以及缺少图注、data-yb-fit 或有效引用的图片数量；具体 image_id 见清单文件中的 summary，布局核对和分布统计直接使用 summary。传 section_ids 时只读取这些小节，直接返回其图片明细，不改写清单文件。image_id 原样传给图片工具及回填工具，不自行拼接。reused_original 为原方案图片，只复用、不重新生成。`,
     parameters: Type.Object({ section_ids: Type.Optional(Type.Array(Type.String(), { uniqueItems: true })) }, { additionalProperties: false }),
@@ -342,7 +344,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       // 全量清单随小节数增长，写入文件供按需读取；模型只接收数量统计和读取失败的小节。
       const { missing_caption, missing_fit, missing_asset, ...counts } = summary;
       const errors = results.filter(result => result.status !== 'success');
-      const file = writeListFile(workspaceDir, 'images', { summary, results: listed }, listDir);
+      const file = writeListFile(taskWorkspaceDir, 'images', { summary, results: listed }, listDir);
       return toolResult({ summary, results: listed, file }, { file, summary: { ...counts, missing_caption_count: missing_caption.length,
         missing_fit_count: missing_fit.length, missing_asset_count: missing_asset.length }, ...(errors.length ? { errors } : {}) });
     },
@@ -354,7 +356,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
       const combinedSignal = AbortSignal.any([signal, toolSignal].filter(Boolean));
       combinedSignal.throwIfAborted();
       beforeApply();
-      const { images } = readTaskFile(workspaceDir, 'applyImages', taskDir);
+      const { images } = readTaskFile(taskWorkspaceDir, 'applyImages', taskDir);
       report('image-apply', '正在回填图片地址', images.map(image => ({ id: image.image_id, status: 'running' })));
       if (new Set(images.map(item => item.image_id)).size !== images.length) throw new Error('同一任务文件中回填的 image_id 不能重复');
       const ordered = applyImageReferences(images, combinedSignal);
@@ -366,7 +368,7 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     description: generateDescription,
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_callId, _params, toolSignal, onUpdate) {
-      const { images } = readTaskFile(workspaceDir, 'images', taskDir, imageKinds);
+      const { images } = readTaskFile(taskWorkspaceDir, 'images', taskDir, imageKinds);
       return runImageBatch(images, toolSignal, onUpdate, async (image, result, combinedSignal) => {
         const { image_id, kind, prompt, frame_size } = image;
         if (kind === 'ai') {
@@ -395,11 +397,14 @@ function createContentGenerationImageTools({ aiService, signal, localImageRender
     parameters: Type.Object({}, { additionalProperties: false }),
     // 修复时只重新渲染已有源码，复用与首次生成相同的结果和取消处理。
     async execute(_callId, _params, toolSignal, onUpdate) {
-      const { images } = readTaskFile(workspaceDir, kind === 'html' ? 'renderHtml' : 'renderMermaid', taskDir);
+      const { images } = readTaskFile(taskWorkspaceDir, kind === 'html' ? 'renderHtml' : 'renderMermaid', taskDir);
       return runImageBatch(images.map(image => ({ ...image, kind })), toolSignal, onUpdate,
         async (_image, result, combinedSignal) => renderImage(result, combinedSignal));
     },
   }))];
+  return resourceWorkspaceDir ? tools.map(tool => ({
+    ...tool, description: `任务 JSON 和清单位于当前工作区；正文、图片及 source_file 相对路径属于正式资源根 ${resourceWorkspaceDir}。${tool.description}`,
+  })) : tools;
 }
 
 module.exports = { createContentGenerationImageTools, validateContentImageReferences, imageToolNames };

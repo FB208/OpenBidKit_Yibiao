@@ -970,11 +970,13 @@ function ensureAgentToolEnvironment({ app, runtimeRoot, workspaceDir, writeInstr
     runtimeToolsBinDir,
     bundledToolsBinDir,
     agentsPath,
+    appPackage: path.join(app.getAppPath(), 'package.json'),
     pathEntries: [runtimeToolsBinDir, bundledToolsBinDir],
   };
 }
 
 function applyAgentToolEnvironment(env, toolEnvironment) {
+  env.YIBIAO_APP_PACKAGE = toolEnvironment.appPackage;
   return prependPathEntries(env, toolEnvironment?.pathEntries || []);
 }
 

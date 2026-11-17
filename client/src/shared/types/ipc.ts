@@ -65,6 +65,8 @@ export interface WordExportResult {
   path?: string;
   message?: string;
   warnings?: string[];
+  /** 投标文件导出失败且尚未启用 AI 调整时的失败现场 ID，确认启用后据此修复。 */
+  adjustment_failure_id?: string;
 }
 
 export interface CheckResultExportResult {
@@ -797,6 +799,8 @@ export interface YibiaoBridge {
     deleteOtherMaterial: (recordId: string) => Promise<CredentialLibraryMutationResult>;
   };
   technicalPlan: {
+    activateAdjustment: () => Promise<{ success: boolean }>;
+    enableDocumentAdjustment: (payload?: { exportFailureId?: string }) => Promise<TechnicalPlanState>;
     loadState: () => Promise<TechnicalPlanState>;
     loadGenerationConfig: () => Promise<TechnicalPlanGenerationConfig>;
     saveGenerationConfig: (partial: Partial<TechnicalPlanGenerationConfig>) => Promise<TechnicalPlanGenerationConfig>;
@@ -913,6 +917,7 @@ export interface YibiaoBridge {
     startRulePageCompile: () => Promise<unknown>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
+    startBidDocumentAdjustment: (payload: { requirement: string } | { sectionIds: string[]; requirement?: string } | { resume: true }) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;
     startRejectionItemsExtraction: (payload: unknown) => Promise<unknown>;
     startRejectionCheck: (payload: unknown) => Promise<unknown>;

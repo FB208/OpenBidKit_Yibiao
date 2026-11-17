@@ -203,7 +203,7 @@ async function adjustContentWordCount({ aiService, workspaceDir, signal, onActiv
     report(current.jobs.map(job => ({ id: itemId(job.section_id), status: current.results[job.section_id]?.status === 'success' ? 'success' : 'pending' })));
     if (pending.length) {
       const system = buildAdjustSystem(current.direction);
-      const sharedInput = `项目概述：\n${read('项目概述.md')}\n\n全局事实设定（完整内容）：\n${read('全局事实设定.md')}\n\n本项目事实缺失处理要求：\n${decisions.global_facts_requirements}\n\n用户额外要求：\n${decisions.user_requirement || '无'}`;
+      const sharedInput = `项目概述：\n${read('项目概述.md')}\n\n全局事实设定（完整内容）：\n${read('全局事实设定.md')}\n\n本项目事实缺失处理要求：\n${decisions.global_facts_requirements}`;
       if (pending.length > 1) await warmPromptPrefix({ aiService, messages: sharedPrefixMessages(system, sharedInput), signal, onActivity, logTitle: '字数校正-公共前缀预热', label: '字数校正公共材料' });
       await runAiBatch({
         items: pending, signal,

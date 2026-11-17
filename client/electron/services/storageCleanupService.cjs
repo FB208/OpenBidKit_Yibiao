@@ -15,9 +15,11 @@ const { BUSINESS_TEMPLATE_FILL_AGENT_TASK_KEY, RULE_PAGE_AGENT_TASK_KEY } = requ
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { BLIND_CHECK_AGENT_TASK_KEY } = require('./blindCheckAgent.cjs');
+const { BID_DOCUMENT_ADJUSTMENT_KEY } = require('./bidDocumentAdjustmentContext.cjs');
 
 const STORAGE_CLEANUP_VERSION = 1;
 const PERSISTENT_AGENT_TASK_KEYS = [
+  BID_DOCUMENT_ADJUSTMENT_KEY,
   OUTLINE_AGENT_TASK_KEY,
   TEMPLATE_EXTRACTION_AGENT_TASK_KEY,
   GLOBAL_FACTS_AGENT_TASK_KEY,

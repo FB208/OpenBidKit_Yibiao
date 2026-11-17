@@ -119,18 +119,24 @@ function describePrevious(previous) {
 function buildDiagnosisPrompt({ title, stage, prompt, sourceDir, workspaceDir, sessionFile, stateFile, categories, attempt, previous }) {
   const finish = categories.includes('finish');
   const sources = [
-    `1. 当前工作区中的 ${SESSION_RECORD_FILE}：程序从原会话摘录的本阶段记录，逐轮列出程序提示、原 Agent 的工具调用和结果。先读它。`,
-    `2. 诊断资料目录：${sourceDir}。这是本客户端的源码，按仓库原目录结构存放（sql/、client/、openxmlhelper/）。先读 client/开发说明.md 了解框架和流程约定，再按阶段名、工具名和提示中的关键词检索相关代码，弄清这个阶段要求做什么、程序如何判断完成、原 Agent 应该调用什么工具。`,
+    `1. 当前工作区中的 ${SESSION_RECORD_FILE}：程序从原会话摘录的本阶段记录，逐轮列出程序提示、原 Agent 的工具调用和结果。先读它，重点看最后几轮。`,
+    `2. 诊断资料目录：${sourceDir}。这是本客户端的源码，按仓库原目录结构存放（sql/、client/、openxmlhelper/）。只为确认本阶段的完成条件和相关工具时，按阶段名、工具名和提示中的关键词检索。`,
     `3. 原任务工作区：${workspaceDir}。`,
-    ...(sessionFile ? [`4. 原会话文件：${sessionFile}。JSONL 格式，内容较大，需要时用 rg 检索。`] : []),
+    ...(sessionFile ? [`4. 原会话文件：${sessionFile}。JSONL 格式，内容较大，摘录不够时用 rg 检索。`] : []),
     ...(stateFile ? [`${sessionFile ? 5 : 4}. 任务状态：${stateFile}。`] : []),
   ];
   const categoryRules = [
-    '- guide：原 Agent 用当前阶段已有的工具就能完成。在 guidance 中直接对原 Agent 写处理说明：下一步调用哪个工具、关键参数、完成标记放在哪个调用上，以及要避免的做法；不要让它重做已完成的工作。',
+    '- guide：原 Agent 用当前阶段已有的工具就能完成。在 guidance 中直接对原 Agent 写处理说明：下一步调用哪个工具、关键参数、完成标记放在哪个调用上，以及要避免的做法；不要让它重做已完成的工作，也不写核对、验证或重新检查一类的步骤。',
     '- stop：问题出在程序或数据状态上，原 Agent 用现有工具无法处理，或者继续执行会损坏结果。在 user_message 中面向不懂软件开发的用户，简单说明发生了什么、建议怎么做，不出现文件名、字段名、代码等术语。',
     ...(finish ? ['- finish：本阶段剩余工作对后续流程没有严重影响，可以由程序结束本阶段（程序会代为执行本阶段的程序工具或复核收尾，未完成的部分记为遗留问题），然后进入下一阶段。在 user_message 中面向用户说明哪些工作没有完成、对结果有什么影响，同样不出现软件术语。'] : []),
   ];
-  return `你是易标投标工具箱的诊断 Agent。另一个 Agent（下称原 Agent）正在执行「${title}」任务，在阶段「${stage}」连续 ${STAGE_LOOP_LIMIT} 轮结束本轮都没有完成阶段要求，程序每轮原样重发了同一条提示。程序已暂停原 Agent，由你查明原因并给出处理结论。
+  return `你的任务是找出原 Agent 卡住的直接原因，给出下一步怎么做。不需要找出程序层面的根本原因。
+
+完成标准：能说清卡在哪一步、为什么没有满足本阶段的完成条件、下一步怎么做，就立即写结论并结束本任务。依据 1～3 条即可。
+不做：不复现问题，不新建工程或编译程序，不分析与本阶段无关的文件，不验证处理方式一定有效（原 Agent 按结论继续执行就是检验）。
+
+当前问题：
+另一个 Agent（下称原 Agent）正在执行「${title}」任务，在阶段「${stage}」连续 ${STAGE_LOOP_LIMIT} 轮结束本轮都没有完成阶段要求，程序每轮原样重发了同一条提示。程序已暂停原 Agent。
 
 程序反复发出的提示：
 <<<
@@ -141,18 +147,23 @@ ${prompt}
 ${sources.join('\n')}
 这些资料只能阅读和分析，绝不修改、删除或移动其中任何文件；不访问以上路径之外的位置。可以使用全部工具和命令（包括 bash），笔记、脚本和结论只写在当前工作区。
 
-分析方法：对照源码中该阶段的要求和完成条件，弄清原 Agent 每轮做了什么、为什么没有达到完成条件，例如调用了错误的工具、把完成标记放在了别的工具上、工具反复报错、误解了要求，或者程序或数据状态异常。结论要有依据，引用会话记录轮次、工作区文件或源码中的具体位置。
+分析方式：
+对照本阶段要求和原 Agent 最后几轮的实际操作，指出具体卡在哪里，例如调用了错误的工具、把完成标记放在了别的工具上、工具反复报错、误解了要求，或者程序或数据状态异常。只在需要确认完成条件时查阅源码。依据引用会话记录轮次、工作区文件或源码中的具体位置。
 
+结论要求：
 结论只能选一类（category）：
 ${categoryRules.join('\n')}
 选择顺序：原 Agent 能处理时选 guide；原 Agent 无法处理时，${finish ? '剩余工作不影响后续流程的选 finish，否则选 stop' : '选 stop'}。
-${previous.length ? `\n这是第 ${attempt} 次诊断。之前的情况：\n${describePrevious(previous)}\n程序已按上一次结论处理，但原 Agent 之后仍连续 ${STAGE_LOOP_LIMIT} 轮没有进展，或上一次诊断没有完成。重新分析原因，不要重复同样的建议；原 Agent 确实无法按说明完成时，改选其他结论。\n` : ''}
-输出：把结论写入当前工作区的 ${DIAGNOSIS_OUTPUT_FILE}，用 json-validation 自查后结束本任务。字段：
+${previous.length ? `\n这是第 ${attempt} 次诊断。之前的情况：\n${describePrevious(previous)}\n程序已按上一次结论处理，但原 Agent 之后仍连续 ${STAGE_LOOP_LIMIT} 轮没有进展，或上一次诊断没有完成。结合前次结论及之后的执行记录，定位本次具体问题，避免重复无效建议。结论类别依据本次查明的原因决定。\n` : ''}
+输出字段：
 - category：${categories.join('、')} 之一；
 - cause：问题原因，一两句话；
 - evidence：依据数组，每项写明出处和内容；
 - guidance：category 为 guide 时必填；
-- user_message：category 为 ${categories.filter(item => item !== 'guide').join(' 或 ')} 时必填。`;
+- user_message：category 为 ${categories.filter(item => item !== 'guide').join(' 或 ')} 时必填。
+
+提交与结束：
+将诊断结论写入当前工作区的 ${DIAGNOSIS_OUTPUT_FILE}，用 json-validation 自查。在提交结论的最后一次工具调用中设置 task_complete=true，结束本任务。`;
 }
 
 // 诊断任务的工作区约定例外：允许只读访问工作区外的诊断资料和原任务文件。

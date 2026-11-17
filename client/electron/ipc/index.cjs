@@ -148,6 +148,9 @@ const workspaceDatabaseChannels = [
   'official-account:get-invoice-info',
   'official-account:save-invoice-info',
   'technical-plan:load-state',
+  'technical-plan:activate-adjustment',
+  'technical-plan:enable-document-adjustment',
+  'tasks:start-bid-document-adjustment',
   'technical-plan:load-generation-config',
   'technical-plan:save-generation-config',
   'technical-plan:import-tender-document',
@@ -346,7 +349,11 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     duplicateCheckStore,
     blindCheckStore,
   });
-  const taskService = createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService });
+  const technicalPlanExport = createTechnicalPlanExport({ app, technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService,
+    startAdjustment: payload => taskService.startBidDocumentAdjustment(payload),
+    beginExport: () => taskService.beginTechnicalPlanExport(),
+  });
+  const taskService = createTaskService({ app, technicalPlanExport, templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService });
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore });
   agentWorkspaceServiceRef = agentWorkspaceService;
   technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
@@ -358,7 +365,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   clearWorkspaceDatabaseIpc();
   registerCredentialLibraryIpc({ credentialLibraryService, configStore });
   registerKnowledgeBaseIpc({ knowledgeBaseService });
-  registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentService, openXmlHelperService });
+  registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentService, agentWorkspaceService, openXmlHelperService });
   registerFeasibilityReportIpc({ feasibilityReportStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore, checkResultExportService });
   registerRejectionCheckIpc({ rejectionCheckStore, taskService, checkResultExportService });
@@ -386,9 +393,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     console.error('[plugin-service] 启用插件失败:', error);
   });
   
-  return { sqliteDatabase, technicalPlanExport: createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService,
-    startContentGeneration: payload => taskService.startContentGeneration(payload),
-  }) };
+  return { sqliteDatabase, technicalPlanExport };
 }
 
 // 装配应用服务与 IPC；公告缓存独立于工作区数据库生命周期。

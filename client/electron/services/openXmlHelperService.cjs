@@ -270,6 +270,7 @@ function createHelperRunner({ app, writeLog, ensureExecutable, name }) {
       }
 
       const jobDir = getOpenXmlJobDir(app, jobId);
+      try {
       fs.mkdirSync(jobDir, { recursive: true });
       fs.writeFileSync(path.join(jobDir, 'request.json'), `${JSON.stringify({ ...request, action: jobAction }, null, 2)}\n`, 'utf8');
       if (typeof prepare === 'function') {
@@ -336,6 +337,11 @@ function createHelperRunner({ app, writeLog, ensureExecutable, name }) {
       }
 
       return { ...result, jobDir };
+      } catch (error) {
+        error.openxml = { action: jobAction, jobId, jobDir,
+          requestPath: path.join(jobDir, 'request.json'), resultPath: path.join(jobDir, 'result.json') };
+        throw error;
+      }
     }, signal);
   }
 
@@ -585,7 +591,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         const references = new Set($('img').toArray().map(element => $(element).attr('data-yb-asset-ref')));
         for (const reference of references) {
           if (!reference || reference.includes('\\') || path.isAbsolute(reference) || reference.includes(':') || reference.split('/').includes('..')) {
-            throw new Error('Word 配图引用必须是图片根目录内的相对路径');
+            throw new Error(`Word 配图引用必须是图片根目录内的相对路径，当前为：${reference || '（空）'}`);
           }
           const target = path.join(temporaryAssets, reference);
           fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -629,6 +635,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         },
         // 整本转换使用正式任务队列，避免占用样张预览队列及其两分钟时限。
         timeoutMs: options.wholeDocument ? 30 * 60 * 1000 : TEMPLATE_PREVIEW_TIMEOUT_MS,
+        signal: options.signal,
       });
 
       return {
@@ -642,6 +649,9 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         tocOnlyBytes: result.toc?.tocOnly ? new Uint8Array(fs.readFileSync(path.join(result.jobDir, result.toc.tocOnly))) : null,
         pageRefs: result.pageRefs || null,
       };
+    } catch (error) {
+      options.onFailure?.(error, { temporaryAssets });
+      throw error;
     } finally {
       // 清理不抛错；计数在清理后归还，存储清理不会与之并发。
       if (result) await removeHelperDir(result.jobDir, getOpenXmlJobsDir(app));
@@ -654,7 +664,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
    * 把测量得到的页码写入整本导出目录和页码引用的域缓存值；完整文档和只含目录的小文档共用。
    * pageNumbers / pageRefs 为 null 时不回填对应部分，返回新文档和未写入页码的目录条数、页码引用数。
    */
-  async function fillTocPageNumbers(bytes, pageNumbers, pageRefs = null) {
+  async function fillTocPageNumbers(bytes, pageNumbers, pageRefs = null, { signal } = {}) {
     let result;
     activeJobCount += 1;
     try {
@@ -668,6 +678,7 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
         },
         prepare: (jobDir) => fs.writeFileSync(path.join(jobDir, 'input.docx'), bytes),
         timeoutMs: 10 * 60 * 1000,
+        signal,
       });
       return {
         bytes: new Uint8Array(fs.readFileSync(path.join(result.jobDir, 'output.docx'))),

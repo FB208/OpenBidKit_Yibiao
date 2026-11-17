@@ -182,6 +182,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const { showToast } = useToast();
   const [tenderMarkdown, setTenderMarkdown] = useState('');
   const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
+  // 启用 AI 调整的确认：按钮入口为空对象；导出失败入口携带失败现场和原错误。
+  const [adjustmentEnableDialog, setAdjustmentEnableDialog] = useState<{ exportFailureId?: string; exportMessage?: string } | null>(null);
+  const [enablingAdjustment, setEnablingAdjustment] = useState(false);
   // 整本导出前发现正文结构问题时，由用户决定是否继续；继续导出沿用同一次请求。
   const [exportTemplates, setExportTemplates] = useState<ExportTemplateRecord[]>([]);
   const [exportTemplatesLoading, setExportTemplatesLoading] = useState(false);
@@ -248,6 +251,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     ['全局事实设定', state.globalFactsTask],
     ['全局事实AI调整', state.globalFactsAdjustmentTask],
     ['正文生成', state.contentGenerationTask],
+    ['投标文件AI调整', state.bidDocumentAdjustmentTask],
   ] as const).find(([, task]) => task?.status === 'running' || task?.status === 'pausing' || task?.status === 'paused');
   const isExporting = exportProgress.running;
   const generatedOutlineMode = state.outlineGenerationTask?.stats?.agent?.resume_payload?.outline_mode;
@@ -454,13 +458,16 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;
       }
-      const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
-      if (inspection.added.length || inspection.changed.length) {
-        const choice = await confirmBidTemplateMismatch(inspection);
-        if (choice === 'cancel') return;
-        if (choice === 'extract') {
-          await startBidTemplateExtraction();
-          return;
+      // 启用 AI 调整后商务模版由 AI 维护，不再提示重新提取。
+      if (!latestState.documentAdjustmentEnabled) {
+        const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
+        if (inspection.added.length || inspection.changed.length) {
+          const choice = await confirmBidTemplateMismatch(inspection);
+          if (choice === 'cancel') return;
+          if (choice === 'extract') {
+            await startBidTemplateExtraction();
+            return;
+          }
         }
       }
       targetStep = shouldSkipGlobalFacts(finalOutlineData) ? 'content-edit' : 'global-facts';
@@ -508,6 +515,16 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       }
 
       setState((prev) => {
+        if (hasOwnField(technicalPlan, 'bidDocumentAdjustmentTask')) {
+          prev = { ...prev, bidDocumentAdjustmentTask: trimTaskLogs(technicalPlan.bidDocumentAdjustmentTask) };
+        }
+        if (hasOwnField(technicalPlan, 'documentAdjustmentEnabled')) {
+          prev = { ...prev, documentAdjustmentEnabled: technicalPlan.documentAdjustmentEnabled };
+        }
+        if (taskType === 'bid-document-adjustment') {
+          return { ...prev, ...technicalPlan,
+            bidDocumentAdjustmentTask: trimTaskLogs(technicalPlan.bidDocumentAdjustmentTask) || latestTask };
+        }
         if (taskType === 'bid-section-extraction') {
           return {
             ...prev,
@@ -775,6 +792,11 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       if (result?.success === false) {
         const message = result.message || '本次未导出 Word。';
         setExportProgress({ open: true, running: false, progress: 100, message, warnings: [] });
+        // 尚未启用 AI 调整时由用户确认是否启用并修复。
+        if (result.adjustment_failure_id) {
+          setAdjustmentEnableDialog({ exportFailureId: result.adjustment_failure_id, exportMessage: message });
+          return;
+        }
         showToast(message, 'info');
         return;
       }
@@ -964,11 +986,14 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const globalFactsConfigLocked = generationConfigLocked || isGlobalFactsGenerating || isGlobalFactsAdjusting;
   const contentConfigLocked = generationConfigLocked;
   const isFactsAiStep = state.step === 'global-facts';
-  const isAiAdjusting = isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
-  const aiAdjustDisabled = isFactsAiStep
+  const isDocumentAiStep = state.step === 'content-edit';
+  const isDocumentAdjusting = state.bidDocumentAdjustmentTask?.status === 'running' || state.bidDocumentAdjustmentTask?.status === 'pausing';
+  const isAiAdjusting = isDocumentAiStep ? isDocumentAdjusting : isFactsAiStep ? isGlobalFactsAdjusting : isOutlineAdjusting;
+  const aiAdjustDisabled = isDocumentAiStep ? !state.outlineData || Boolean(exportBlockingTask) || isExporting : isFactsAiStep
     ? !state.globalFacts.length || isGlobalFactsGenerating || isGlobalFactsAdjusting
     : !state.outlineData || !state.outlineWordControlSnapshot || isOutlineGenerating || isOutlineAdjusting || isBidTemplateExtracting;
-  const aiAdjustTooltip = isFactsAiStep
+  const documentAdjustmentEnabled = Boolean(state.documentAdjustmentEnabled);
+  const aiAdjustTooltip = isDocumentAiStep ? (isDocumentAdjusting ? 'AI 正在调整投标文件' : documentAdjustmentEnabled ? '通过桌宠 AI 对话调整投标文件' : '启用 AI 调整后，通过桌宠 AI 对话调整投标文件') : isFactsAiStep
     ? (isGlobalFactsAdjusting
       ? 'AI 正在按要求调整全局事实，请稍候'
       : isGlobalFactsGenerating || !state.globalFacts.length
@@ -985,8 +1010,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           : '通过桌宠 AI 对话调整当前目录');
 
   const openPetAiChat = useCallback(async () => {
+    if (isDocumentAiStep) await window.yibiao!.technicalPlan.activateAdjustment();
     await window.yibiao!.plugins.notifyEvent(PET_PLUGIN_ID, 'open-ai-chat');
-  }, []);
+  }, [isDocumentAiStep]);
 
   const handleAiAdjustClick = useCallback(async () => {
     try {
@@ -1000,12 +1026,43 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         setPetInstallDialogOpen(true);
         return;
       }
+      // 正文页首次使用需确认启用 AI 调整，确认后再打开对话。
+      if (isDocumentAiStep && !documentAdjustmentEnabled) {
+        setAdjustmentEnableDialog({});
+        return;
+      }
       await openPetAiChat();
       showToast('请在桌宠对话框中输入调整要求', 'info');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '打开桌宠 AI 对话失败', 'error');
     }
-  }, [openPetAiChat, showToast]);
+  }, [documentAdjustmentEnabled, isDocumentAiStep, openPetAiChat, showToast]);
+
+  // 确认启用 AI 调整：导出失败入口同时开始修复，按钮入口打开桌宠对话。
+  const confirmEnableDocumentAdjustment = useCallback(async () => {
+    const exportFailureId = adjustmentEnableDialog?.exportFailureId;
+    setEnablingAdjustment(true);
+    try {
+      const latestState = await window.yibiao!.technicalPlan.enableDocumentAdjustment(exportFailureId ? { exportFailureId } : undefined);
+      setState((prev) => ({ ...prev, documentAdjustmentEnabled: latestState.documentAdjustmentEnabled }));
+      setAdjustmentEnableDialog(null);
+      if (exportFailureId) {
+        showToast('已启用 AI 调整，正在诊断并修复导出问题，结束后请重新导出', 'success');
+        return;
+      }
+      await openPetAiChat();
+      showToast('已启用 AI 调整，请在桌宠对话框中输入调整要求', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '启用 AI 调整失败', 'error');
+    } finally {
+      setEnablingAdjustment(false);
+    }
+  }, [adjustmentEnableDialog, openPetAiChat, showToast]);
+
+  const cancelEnableDocumentAdjustment = useCallback(() => {
+    if (adjustmentEnableDialog?.exportMessage) showToast(adjustmentEnableDialog.exportMessage, 'error');
+    setAdjustmentEnableDialog(null);
+  }, [adjustmentEnableDialog, showToast]);
 
   const installPetPluginAndOpenChat = useCallback(async () => {
     setInstallingPetPlugin(true);
@@ -1020,6 +1077,10 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       }
       await window.yibiao!.plugins.enable(PET_PLUGIN_ID);
       setPetInstallDialogOpen(false);
+      if (isDocumentAiStep && !documentAdjustmentEnabled) {
+        setAdjustmentEnableDialog({});
+        return;
+      }
       await openPetAiChat();
       showToast('桌宠已启用，请在桌宠对话框中输入调整要求', 'success');
     } catch (error) {
@@ -1027,7 +1088,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     } finally {
       setInstallingPetPlugin(false);
     }
-  }, [openPetAiChat, showToast]);
+  }, [documentAdjustmentEnabled, isDocumentAiStep, openPetAiChat, showToast]);
   // 生成设置页内，上一步/下一步先在页签间逐项移动，到首尾页签再切换步骤。
   // “跳过设置”始终保留、上一项按钮固定最小宽度，保证连续点击时“下一项”位置不变。
   const isGenerationSettingsStep = state.step === 'generation-settings';
@@ -1118,7 +1179,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         },
       ],
     },
-    ...(state.step === 'outline-generation' || state.step === 'global-facts' ? [{
+    ...(state.step === 'outline-generation' || state.step === 'global-facts' || state.step === 'content-edit' ? [{
       id: 'technical-plan-ai',
       actions: [
         {
@@ -1231,6 +1292,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       )}
       {state.step === 'outline-generation' && (
         <OutlineEditPage
+          documentAdjustmentEnabled={documentAdjustmentEnabled}
           stepNumber={activeStepNumber}
           hasOriginalPlan={Boolean(state.originalPlanFile)}
           projectOverview={state.projectOverview}
@@ -1271,6 +1333,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
       )}
       {state.step === 'content-edit' && (
         <ContentEditPage
+          adjustmentTask={state.bidDocumentAdjustmentTask}
+          documentAdjustmentEnabled={documentAdjustmentEnabled}
+          documentExporting={isExporting}
           stepNumber={activeStepNumber}
           hasOriginalPlan={Boolean(state.originalPlanFile?.markdownPath)}
           originalPlanContentHash={state.originalPlanFile?.contentHash}
@@ -1303,6 +1368,27 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           <p>后续接入旧方案导入、章节扩写和人工校准。</p>
         </section>
       )}
+
+      <AppDialog
+        open={Boolean(adjustmentEnableDialog)}
+        onOpenChange={(open) => !open && !enablingAdjustment && cancelEnableDocumentAdjustment()}
+        kicker="AI 调整"
+        title={adjustmentEnableDialog?.exportFailureId ? '启用 AI 调整并修复导出问题？' : '启用 AI 调整？'}
+        description={(
+          <>
+            {adjustmentEnableDialog?.exportFailureId && <>{adjustmentEnableDialog.exportMessage}<br />修复需要启用 AI 调整。<br /></>}
+            启用后不能再手动调整目录和正文，只能通过“AI调整”指挥 AI 完成后续修改；目录排序、商务字段编辑和规则重新编制不受影响。如需恢复手动调整，可重置正文阶段后重新生成。
+          </>
+        )}
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={cancelEnableDocumentAdjustment} disabled={enablingAdjustment}>取消</button>
+            <button type="button" className="primary-action" onClick={() => { void confirmEnableDocumentAdjustment(); }} disabled={enablingAdjustment}>
+              {enablingAdjustment ? '正在启用...' : adjustmentEnableDialog?.exportFailureId ? '启用并修复' : '确认启用'}
+            </button>
+          </>
+        )}
+      />
 
       <AppDialog
         open={sortLeaveDialogOpen}

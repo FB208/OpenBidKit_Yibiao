@@ -582,7 +582,7 @@ function extractContentPlanningPlans(value, sourceItems, allowedKnowledgeItemIds
 }
 
 // 按本轮目标生成基础编排要求，目录结构只作为参考。
-function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, regenerateRequirement, tableRequirement, maxTables, totalSections, wordControl, isIncremental = false }) {
+function createContentPlanningPrompt({ targetItemIds, tableRequirement, maxTables, totalSections, wordControl, isIncremental = false }) {
   const totalWordTarget = getContentWordTarget(wordControl);
   const wordInstruction = isIncremental
     ? `本次为目录变更后的新增小节编排，每节 target_words 固定填 ${ADDED_SECTION_TARGET_WORDS}，不按全文目标或每小节建议字数重新分配，其他小节的已有目标保持不变。`
@@ -599,9 +599,6 @@ function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, r
   const targetText = targetItemIds.length
     ? `共 ${targetItemIds.length} 个，稳定 ID 见 ${CONTENT_PLANNING_TARGETS_FILE} 的 target_ids。`
     : '无。结果输出空 plans 数组。';
-  const requirementText = String(regenerateRequirement || '').trim()
-    ? `\n程序已确认其中 ${regenerateTargetItemIds.length} 个节点需要应用本次重新生成的额外要求，稳定 ID 见 ${CONTENT_PLANNING_TARGETS_FILE} 的 requirement_target_ids。\n\n额外要求：\n${String(regenerateRequirement).trim()}\n`
-    : '';
   return `你负责本次投标技术方案正文生成，现在先完成基础编排。程序会处理并保存编排，再在同一会话中交给你生效结果和正文生成要求；本阶段不要提前生成正文或图片。工作区已提供编排材料：
 - ${CONTENT_PLANNING_KNOWLEDGE_FILE}：参考知识库轻量条目，只包含 id、标题和简介。
 - ${CONTENT_PLANNING_BID_INFO_FILE}：招标文件关键信息。
@@ -611,7 +608,7 @@ function createContentPlanningPrompt({ targetItemIds, regenerateTargetItemIds, r
 
 程序已确定本次需要编排的目录节点：
 ${targetText}
-${requirementText}
+
 请严格完成以下工作：
 1. 结合知识条目、招标文件关键信息，以及完整目录中的上下级和同级关系进行整体判断；读取方式自行决定。
 2. 完整目录仅供参考，不修改参考文件；plans 只包含程序列出的本次目标 AI 叶子，每个目标恰好一项，不提交非目标节点。
@@ -1080,8 +1077,6 @@ function normalizeContentGenerationRuntime(value) {
     phase: String(source.phase || ''),
     touched_item_ids: normalizeStringArray(source.touched_item_ids),
     completed_stages: normalizeStringArray(source.completed_stages),
-    target_item_id: String(source.target_item_id || '').trim(),
-    regenerate_requirement: String(source.regenerate_requirement || '').trim(),
     html_output: source.html_output,
     business_fill: source.business_fill && typeof source.business_fill === 'object' ? { ...source.business_fill } : undefined,
     rule_page: source.rule_page && typeof source.rule_page === 'object' ? { ...source.rule_page } : undefined,
@@ -1119,8 +1114,8 @@ function createInitialSections(leaves, existingSections) {
 
 // 新任务首次落库和直接启动共用准备逻辑；继续/重试不调用，避免覆盖本轮进度。
 function prepareContentGenerationStart(state, payload = {}) {
-  const fullRegenerate = Boolean(payload.regenerate && !payload.targetItemId);
-  const previous = fullRegenerate ? {} : state.contentGenerationRuntime || {};
+  const regenerate = Boolean(payload.regenerate);
+  const previous = regenerate ? {} : state.contentGenerationRuntime || {};
   const partial = {
     contentGenerationRuntime: normalizeContentGenerationRuntime({
       generation_started: true, phase: 'planning',
@@ -1130,10 +1125,9 @@ function prepareContentGenerationStart(state, payload = {}) {
       html_output: previous.html_output,
       business_fill: previous.business_fill,
       rule_page: previous.rule_page,
-      regenerate_requirement: String(payload.requirement || '').trim(),
     }),
   };
-  if (fullRegenerate && state.outlineData) {
+  if (regenerate && state.outlineData) {
     partial.outlineData = { ...state.outlineData, outline: clearOutlineContent(state.outlineData.outline) };
     const leaves = collectLeafContexts(partial.outlineData.outline).filter(({ item }) => item?.content_mode === 'ai-generate');
     partial.contentGenerationSections = createInitialSections(leaves, {});
@@ -1152,7 +1146,6 @@ function progressFor(leaves, sections) {
 }
 
 const CONTENT_PHASE_LABELS = {
-  'export-repair': '导出修复',
   planning: '正文编排',
   restoring: '原方案还原',
   generating: '正文生成',
@@ -1171,23 +1164,11 @@ const CONTENT_PROGRESS_PROFILES = {
     planning: [0, 12], restoring: [12, 18], generating: [18, 70], auditing: [70, 80], 'table-cleaning': [80, 83], 'layout-checking': [83, 88],
     'sections-completed': [88, 88], 'word-converting': [88, 99], 'word-completed': [99, 99],
   },
-  'html-single': {
-    planning: [0, 15], restoring: [15, 25], generating: [25, 70], auditing: [70, 80], 'table-cleaning': [80, 85],
-    'sections-completed': [85, 85], 'word-converting': [85, 90], 'word-completed': [90, 90],
-  },
   full: {
     planning: [0, 12],
     restoring: [12, 18],
     generating: [18, 58],
     auditing: [58, 90],
-    'table-cleaning': [90, 99],
-    done: [100, 100],
-  },
-  single: {
-    planning: [0, 15],
-    restoring: [15, 25],
-    generating: [25, 65],
-    auditing: [65, 90],
     'table-cleaning': [90, 99],
     done: [100, 100],
   },
@@ -1328,7 +1309,7 @@ function buildContentPhaseProgress(contentStats, latestLog = '', progressMode = 
   }
 
   const workflow = contentWorkflowDetail(stats);
-  if (phase === 'generating' && ['html', 'html-single'].includes(progressMode)) {
+  if (phase === 'generating' && progressMode === 'html') {
     // 对应整篇任务的 18→43→65→67→70；单节任务使用同一相对分配。
     phaseProgress *= 25 / 52;
     const step = workflow?.step;
@@ -1407,90 +1388,8 @@ function withSection(sections, item, partial) {
   };
 }
 
-// 执行正文任务；导出修复直接续接原会话，结束后不进入生成和转换流程。
+// 执行正文任务；启用投标文件 AI 调整后正文会话不再续接，只能全文重新生成。
 async function runContentGenerationTask({ aiService, agentService, workspaceStore, knowledgeBaseService, templateStore, openXmlHelperService, credentialLibraryService, updateTask: updateManagedTask, checkpointTask: checkpointManagedTask, payload, taskControl, previousState, layoutDocument = readWordLayout }) {
-  const repairContinuing = Boolean(payload.resume || payload.retryFailedSections || payload.retry_failed_sections);
-  if (payload.exportRepair || (repairContinuing && previousState?.contentGenerationRuntime?.phase === 'export-repair')) {
-    const stored = workspaceStore.loadTechnicalPlan();
-    const runtime = { ...stored.contentGenerationRuntime };
-    const previousStats = previousState?.contentGenerationTask?.stats || {};
-    let agentState;
-    let logs = [repairContinuing ? '继续导出修复，沿用原正文 Agent 会话。' : '开始导出修复，问题已交给原正文 Agent 会话。'];
-    const controller = new AbortController();
-    const signal = AbortSignal.any([taskControl.signal, controller.signal]);
-    // 沿用正文任务的暂停信号，停止本次会话请求后保留当前阶段。
-    const checkPause = () => {
-      if (taskControl.isPauseRequested() && !controller.signal.aborted) controller.abort(createContentGenerationPausedError());
-    };
-    const watcher = setInterval(checkPause, 500);
-
-    // 只报告任务与 Agent 活动，不以文件数量推断修复是否通过检查。
-    function publish(status, error, persist = true) {
-      const completed = status === 'success';
-      const detail = {
-        ...buildContentPhaseProgress({ phase: 'export-repair' }, logs.at(-1), 'html'),
-        phase_progress: completed ? 100 : 0, indeterminate: !completed,
-      };
-      const patch = {
-        status, progress: completed ? 100 : 0, progress_detail: detail, logs, error, pause_requested: false,
-        stats: { ...previousStats, agent: agentState,
-          content: { ...previousStats.content, phase: 'export-repair', workflow_progress: undefined, output_progress: detail } },
-      };
-      if (persist) {
-        runtime.updated_at = now();
-        checkpointManagedTask(patch, { contentGenerationRuntime: runtime });
-      } else {
-        updateManagedTask(patch);
-      }
-    }
-
-    try {
-      publish('running');
-      checkPause();
-      signal.throwIfAborted();
-      const sections = collectLeafContexts(stored.outlineData?.outline || [])
-        .filter(({ item }) => item.content_mode === 'ai-generate')
-        .map(({ item }) => ({ ...item, file: '正文/' + encodeURIComponent(item.id) + '.html' }));
-      await runContentGenerationAgent({
-        agentService, aiService, exportRepair: runtime.regenerate_requirement, sections,
-        generationOptions: stored.contentGenerationOptions, resume: repairContinuing, signal,
-        // 配图服务故障沿当前任务取消信号结束，不另行调度修复。
-        failTask(error) {
-          if (!controller.signal.aborted) controller.abort(error);
-        },
-        // Agent 高频状态只推送，阶段结束时统一持久化。
-        onCheckpoint(checkpoint) {
-          agentState = checkpoint;
-          publish('running', undefined, false);
-        },
-        // 将现有工具活动显示在正文任务日志中。
-        onActivity(event) {
-          const message = event.message || event.progress?.label;
-          if (event.visible === false || !message) return;
-          logs = [...logs, message];
-          publish('running', undefined, false);
-        },
-      });
-      checkPause();
-      signal.throwIfAborted();
-      logs.push('导出修复已结束，请重新点击导出。');
-      publish('success');
-    } catch (error) {
-      if (taskControl.signal.aborted) throw error;
-      if (controller.signal.reason?.code === AI_UPSTREAM_UNAVAILABLE) error = controller.signal.reason;
-      const paused = taskControl.isPauseRequested() || isPauseLikeError(error);
-      if (agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY)) {
-        agentService.updatePersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY, {
-          status: paused ? 'paused' : 'error', agent_connection: 'idle', error: paused ? null : error.message,
-        });
-      }
-      logs.push(paused ? '导出修复已暂停，继续时沿用原正文会话。' : error.message);
-      publish(paused ? 'paused' : 'error', paused ? undefined : error.message);
-    } finally {
-      clearInterval(watcher);
-    }
-    return;
-  }
   const resume = Boolean(payload.resume);
   const loadedPlan = resume ? (previousState || {}) : (workspaceStore.loadTechnicalPlan() || {});
   const continuing = resume || ['retryContentCorrection', 'retry_content_correction', 'retryFailedSections', 'retry_failed_sections'].some(field => payload[field]);
@@ -1537,17 +1436,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const continuingConversion = Boolean((resume || retryFailedSections)
     && ['sections-completed', 'word-converting', 'word-completed'].includes(contentRuntime.phase) && contentRuntime.html_output);
   const regenerate = !resume && !retryContentCorrection && !retryFailedSections && Boolean(payload.regenerate);
-  const targetItemId = resume || (retryFailedSections && (contentRuntime.html_output || continuingConsistency))
-    ? contentRuntime.target_item_id : String(payload.targetItemId || '').trim();
-  if (retryContentCorrection && targetItemId) {
-    throw new Error('单小节重新生成不支持重试内容矫正');
-  }
-  const fullRegenerate = regenerate && !targetItemId;
   const directGenerationIds = new Set(contentRuntime.direct_generation_item_ids);
 
   let leaves = collectLeafContexts(outlineData.outline)
     .filter(({ item }) => item?.content_mode === 'ai-generate');
-  // 商务模版填写与正文并行；单节修改和内容矫正不参与。
+  // 商务模版填写与正文并行；内容矫正不参与。
   const hasBidTemplate = Boolean(workspaceStore.hasBidTemplate?.());
   if (!leaves.length && !hasBidTemplate) {
     throw new Error('当前目录没有 AI 生成小节，也没有可填写的商务模版');
@@ -1558,7 +1451,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   if (!businessOnly && (!globalFactsText || storedPlan.globalFactsTask?.status !== 'success')) {
     throw new Error('请先完成全局事实设定，再生成正文');
   }
-  const regenerateRequirement = resume ? contentRuntime.regenerate_requirement : String(payload.requirement || '').trim();
   const generationOptions = retryFailedSections
     ? storedPlan.contentGenerationOptions || {}
     : payload.generationOptions || payload.generation_options || storedPlan.contentGenerationOptions || {};
@@ -1601,14 +1493,9 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   let contentAgentController;
   // 同一原方案继续任务时保留已完成的统计，全文重新生成则等待本轮还原结果。
   const previousOriginalRestoration = previousState?.contentGenerationTask?.stats?.content?.original_restoration;
-  if (hasOriginalPlan && !fullRegenerate && typeof previousOriginalRestoration?.total_words === 'number' && previousOriginalRestoration.source_hash === originalPlanSourceHash) {
+  if (hasOriginalPlan && !regenerate && typeof previousOriginalRestoration?.total_words === 'number' && previousOriginalRestoration.source_hash === originalPlanSourceHash) {
     contentStats.original_restoration = { ...previousOriginalRestoration };
   }
-  contentRuntime = normalizeContentGenerationRuntime({
-    ...contentRuntime,
-    target_item_id: targetItemId,
-    regenerate_requirement: regenerateRequirement,
-  });
   const completedStages = new Set(contentRuntime.completed_stages);
   let contentAgentState = resume ? storedPlan.contentGenerationTask?.stats?.agent : undefined;
   const contentPlans = new Map();
@@ -1621,16 +1508,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     const section = sections[item.id];
     return regenerate || section?.status !== 'success' || !Object.hasOwn(contentRuntime.section_words, item.id);
   });
-  if (targetItemId) {
-    const targetSection = sections[targetItemId];
-    tasksToRun = resume && targetSection?.status === 'success' && touchedItemIds.has(targetItemId)
-      ? []
-      : leaves.filter(({ item }) => item.id === targetItemId);
-    if (!tasksToRun.length && (!resume || targetSection?.status !== 'success')) {
-      throw new Error('未找到要重新生成的正文小节');
-    }
-  }
-
   if (retryContentCorrection) {
     const successfulIds = leaves
       .filter(({ item }) => {
@@ -1649,16 +1526,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     tasksToRun = leaves.filter(({ item }) => isUnresolvedContentSection(sections[item.id]));
   }
 
-  if (!fullRegenerate && !targetItemId && contentRuntime.pending_item_ids.length) {
+  if (!regenerate && contentRuntime.pending_item_ids.length) {
     const pendingIds = new Set(contentRuntime.pending_item_ids);
     tasksToRun = tasksToRun.filter(({ item }) => pendingIds.has(item.id));
   }
-
-  contentRuntime = normalizeContentGenerationRuntime({
-    ...contentRuntime,
-    target_item_id: targetItemId,
-    regenerate_requirement: regenerateRequirement,
-  });
 
   if (continuingConsistency || continuingTableCleanup || continuingLayout) tasksToRun = [];
 
@@ -1702,9 +1573,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       : retryFailedSections && (continuingBody || continuingLayout)
         ? `继续正文任务，共 ${leaves.length} 个小节。`
         : `准备生成正文，共 ${leaves.length} 个小节。`];
-  if (targetItemId) {
-    logs = [`准备重新生成正文小节：${targetItemId}。`];
-  } else if (retryFailedSections && continuingGeneration) {
+  if (retryFailedSections && continuingGeneration) {
     // 小节须转换 Word 后才算完成，已有正文按上次扫描到的非空 HTML 统计，生成工具会自动跳过这些小节。
     const writtenIds = new Set(contentStats.preview_ready_section_ids);
     const written = tasksToRun.filter(({ item }) => writtenIds.has(item.id)).length;
@@ -1738,9 +1607,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
     ? storedPlan.contentGenerationTask.progress_detail.mode
         : retryContentCorrection
           ? 'correction'
-          : targetItemId
-            ? (htmlWorkflow ? 'html-single' : 'single')
-            : (htmlWorkflow ? 'html' : 'full');
+          : (htmlWorkflow ? 'html' : 'full');
   let lastTaskProgress = resume || (retryFailedSections && (contentRuntime.html_output || continuingConsistency || continuingTableCleanup || continuingLayout))
     ? Math.max(0, Number(previousState?.contentGenerationTask?.progress) || 0) : 0;
 
@@ -1757,7 +1624,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       progress: lastTaskProgress,
       progress_detail: progressDetail,
       // Task 的独立明细字段不落库；本流程随既有 stats 保存，重开页面仍能显示转换进度。
-      ...(['html', 'html-single'].includes(progressMode) && partial.stats?.content ? {
+      ...(progressMode === 'html' && partial.stats?.content ? {
         stats: { ...partial.stats, content: { ...partial.stats.content, output_progress: progressDetail } },
       } : {}),
     };
@@ -1791,13 +1658,10 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   const developerLogger = createContentDeveloperLogger(aiService, {
-    name: targetItemId ? `content-generation-${targetItemId}` : 'content-generation',
+    name: 'content-generation',
     meta: {
-      mode: targetItemId ? 'single-section' : 'full',
-      target_item_id: targetItemId || '',
       resume,
       regenerate,
-      full_regenerate: fullRegenerate,
       retry_content_correction: retryContentCorrection,
       retry_failed_sections: retryFailedSections,
       leaf_count: leaves.length,
@@ -1897,7 +1761,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   }
 
   // 编排作为正文主会话的第一阶段，只提供输入和结果处理，不另开 Agent。
-  function createContentPlanningStage(targetItemIds, regenerateTargetItemIds = targetItemIds) {
+  function createContentPlanningStage(targetItemIds) {
     const isIncremental = targetItemIds.every(id => contentRuntime.pending_item_ids.includes(id));
     const hasSession = agentService.hasPersistentTaskSession(CONTENT_GENERATION_AGENT_TASK_KEY);
     const savedState = hasSession ? agentService.loadPersistentTask(CONTENT_GENERATION_AGENT_TASK_KEY).state : {};
@@ -1909,7 +1773,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       // 同一轮编排暂停或失败后继续；编排要求已发出时主会话只发送“继续之前的任务”。
       continuing: continuingPlanning,
       prompt: createContentPlanningPrompt({
-        targetItemIds, regenerateTargetItemIds, regenerateRequirement, tableRequirement, maxTables,
+        targetItemIds, tableRequirement, maxTables,
         totalSections: leaves.length, wordControl, isIncremental,
       }),
       files: [
@@ -1917,8 +1781,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         { path: CONTENT_PLANNING_BID_INFO_FILE, content: formatBidKeyInfoForPrompt(projectOverview, bidAnalysisFactsText) },
         { path: CONTENT_PLANNING_OUTLINE_FILE,
           content: JSON.stringify({ outline: buildContentPlanningOutline(outlineData.outline, storedContentPlans) }, null, 2) },
-        { path: CONTENT_PLANNING_TARGETS_FILE, content: JSON.stringify({ target_ids: targetItemIds,
-          ...(String(regenerateRequirement || '').trim() ? { requirement_target_ids: regenerateTargetItemIds } : {}) }, null, 2) },
+        { path: CONTENT_PLANNING_TARGETS_FILE, content: JSON.stringify({ target_ids: targetItemIds }, null, 2) },
         // 新一轮清空结果；同一轮继续时保留草稿供 Agent 修复。
         ...(!continuingPlanning ? [{ path: CONTENT_PLANNING_OUTPUT_FILE, content: '' }] : []),
       ],
@@ -2076,7 +1939,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   // 新一轮先把模版恢复为占位并清除旧会话；继续时沿用已保存的阶段和会话，已完成的不再执行。
   function prepareBusinessFill() {
-    if (!hasBidTemplate || targetItemId || retryContentCorrection) return;
+    if (!hasBidTemplate || retryContentCorrection) return;
     const previous = contentRuntime.business_fill;
     if (previous?.phase === 'completed') {
       setBusinessFill(previous);
@@ -2175,7 +2038,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
   // 已完成且结果仍在的保留；继续时沿用阶段和会话；其余重新编制。须在商务填写准备之后调用（商务模版重置会清除编制结果）。
   function prepareRulePage() {
-    if (!hasBidTemplate || targetItemId || retryContentCorrection) return;
+    if (!hasBidTemplate || retryContentCorrection) return;
     if (!hasRulePageChapters(workspaceStore, outlineData.outline)) {
       setRulePage(undefined);
       return;
@@ -2733,7 +2596,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
         const planning = !completedStages.has('planning') && targets.length ? preparePlanning() : null;
         let layoutSnapshot;
         // 格式自检及修复为 Step02 可选项；关闭时不传检测入口，审计或去表格后直接转换 Word。
-        const layoutExporter = !targetItemId && storedPlan.contentGenerationOptions?.layoutCheck === true
+        const layoutExporter = storedPlan.contentGenerationOptions?.layoutCheck === true
           ? createTechnicalPlanExport({ technicalPlanStore: workspaceStore, templateStore, agentService, openXmlHelperService, credentialLibraryService }) : null;
         result = await runContentGenerationAgent({
           agentService, aiService, resume: continuingBody || continuingLayout, planning,
@@ -2754,7 +2617,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
             startContentGenerationStage();
             return buildContentGenerationFiles({
               outline: outlineData.outline, targets, plans: storedContentPlans, sectionStates: sections,
-              checkTotalWords: !targetItemId && targets.length === leaves.length,
+              checkTotalWords: targets.length === leaves.length,
               projectOverview, globalFacts, globalFactsMode, wordControl,
               generationOptions: storedPlan.contentGenerationOptions,
               hasOriginalPlan,
@@ -2764,7 +2627,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
               })) : {},
               // 已生成 HTML 用保存的字数；未生成的小节仍统计还原底稿，避免漏算或重复计算。
               existingTotalWords: hasOriginalPlan ? leaves.reduce((sum, { item }) => sum + (contentRuntime.section_words[item.id] ?? countReadableWords(sections[item.id]?.content || item.content || '')), 0) : 0,
-              requirement: regenerateRequirement,
               template: templateStore.getTemplate(storedPlan.exportTemplateId),
               knowledgeBaseService, documentIds: referenceKnowledgeDocumentIds,
             });
@@ -3018,8 +2880,7 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
 
     pauseIfRequested('正文生成已在完成前暂停，可点击继续。');
 
-    const statusLeaves = targetItemId ? leaves.filter(({ item }) => item.id === targetItemId) : leaves;
-    for (const { item } of statusLeaves) {
+    for (const { item } of leaves) {
       const status = sections[item.id]?.status;
       if (status === 'error') continue;
       const content = getLeafContentForWords(item);
@@ -3034,13 +2895,11 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       saveSection(item, { status: 'error', content, error: message }, content, { logs });
     }
     rebuildContentWordCounts();
-    const failedCount = statusLeaves.filter(({ item }) => sections[item.id]?.status === 'error').length;
+    const failedCount = leaves.filter(({ item }) => sections[item.id]?.status === 'error').length;
     const finalProgress = progressFor(leaves, sections);
-    const finalStatus = taskStatusFor(statusLeaves, sections);
+    const finalStatus = taskStatusFor(leaves, sections);
     contentStats.phase = 'done';
-    logs = [...logs, targetItemId
-      ? (failedCount ? `小节重新生成结束，当前整体进度 ${finalProgress}%，${failedCount} 个小节失败。` : `小节重新生成完成，当前整体进度 ${finalProgress}%。`)
-      : (failedCount ? `正文生成完成，${failedCount} 个小节失败。` : '正文生成完成。')];
+    logs = [...logs, failedCount ? `正文生成完成，${failedCount} 个小节失败。` : '正文生成完成。'];
     writeDeveloperLog('content.task.completed', {
       status: finalStatus,
       progress: finalProgress,

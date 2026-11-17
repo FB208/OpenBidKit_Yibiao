@@ -8,7 +8,7 @@ const IMAGE_KINDS = [
 const ORIGINAL_GENERATION = 'original';
 const BLOCK_MARKER = '<!-- yibiao:block -->';
 
-// 配图比例为 0 即无图，视为全部关闭；单节修改同样遵守。
+// 配图比例为 0 即无图，视为全部关闭；投标文件调整同样遵守。
 function resolveImageKinds(options) {
   if (!(Number(options?.imageQuantity) > 0)) return [];
   return IMAGE_KINDS.filter(item => options?.[item.optionKey] === true).map(item => item.kind);
