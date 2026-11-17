@@ -71,6 +71,7 @@ function compactOutline(items = []) {
 }
 
 // 目录和材料说明作为输入文件按最新数据重写（Runtime 登记保护），不随每条要求进入持久会话的上下文。
+// 材料按数据类型写明权威数据和本轮结束后程序自动完成的处理，Agent 据此划定自己的职责，不再去求证派生产物。
 function buildAdjustmentFiles(context) {
   const outline = { project_name: context.plan.outlineData?.project_name, outline: compactOutline(numberOutline(context.plan.outlineData?.outline)) };
   const materials = `# 材料与存储
@@ -78,19 +79,26 @@ function buildAdjustmentFiles(context) {
 ## 正式材料位置
 ${Object.entries(context.paths).filter(([, value]) => value).map(([label, value]) => `- ${label}：${value}`).join('\n')}
 
-## 存储关系
-- AI 正文在正文根目录的 正文/<节点ID>.html，图片引用相对于该根目录；对应小节 Word 是派生产物。修改或编写 AI 正文时遵守受限HTML生成规范和全局事实设定，新增图片按配图类型对照表选择本任务可用的生成方式。
-- 商务文档由有效底稿、bid-template-fields.json 中的字段值和章节定位、rule-page-tables.json 重新回填。仅修改 bid-template.docx 不会进入后续导出。有 base 底稿时它优先于 blank 底稿；按实际修改维护相关底稿、字段和章节定位。
-- 目录及非 AI 节点内容以数据库 technical_plan_outline_nodes 为准。节点 ID 保持稳定，parent_node_id 与 sort_order 表示树关系，编号由程序计算。新增节点使用 crypto.randomUUID() 分配 ID。
-- 页码引用保存为 {{YBPAGE:节点ID}} 或 {{YBPAGE:节点ID|text}}，实际页码由导出计算。
-- 目录结构变化（增删节点，修改标题、描述、处理方式或层级）后，程序会在本次调整结束后自动重新编制规则和页码，无需为适配目录手改 rule-page-tables.json。
-- saveBidTemplateFieldValues 的参数是整体填写值，未列出的字段会清除旧值，不是局部 patch。
-- 脚本可使用 node；通过 require('node:module').createRequire(process.env.YIBIAO_APP_PACKAGE) 加载应用自带的 adm-zip、cheerio、better-sqlite3。文本统一 UTF-8。图片工具的任务文件位于当前工作区，图片及源码相对路径属于上述正文根目录。
+## 各类数据
+每类先写权威数据（修改落在这里），再写本轮结束后程序自动完成的处理（不需要你做，也不需要确认）。
+
+- AI 正文
+  - 权威数据：正文和图片根目录下的 正文/<节点ID>.html，以及它用 data-yb-asset-ref 相对该根目录引用的图片。编写或修改时遵守受限HTML生成规范和全局事实设定；新增图片按配图类型对照表选择本任务可用的生成方式。数据库中 AI 节点的 content 字段不使用。
+  - 程序自动：检查改动正文的结构和图片引用，更新字数和小节状态，重新转换对应的小节 Word，刷新预览。
+- 目录和非 AI 节点内容
+  - 权威数据：数据库 technical_plan_outline_nodes。节点 ID 保持稳定，parent_node_id 与 sort_order 表示树关系，新增节点使用 crypto.randomUUID() 分配 ID。
+  - 程序自动：按树顺序计算编号；增删节点或修改标题、描述、处理方式、层级后，重新编制规则和页码（不需要手改 rule-page-tables.json）；有商务文档时重新回填。
+- 商务文档
+  - 权威数据：有效底稿（有 base 底稿时它优先于 blank 底稿）、bid-template-fields.json 中的字段值和章节定位、rule-page-tables.json，按实际修改维护。saveBidTemplateFieldValues 的参数是整体填写值，未列出的字段会清除旧值，不是局部 patch。
+  - 程序自动：按上述数据重新回填，生成商务预览文档；只改预览文档不会进入后续导出。
+- 全局事实
+  - 权威数据：正文和图片根目录下的 全局事实设定.md，调整阶段以它为准。要求改变了其中的事实时同步修改它，不修改数据库中的全局事实。
+- 页码引用：写成 {{YBPAGE:节点ID}} 或 {{YBPAGE:节点ID|text}}，实际页码由导出时计算。
 
 ## 修改原则
 - 先读取要修改的当前内容，以文件和工具返回的最新数据为准。
-- 修改保存到软件实际使用的数据中。涉及文件、节点、字段或图片的增删调整时，同步维护相关引用和记录，保持现有存储格式，使后续读取、预览和导出能够使用修改结果。
-- 需要了解文件格式、数据关联或处理规则时，只读查阅项目源码：${context.sourceDir}，先看相关开发说明，再按需检索实现。
+- 修改保存到上述权威数据中，保持现有存储格式；增删文件、节点、字段或图片时，同步维护权威数据之间的引用（例如正文中的图片引用、节点的父子关系与顺序）。
+- 脚本可使用 node；通过 require('node:module').createRequire(process.env.YIBIAO_APP_PACKAGE) 加载应用自带的 adm-zip、cheerio、better-sqlite3。文本统一 UTF-8。脚本写在当前工作区，用绝对路径访问正式材料。图片工具的任务文件位于当前工作区，图片及源码相对路径属于上述正文根目录。
 `;
   return [
     { path: OUTLINE_FILE, content: JSON.stringify(outline, null, 2) },
@@ -98,19 +106,40 @@ ${Object.entries(context.paths).filter(([, value]) => value).map(([label, value]
   ];
 }
 
-// 业务提示只写本次要求、输入文件和结束方式，长度不随目录增长。
-function buildAdjustmentPrompt(context, requirement) {
-  return `请完成下面的投标文件修改任务。
+// 同一持久会话先后承接人工修改和导出修复：每条任务写明类型并声明之前的任务已结束，完成方式按类型只写在这里。
+const ADJUSTMENT_TASK_KINDS = {
+  adjust: {
+    title: '投标文件修改',
+    heading: '修改要求',
+    completion: `修改后结束本轮。程序会按改动完成${MATERIALS_FILE}中标为“程序自动”的处理并检查结果；发现问题会把具体报错发回本会话，届时再按报错修改。`,
+  },
+  export: {
+    title: '导出修复',
+    heading: '导出失败信息',
+    completion: '以整本导出通过为目标，只修改造成这次失败的数据，改完结束本轮。程序会按原导出配置重新整本导出，成功即完成；失败会把新的报错和失败现场发回本会话。',
+  },
+};
 
-本次要求：
+// 业务提示只写任务类型、本次任务、完成方式和分工，长度不随目录增长。
+function buildAdjustmentPrompt(context, { kind, requirement }) {
+  const task = ADJUSTMENT_TASK_KINDS[kind];
+  return `【新任务：${task.title}】
+本会话之前的任务都已结束（无论成败），不再继续处理；只完成本条消息中的任务。
+
+${task.heading}：
 ${requirement}
 
-输入文件（在当前工作区，每次发送要求时由程序按最新数据重写，只读）：
-- ${OUTLINE_FILE}：当前目录树（节点 ID、编号、标题、处理方式、描述、AI 正文文件）。
-- ${MATERIALS_FILE}：正式材料位置、各类数据的存储关系和修改原则；修改涉及的数据类型时先查阅对应部分。
+完成方式：${task.completion}
 
-只做完成本次要求所需的修改，保留与本次要求无关的内容。需要了解文件格式或处理规则时，可以只读查阅源码：${context.sourceDir}。
-完成后结束本轮，并用一两句话说明实际修改和未完成事项；程序随后刷新正式内容和预览。`;
+输入文件（在当前工作区，每次发送任务时由程序按最新数据重写，只读）：
+- ${OUTLINE_FILE}：当前目录树（节点 ID、编号、标题、处理方式、描述、AI 正文文件）。
+- ${MATERIALS_FILE}：各类数据的权威位置和修改方式，以及本轮结束后程序自动完成的处理。
+
+分工：你只负责把本次任务落实到权威数据上，并维护这些数据之间的引用；材料中标为“程序自动”的处理不需要你做，也不需要确认。
+做法：确定涉及的节点和数据，读取要改的当前内容，修改后结束本轮。只读取与本次任务直接相关的内容；材料已说明的事项不再到数据库结构或源码中求证；不编写校验、转换或导出脚本。只有材料没有覆盖、不了解就无法正确修改时，才只读查阅源码：${context.sourceDir}。
+程序、源码或本机环境的问题不由你处理：确认报错无法通过修改本项目数据解决时，用 report-failure 说明原因，不结束进程、不编译程序、不修改运行环境。
+
+结束时用一两句话说明实际修改和未完成事项。`;
 }
 
 const DEFAULT_SECTION_REQUIREMENT = '尚无正文的小节按目录、全局事实设定和受限HTML生成规范编写正文；有上次记录问题的小节修正这些问题；其余小节保留实质信息、事实参数、承诺及现有图片，整理段落顺序、合并重复表述，并修正含糊或不连贯的表达。';

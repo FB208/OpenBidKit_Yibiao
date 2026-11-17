@@ -56,7 +56,7 @@ function readExportFailure(app, id) {
 }
 
 // 修复要求由程序按失败现场拼出：预检问题逐节列出，其他阶段给出错误链和现场文件用途。
-// 结束判据只有一个：调整任务验收时按原导出配置实际整本导出成功。
+// 只写失败信息和导出特有的处理要点；完成方式（结束本轮后按原配置整本导出验收）由调整提示按任务类型统一给出。
 function buildExportRepairRequirement(failure) {
   const phase = failure.details?.phase;
   const issues = failure.details?.issues || [];
@@ -70,17 +70,14 @@ function buildExportRepairRequirement(failure) {
     failure.artifacts?.assets && 'assets/：本次转换使用的图片副本',
     failure.artifacts?.business && 'business.docx：本次生成的商务模版',
   ].filter(Boolean);
-  return `修复整本导出失败，使导出恢复成功。
-${problem}
+  return `${problem}
 
 失败现场（只读）：${failure.dir}
 ${files.map(item => `- ${item}`).join('\n')}
 
-处理方式：
+处理要点：
 1. 按报错定位到具体小节或文件；需要时查阅源码中抛出该错误的位置，弄清它要求的结构。
-2. 只修改造成这次失败的数据，不靠删除正文段落、图片或小节来规避报错。
-3. 改完直接结束本轮。程序会按原导出配置重新整本导出：成功即完成，失败会把新的报错发回本会话。不要自己编写导出、转换或核对脚本，不检查与报错无关的内容。
-4. 确认问题出在程序或本机环境、无法通过修改本项目数据解决时，用 report-failure 说明原因。`;
+2. 不靠删除正文段落、图片或小节来规避报错。`;
 }
 
 module.exports = { captureExportFailure, readExportFailure, buildExportRepairRequirement };

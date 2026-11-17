@@ -51,7 +51,9 @@ async function runBidDocumentAdjustmentTask({ app, agentService, aiService, work
   const imageKinds = resolveImageKinds(context.plan.contentGenerationOptions);
   try {
     // 导出修复不另设诊断：调整会话按失败现场自行定位和修改，结束本轮后由验收实际整本导出。
-    const requirement = payload.origin === 'export' ? buildExportRepairRequirement(readExportFailure(app, failureId))
+    // 人工修改与导出修复共用会话，任务类型决定提示中的完成方式和验收目标。
+    const kind = payload.origin === 'export' ? 'export' : 'adjust';
+    const requirement = kind === 'export' ? buildExportRepairRequirement(readExportFailure(app, failureId))
       : payload.sectionIds?.length ? buildSectionRequirement(context, payload.sectionIds, payload.requirement) : payload.requirement;
     if (!String(requirement || '').trim()) throw new Error('请输入调整要求');
     const resume = agentService.hasPersistentTaskSession(BID_DOCUMENT_ADJUSTMENT_KEY);
@@ -63,7 +65,7 @@ async function runBidDocumentAdjustmentTask({ app, agentService, aiService, work
     const result = await agentService.runTask({
       task_id: task.task_id, title: '投标文件 AI 调整', primary_session: true,
       persistent_task: { task_key: BID_DOCUMENT_ADJUSTMENT_KEY, mode: resume ? 'resume' : 'new' },
-      initial_stage: 'document-adjustment', prompt: buildAdjustmentPrompt(context, requirement),
+      initial_stage: 'document-adjustment', prompt: buildAdjustmentPrompt(context, { kind, requirement }),
       workspace_instructions: `${adjustmentWorkspaceInstructions(context)}${failureId ? `\n可只读查阅导出失败现场：${readExportFailure(app, failureId).dir}` : ''}`,
       // 目录与材料说明按最新数据写入工作区，提示词只保留本次要求和结束方式；结果说明取结束总结。
       files: buildAdjustmentFiles(context),
@@ -102,7 +104,8 @@ async function runBidDocumentAdjustmentTask({ app, agentService, aiService, work
               technicalPlanExport.prepare({ exportFormat: payload.exportOptions.exportFormat }), error, { phase: 'refresh' });
           }
           return { value: null, issues: [{ severity: 'blocking', message: error.message }],
-            minimumGoal: '保持正式数据格式和关联可用；导出修复必须实际完成整本 Word 转换，保留无关内容。' };
+            minimumGoal: kind === 'export' ? '按原导出配置实际完成整本 Word 转换，保留与本次任务无关的内容。'
+              : '保持正式数据格式和关联可用，保留与本次任务无关的内容。' };
         }
       },
       // 验收未通过的报错原文由 Runtime 写入退回提示；导出修复只补充新的失败现场，不重新诊断。
