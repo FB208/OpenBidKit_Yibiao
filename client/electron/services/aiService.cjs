@@ -293,7 +293,7 @@ function createOpenAICompatibleImageRequestBody(provider, imageConfig, prompt, r
       prompt,
       size,
       response_format: provider === 'jinlong' ? 'b64_json' : 'url',
-      ...(provider === 'volcengine' ? { watermark: imageConfig?.image_watermark !== false } : {}),
+      ...(provider === 'volcengine' ? { watermark: imageConfig?.image_watermark === true } : {}),
       ...(requestMode === 'stream' ? { stream: true } : {}),
     };
   }

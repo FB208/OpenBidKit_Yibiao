@@ -143,7 +143,7 @@ const defaultImageModelProfiles = {
     model_name: '',
     image_size: '1024x1024',
     image_ratio: '1:1',
-    image_watermark: true,
+    image_watermark: false,
     request_mode: 'normal',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
