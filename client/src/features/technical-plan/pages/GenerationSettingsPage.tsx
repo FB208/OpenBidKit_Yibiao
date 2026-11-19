@@ -11,6 +11,10 @@ import { IMAGE_LAYOUTS, getDefaultImageLayoutShares, resolveImageLayoutShares, t
 import aiImageExampleUrl from '../../../../assets/generate_img_example/ai.png';
 import mermaidImageExampleUrl from '../../../../assets/generate_img_example/mermaid.png';
 import htmlImageExampleUrl from '../../../../assets/generate_img_example/html.png';
+import singleLayoutExampleUrl from '../../../../assets/generate_img_example/layout-single.webp';
+import imageTextLayoutExampleUrl from '../../../../assets/generate_img_example/layout-image-text.webp';
+import threeImagesLayoutExampleUrl from '../../../../assets/generate_img_example/layout-three-images.webp';
+import fourImagesLayoutExampleUrl from '../../../../assets/generate_img_example/layout-four-images.webp';
 
 interface GenerationSettingsPageProps {
   activeTab: GenerationSettingsTab;
@@ -125,11 +129,11 @@ const imageModelStatusLabels: Record<ImageModelStatus, string> = {
   available: '可用',
   unavailable: '不可用',
 };
-const imageLayoutLabels: Record<ImageLayoutKey, string> = {
-  single: '单张图片',
-  imageText: '图片表格',
-  threeImages: '三列图片',
-  fourImages: '四宫格',
+const imageLayoutExamples: Record<ImageLayoutKey, { label: string; src: string }> = {
+  single: { label: '单张图片', src: singleLayoutExampleUrl },
+  imageText: { label: '图片表格', src: imageTextLayoutExampleUrl },
+  threeImages: { label: '三列图片', src: threeImagesLayoutExampleUrl },
+  fourImages: { label: '四宫格', src: fourImagesLayoutExampleUrl },
 };
 const imageGenerationExamples: Record<ContentIllustrationKind, { src: string; alt: string }> = {
   ai: { src: aiImageExampleUrl, alt: 'AI 生图示例' },
@@ -1047,13 +1051,30 @@ function GenerationSettingsPage({
                     <small>参与配图的小节按以下占比分配布局；关闭某类布局后，其占比均分给其他开启的布局。</small>
                   </div>
                   {IMAGE_LAYOUTS.map(({ key, optionKey }) => {
+                    const { label, src } = imageLayoutExamples[key];
+                    const exampleTitle = `${label}示例`;
+                    const exampleAction = `查看${exampleTitle}`;
                     const checked = imageLayoutShares[key] > 0;
                     const available = defaultImageLayoutShares[key] > 0;
                     const isLastEnabled = checked && enabledImageLayoutCount === 1;
                     const hint = !available ? '当前配图比例下不使用' : isLastEnabled ? '至少保留一种布局' : '';
                     return (
                       <div className="content-generation-config-row" key={key}>
-                        <span><strong>{imageLayoutLabels[key]}</strong>{hint && <small>{hint}</small>}</span>
+                        <div>
+                          <div className="content-generation-image-option-title">
+                            <strong>{label}</strong>
+                            <button
+                              type="button"
+                              className="content-generation-example-button"
+                              onClick={() => setPreviewImage({ src, alt: exampleTitle })}
+                              aria-label={exampleAction}
+                              title={exampleAction}
+                            >
+                              <ImageExampleIcon />
+                            </button>
+                          </div>
+                          {hint && <small>{hint}</small>}
+                        </div>
                         <div className="content-generation-config-control">
                           <em className="content-image-layout-share">{imageLayoutShares[key]}%</em>
                           <AppSwitch
@@ -1064,7 +1085,7 @@ function GenerationSettingsPage({
                               tableRequirement: draftTableRequirement,
                               [optionKey]: nextChecked,
                             })}
-                            aria-label={`是否使用${imageLayoutLabels[key]}布局`}
+                            aria-label={`是否使用${label}布局`}
                           />
                         </div>
                       </div>
