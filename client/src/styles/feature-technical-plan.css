@@ -330,6 +330,26 @@
   box-shadow: var(--yb-focus-ring);
 }
 
+.generation-settings-export-template-select {
+  appearance: base-select;
+  align-items: center;
+}
+
+.generation-settings-export-template-select::picker(select) {
+  appearance: base-select;
+  padding: 4px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  box-shadow: var(--yb-shadow-sm);
+}
+
+.generation-settings-export-template-select option {
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--yb-radius-sm);
+}
+
 .generation-settings-export-template-status {
   margin: 0;
   color: var(--yb-text-soft);

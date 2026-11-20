@@ -57,10 +57,11 @@ function buildConfig(overrides) {
   };
 }
 
+const DEFAULT_EXPORT_TEMPLATE_ID = 'tpl-system-standard-bid';
 const SYSTEM_EXPORT_TEMPLATES = [
   {
     // 黑白无装饰的常规投标版式，评审最不容易挑刺的一套。
-    template_id: 'tpl-system-standard-bid',
+    template_id: DEFAULT_EXPORT_TEMPLATE_ID,
     config: buildConfig({
       template_name: '标准投标简版',
       page: {
@@ -300,5 +301,6 @@ const SYSTEM_EXPORT_TEMPLATES = [
 ];
 
 module.exports = {
+  DEFAULT_EXPORT_TEMPLATE_ID,
   SYSTEM_EXPORT_TEMPLATES,
 };

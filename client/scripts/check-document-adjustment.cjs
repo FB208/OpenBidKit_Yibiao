@@ -125,13 +125,13 @@ function createServices() {
   const credentialLibraryService = service('credentialLibraryService.cjs').createCredentialLibraryService({ app, db });
   const knowledgeBaseStore = service('knowledgeBaseStore.cjs').createKnowledgeBaseStore({ app, db });
   const knowledgeBaseService = service('knowledgeBaseService.cjs').createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
+  const templateStore = service('templateStore.cjs').createTemplateStore({ db, configStore });
+  templateStore.syncSystemTemplates();
   const technicalPlanStore = service('technicalPlanStore.cjs').createTechnicalPlanStore({ app, db, fileService, agentService, taskLogStore, configStore });
   const feasibilityReportStore = service('feasibilityReportStore.cjs').createFeasibilityReportStore({ app, db, fileService, taskLogStore, agentService });
   const duplicateCheckStore = service('duplicateCheckStore.cjs').createDuplicateCheckStore({ app, db, taskLogStore });
   const rejectionCheckStore = service('rejectionCheckStore.cjs').createRejectionCheckStore({ app, db, fileService, technicalPlanStore, taskLogStore });
   const blindCheckStore = service('blindCheckStore.cjs').createBlindCheckStore({ app, db, taskLogStore, credentialLibraryService, fileService, technicalPlanStore });
-  const templateStore = service('templateStore.cjs').createTemplateStore({ db });
-  templateStore.syncSystemTemplates();
   const duplicateCheckService = service('duplicateCheckService.cjs').createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   let taskService;
   const technicalPlanExport = service('technicalPlanExport.cjs').createTechnicalPlanExport({ app, technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService,

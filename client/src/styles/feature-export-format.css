@@ -914,6 +914,15 @@
   font-size: 22px;
 }
 
+.template-library-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .template-library-preview-shell .export-template-preview-panel {
   position: relative;
   top: auto;

@@ -89,6 +89,7 @@ export interface ClientConfig extends AiConfig {
   gpu_hardware_acceleration_enabled?: boolean;
   gpu_hardware_acceleration_configured?: boolean;
   export_format?: import('./exportFormat').ExportFormatConfig;
+  technical_plan_default_export_template_id?: string;
   developer_mode?: boolean;
   developer_token_stats_auto_open?: boolean;
   developer_agent_monitor_auto_open?: boolean;

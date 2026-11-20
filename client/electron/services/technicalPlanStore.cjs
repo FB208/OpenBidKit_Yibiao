@@ -32,6 +32,7 @@ const RULE_PAGE_TABLES_VERSION = 3;
 const { CONTENT_GENERATION_AGENT_TASK_KEY } = require('./contentGenerationAgent.cjs');
 const { BID_DOCUMENT_ADJUSTMENT_KEY } = require('./bidDocumentAdjustmentContext.cjs');
 const { originalImageReferences } = require('./originalPlanRestoration.cjs');
+const { DEFAULT_EXPORT_TEMPLATE_ID: defaultExportTemplateId } = require('./systemExportTemplates.cjs');
 
 const tenderMarkdownRelativePath = path.join('technical-plan', 'tender.md').replace(/\\/g, '/');
 const tenderOriginalMarkdownRelativePath = path.join('technical-plan', 'tender-original.md').replace(/\\/g, '/');
@@ -54,7 +55,6 @@ const defaultOutlineWordControlOptions = Object.freeze({
   sectionWords: 0,
 });
 const defaultHtmlImageTypes = '甘特图、进度网络图、组织架构图、泳道图、RACI 职责矩阵、风险矩阵、系统架构与拓扑图、WBS 工作分解结构图、鱼骨图、柱状图、折线图、饼图';
-const defaultExportTemplateId = 'tpl-system-standard-bid';
 const defaultContentGenerationOptions = Object.freeze({
   imageQuantity: 30,
   useAiImages: true,
@@ -381,7 +381,8 @@ function normalizeContentGenerationOptions(options) {
   };
 }
 
-function createDefaultGenerationConfig() {
+// 仅初始化或重置项目时传入用户的默认模板，不改动已保存的选择。
+function createDefaultGenerationConfig(exportTemplateId = defaultExportTemplateId) {
   const outlineMode = 'standalone-technical';
   const bidAnalysis = normalizeBidAnalysisConfig('key', [], outlineMode);
   return {
@@ -393,7 +394,7 @@ function createDefaultGenerationConfig() {
     outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
     referenceKnowledgeDocumentIds: [],
     globalFactsMode: 'fabricate',
-    exportTemplateId: defaultExportTemplateId,
+    exportTemplateId,
     exportTemplateScope: 'ai-only',
     contentGenerationOptions: { ...defaultContentGenerationOptions },
   };
@@ -694,7 +695,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const existing = db.prepare('SELECT * FROM technical_plan_generation_config WHERE id = 1').get();
     if (existing) return existing;
     const timestamp = now();
-    const defaults = createDefaultGenerationConfig();
+    const defaults = createDefaultGenerationConfig(configStore.load().technical_plan_default_export_template_id);
     const content = defaults.contentGenerationOptions;
     db.prepare(`
       INSERT INTO technical_plan_generation_config (
@@ -1754,7 +1755,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     db.prepare('DELETE FROM technical_plan_outline_nodes').run();
     db.prepare('DELETE FROM technical_plan_global_fact_groups').run();
     clearOriginalOutlineRuntime();
-    writeGenerationConfig(createDefaultGenerationConfig());
+    writeGenerationConfig(createDefaultGenerationConfig(configStore.load().technical_plan_default_export_template_id));
     updateMeta({
       step: 'document-analysis',
       outline_word_control_snapshot_json: null,

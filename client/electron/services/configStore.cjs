@@ -3,6 +3,7 @@ const path = require('node:path');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 const { defaultExportFormat, normalizeExportFormat } = require('./exportFormatDefaults.cjs');
+const { DEFAULT_EXPORT_TEMPLATE_ID } = require('./systemExportTemplates.cjs');
 
 const textModelProviders = ['official', 'jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const imageModelProviders = ['official', 'jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
@@ -222,6 +223,7 @@ const defaultConfig = {
   gpu_hardware_acceleration_enabled: true,
   gpu_hardware_acceleration_configured: true,
   export_format: defaultExportFormat,
+  technical_plan_default_export_template_id: DEFAULT_EXPORT_TEMPLATE_ID,
   agent_auto_answer_enabled: DEFAULT_AGENT_AUTO_ANSWER_ENABLED,
   developer_mode: false,
   developer_token_stats_auto_open: false,
@@ -544,6 +546,7 @@ function normalizeConfig(config) {
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,
     gpu_hardware_acceleration_configured: gpuHardwareAccelerationConfigured === false ? true : gpuHardwareAccelerationConfigured,
     export_format: normalizeExportFormat(source.export_format),
+    technical_plan_default_export_template_id: source.technical_plan_default_export_template_id ?? defaultConfig.technical_plan_default_export_template_id,
     agent_auto_answer_enabled: source.agent_auto_answer_enabled === undefined
       ? defaultConfig.agent_auto_answer_enabled
       : Boolean(source.agent_auto_answer_enabled),

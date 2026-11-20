@@ -18,6 +18,8 @@ function MyTemplatesPage() {
   const { showToast } = useToast();
   const [templates, setTemplates] = useState<ExportTemplateRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [defaultExportTemplateId, setDefaultExportTemplateId] = useState<string>();
+  const [savingDefault, setSavingDefault] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<{ mode: 'create' | 'edit' | 'view'; templateId?: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ExportTemplateRecord | null>(null);
@@ -25,6 +27,7 @@ function MyTemplatesPage() {
   const [duplicatingId, setDuplicatingId] = useState('');
 
   const selectedTemplate = templates.find((template) => template.template_id === selectedId) || templates[0] || null;
+  const selectedTemplateIsDefault = selectedTemplate?.template_id === defaultExportTemplateId;
   const previewConfig = selectedTemplate?.config || DEFAULT_EXPORT_FORMAT;
   const systemTemplates = templates.filter((template) => template.is_system);
   const userTemplates = templates.filter((template) => !template.is_system);
@@ -32,9 +35,13 @@ function MyTemplatesPage() {
   const loadTemplates = useCallback(async () => {
     setLoading(true);
     try {
-      const items = await window.yibiao?.templates.list();
+      const [items, config] = await Promise.all([
+        window.yibiao?.templates.list(),
+        window.yibiao?.config.load(),
+      ]);
       const nextTemplates = items || [];
       setTemplates(nextTemplates);
+      setDefaultExportTemplateId(config?.technical_plan_default_export_template_id);
       setSelectedId((prev) => nextTemplates.some((template) => template.template_id === prev) ? prev : nextTemplates[0]?.template_id || '');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '读取模板列表失败', 'error');
@@ -74,6 +81,20 @@ function MyTemplatesPage() {
     }
   };
 
+  // 无需打开投标项目即可修改全局默认模板。
+  const handleSetDefault = async (templateId: string) => {
+    setSavingDefault(true);
+    try {
+      await window.yibiao!.config.save({ technical_plan_default_export_template_id: templateId });
+      setDefaultExportTemplateId(templateId);
+      showToast('已设为默认模板', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '设置默认模板失败', 'error');
+    } finally {
+      setSavingDefault(false);
+    }
+  };
+
   const confirmDelete = async () => {
     if (!deleteTarget) return;
 
@@ -99,6 +120,7 @@ function MyTemplatesPage() {
 
   const renderTemplateCard = (template: ExportTemplateRecord) => {
     const selected = selectedTemplate?.template_id === template.template_id;
+    const isDefault = template.template_id === defaultExportTemplateId;
     return (
       <article className={`template-library-card${selected ? ' is-active' : ''}`} key={template.template_id}>
         <button type="button" className="template-library-card-main" onClick={() => setSelectedId(template.template_id)}>
@@ -106,7 +128,10 @@ function MyTemplatesPage() {
             {template.template_name}
             {template.is_system ? <em className="template-library-system-badge">系统预设</em> : null}
           </span>
-          <small>更新于 {formatTemplateDate(template.updated_at)}</small>
+          <small>
+            {isDefault && <em className="template-default-badge">默认</em>}{' '}
+            更新于 {formatTemplateDate(template.updated_at)}
+          </small>
         </button>
         <div className="template-library-card-actions">
           {template.is_system ? (
@@ -175,16 +200,30 @@ function MyTemplatesPage() {
                 <span className="section-kicker">实时预览</span>
                 <h3>{selectedTemplate.template_name}</h3>
               </div>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={() => setEditor({
-                  mode: selectedTemplate.is_system ? 'view' : 'edit',
-                  templateId: selectedTemplate.template_id,
-                })}
-              >
-                {selectedTemplate.is_system ? '查看模板' : '编辑模板'}
-              </button>
+              <div className="template-library-preview-actions">
+                {selectedTemplateIsDefault ? (
+                  <span className="template-default-badge">默认</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    disabled={loading || savingDefault}
+                    onClick={() => void handleSetDefault(selectedTemplate.template_id)}
+                  >
+                    设为默认
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => setEditor({
+                    mode: selectedTemplate.is_system ? 'view' : 'edit',
+                    templateId: selectedTemplate.template_id,
+                  })}
+                >
+                  {selectedTemplate.is_system ? '查看模板' : '编辑模板'}
+                </button>
+              </div>
             </div>
             {/* 编辑弹窗自带预览，两份样张同时挂载会各跑一次生成与排版 */}
             {!editor && <TemplatePreview config={previewConfig} />}

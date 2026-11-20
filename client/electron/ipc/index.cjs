@@ -333,14 +333,14 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const credentialLibraryService = createCredentialLibraryService({ app, db: sqliteDatabase.db });
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
+  const templateStore = createTemplateStore({ db: sqliteDatabase.db, configStore });
+  // 技术方案初始化会写入默认模板，须先同步模板库并修正失效引用。
+  templateStore.syncSystemTemplates();
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService, taskLogStore, configStore });
   const feasibilityReportStore = createFeasibilityReportStore({ app, db: sqliteDatabase.db, fileService, taskLogStore, agentService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db, taskLogStore });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore, taskLogStore });
   const blindCheckStore = createBlindCheckStore({ app, db: sqliteDatabase.db, taskLogStore, credentialLibraryService, fileService, technicalPlanStore });
-  const templateStore = createTemplateStore({ db: sqliteDatabase.db });
-  // 系统预设模板的真源在代码里，每次启动对齐一次，保证首启和版本升级都能拿到最新预设。
-  templateStore.syncSystemTemplates();
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const checkResultExportService = createCheckResultExportService({
     app,

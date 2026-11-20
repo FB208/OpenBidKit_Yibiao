@@ -277,6 +277,7 @@ function GenerationSettingsPage({
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
   const [globalFactsModeBusy, setGlobalFactsModeBusy] = useState(false);
   const [exportTemplateBusy, setExportTemplateBusy] = useState(false);
+  const [defaultExportTemplateId, setDefaultExportTemplateId] = useState<string>();
   const [exportTemplateScopeBusy, setExportTemplateScopeBusy] = useState(false);
   const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
   const [draftTableRequirement, setDraftTableRequirement] = useState<ContentTableRequirement>(() => (
@@ -316,6 +317,7 @@ function GenerationSettingsPage({
   const imageLayoutShares = resolveImageLayoutShares(draftIllustrationOptions);
   const enabledImageLayoutCount = IMAGE_LAYOUTS.filter(({ key }) => imageLayoutShares[key] > 0).length;
   const selectedExportTemplate = exportTemplates.find((template) => template.template_id === exportTemplateId) || null;
+  const selectedExportTemplateIsDefault = selectedExportTemplate !== null && exportTemplateId === defaultExportTemplateId;
   // 页签第二行“功能词·当前值”只读取已保存配置，输入中的草稿不提前展示。
   const tabSummaries: Record<GenerationSettingsTab, string> = {
     content: `范围·${outlineModeSummaryLabels[outlineMode]}`,
@@ -340,8 +342,11 @@ function GenerationSettingsPage({
   useEffect(() => {
     let cancelled = false;
     window.yibiao?.config.load().then((config) => {
-      if (!cancelled) setImageModelStatus(config.image_model?.status || 'untested');
-    }).catch((error) => console.warn('读取生图模型状态失败', error));
+      if (!cancelled) {
+        setImageModelStatus(config.image_model?.status || 'untested');
+        setDefaultExportTemplateId(config.technical_plan_default_export_template_id);
+      }
+    }).catch((error) => console.warn('读取用户配置失败', error));
     return () => { cancelled = true; };
   }, []);
 
@@ -566,6 +571,20 @@ function GenerationSettingsPage({
       showToast('保存成功', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存导出模板失败', 'error');
+    } finally {
+      setExportTemplateBusy(false);
+    }
+  };
+
+  // 默认模板只影响后续投标，不写入当前项目配置。
+  const saveDefaultExportTemplate = async (templateId: string) => {
+    setExportTemplateBusy(true);
+    try {
+      await window.yibiao!.config.save({ technical_plan_default_export_template_id: templateId });
+      setDefaultExportTemplateId(templateId);
+      showToast('已设为默认模板', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '设置默认模板失败', 'error');
     } finally {
       setExportTemplateBusy(false);
     }
@@ -1202,14 +1221,40 @@ function GenerationSettingsPage({
                 </div>
                 <div className="generation-settings-export-template-control">
                   <select
+                    className="generation-settings-export-template-select"
                     value={selectedExportTemplate?.template_id || ''}
                     disabled={exportTemplatesLoading || exportTemplateBusy || !exportTemplates.length}
                     onChange={(event) => void saveExportTemplate(event.target.value)}
                     aria-label="导出模板选择"
+                    aria-describedby={selectedExportTemplateIsDefault ? 'generation-settings-default-template-badge' : undefined}
                   >
                     <option value="" disabled>{exportTemplatesLoading ? '正在读取模板...' : '请选择导出模板'}</option>
-                    {exportTemplates.map((template) => <option value={template.template_id} key={template.template_id}>{template.template_name}</option>)}
+                    {exportTemplates.map((template) => {
+                      const isDefault = template.template_id === defaultExportTemplateId;
+                      return (
+                        <option
+                          key={template.template_id}
+                          value={template.template_id}
+                          className={isDefault ? 'template-default-option' : undefined}
+                          aria-label={isDefault ? `${template.template_name}（默认）` : undefined}
+                        >
+                          {template.template_name}
+                        </option>
+                      );
+                    })}
                   </select>
+                  {selectedExportTemplateIsDefault ? (
+                    <span id="generation-settings-default-template-badge" className="template-default-badge">默认</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      disabled={exportTemplatesLoading || exportTemplateBusy || !selectedExportTemplate}
+                      onClick={() => void saveDefaultExportTemplate(exportTemplateId)}
+                    >
+                      设为默认
+                    </button>
+                  )}
                   {onCreateExportTemplate && <button type="button" className="secondary-action" onClick={onCreateExportTemplate}>新建模板</button>}
                 </div>
                 {!exportTemplatesLoading && !exportTemplates.length && <p className="generation-settings-export-template-status">暂无可用模板，请先新建并保存 Word 导出模板。</p>}

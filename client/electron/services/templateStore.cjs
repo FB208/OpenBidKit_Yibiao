@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { SYSTEM_EXPORT_TEMPLATES } = require('./systemExportTemplates.cjs');
+const { DEFAULT_EXPORT_TEMPLATE_ID, SYSTEM_EXPORT_TEMPLATES } = require('./systemExportTemplates.cjs');
 
 const TEMPLATE_COLUMNS = 'template_id, template_name, config_json, is_system, created_at, updated_at';
 
@@ -27,7 +27,7 @@ function templateFromRow(row) {
   };
 }
 
-function createTemplateStore({ db }) {
+function createTemplateStore({ db, configStore }) {
   function isSystemTemplate(templateId) {
     const row = db.prepare('SELECT is_system FROM export_templates WHERE template_id = ?').get(templateId);
     return Boolean(row?.is_system);
@@ -110,6 +110,9 @@ function createTemplateStore({ db }) {
     if (isSystemTemplate(templateId)) {
       return { success: false, message: '系统预设模板不可删除' };
     }
+    if (templateId === configStore.load().technical_plan_default_export_template_id) {
+      return { success: false, message: '请先在「我的模板」将其他模板设为默认，再删除此模板' };
+    }
 
     const result = db.prepare('DELETE FROM export_templates WHERE template_id = ?').run(templateId);
     return {
@@ -160,6 +163,12 @@ function createTemplateStore({ db }) {
       }
       removeStale.run(...keptIds);
     })();
+
+    // 工作区数据库重建后，独立保存的全局配置可能仍指向已丢失的模板。
+    const defaultTemplateId = configStore.load().technical_plan_default_export_template_id;
+    if (!getTemplate(defaultTemplateId)) {
+      configStore.save({ technical_plan_default_export_template_id: DEFAULT_EXPORT_TEMPLATE_ID });
+    }
   }
 
   return {

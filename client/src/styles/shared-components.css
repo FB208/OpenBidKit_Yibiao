@@ -277,6 +277,28 @@
   transform: translateY(0) scale(0.98);
 }
 
+.template-default-badge,
+option.template-default-option::after {
+  display: inline-flex;
+  width: max-content;
+  padding: 2px 7px;
+  color: var(--yb-success-deep);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.25;
+  vertical-align: middle;
+  white-space: nowrap;
+  background: var(--yb-success-soft);
+  border: 1px solid var(--yb-success-border);
+  border-radius: var(--yb-radius-pill);
+}
+
+option.template-default-option::after {
+  content: '默认';
+  margin-inline-start: auto;
+}
+
 .primary-action:disabled,
 .secondary-action:disabled,
 .danger-action:disabled {
