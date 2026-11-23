@@ -116,6 +116,7 @@ const bridge = {
     },
     sendEmailCode: (input) => invokeOfficialAccount('send-email-code', input),
     loginWithEmail: (input) => invokeOfficialAccount('login', input),
+    logout: () => invokeOfficialAccount('logout'),
     bindEmail: (input) => invokeOfficialAccount('bind-email', input),
     onStateChanged: (callback) => {
       const listener = (_event, state) => callback(state);

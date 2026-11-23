@@ -9,6 +9,7 @@ function registerOfficialAccountIpc({ officialAccountService }) {
   ipcMain.handle('official-account:refresh-balance', () => officialAccountService.refreshBalance());
   ipcMain.handle('official-account:send-email-code', (_event, input) => officialAccountService.sendEmailCode(input));
   ipcMain.handle('official-account:login', (_event, input) => officialAccountService.loginWithEmail(input));
+  ipcMain.handle('official-account:logout', () => officialAccountService.logout());
   ipcMain.handle('official-account:bind-email', (_event, input) => officialAccountService.bindEmail(input));
   ipcMain.handle('official-account:get-recharge-options', () => officialAccountService.getRechargeOptions());
   ipcMain.handle('official-account:create-recharge-order', (_event, input) => officialAccountService.createRechargeOrder(input));

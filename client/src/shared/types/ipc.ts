@@ -707,6 +707,7 @@ export interface YibiaoBridge {
     onStateChanged: (callback: (state: OfficialAccountState) => void) => () => void;
     sendEmailCode: (input: { email: string; purpose: OfficialEmailPurpose }) => Promise<boolean>;
     loginWithEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
+    logout: () => Promise<void>;
     bindEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
   };
   ai: {
