@@ -9,12 +9,10 @@ import { useOfficialAccount } from './useOfficialAccount';
 
 interface OfficialAccountControlsProps {
   onViewOrders: () => void;
-  rechargeRequested?: boolean;
-  onRechargeRequestHandled?: () => void;
 }
 
 // 展示官方账户及余额，并共用邮箱验证码弹窗完成登陆和绑定。
-export default function OfficialAccountControls({ onViewOrders, rechargeRequested, onRechargeRequestHandled }: OfficialAccountControlsProps) {
+export default function OfficialAccountControls({ onViewOrders }: OfficialAccountControlsProps) {
   const account = useOfficialAccount();
   const [purpose, setPurpose] = useState<OfficialEmailPurpose | null>(null);
   const [email, setEmail] = useState('');
@@ -92,13 +90,6 @@ export default function OfficialAccountControls({ onViewOrders, rechargeRequeste
       setPurpose('LOGIN');
     }
   };
-
-  // 余额不足跳转到此处时，等账户状态就绪后复用充值入口；未登录会先走邮箱登陆。
-  useEffect(() => {
-    if (!rechargeRequested || account.status === 'loading') return;
-    onRechargeRequestHandled?.();
-    openRecharge();
-  }, [rechargeRequested, account.status]);
 
   // 卸载商品弹窗使其请求结果失效，并恢复充值按钮焦点。
   const closeRecharge = () => {

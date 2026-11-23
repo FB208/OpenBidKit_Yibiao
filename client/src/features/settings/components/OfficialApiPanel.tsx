@@ -18,8 +18,6 @@ interface OfficialApiPanelProps {
   tab: OfficialApiTab;
   onTabChange: (tab: OfficialApiTab) => void;
   modelControls: ReactNode;
-  rechargeRequested: boolean;
-  onRechargeRequestHandled: () => void;
 }
 
 // 组合模型操作、官方账户及信息页签，供文本和生图设置共用。
@@ -27,8 +25,6 @@ export default function OfficialApiPanel({
   tab: activeTab,
   onTabChange,
   modelControls,
-  rechargeRequested,
-  onRechargeRequestHandled,
 }: OfficialApiPanelProps) {
   // 用方向键及首尾键切换官方账户页签，并同步键盘焦点。
   const handleOfficialApiTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -49,11 +45,7 @@ export default function OfficialApiPanel({
     <>
       <div className="settings-list">
         {modelControls}
-        <OfficialAccountControls
-          onViewOrders={() => onTabChange('orders')}
-          rechargeRequested={rechargeRequested}
-          onRechargeRequestHandled={onRechargeRequestHandled}
-        />
+        <OfficialAccountControls onViewOrders={() => onTabChange('orders')} />
       </div>
       <div className="official-api-details">
         <div className="official-api-tabs" role="tablist" aria-label="官方账户信息" onKeyDown={handleOfficialApiTabKeyDown}>

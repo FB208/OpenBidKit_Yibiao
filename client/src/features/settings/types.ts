@@ -5,8 +5,11 @@ export type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components
 /** 应用级跳转传给设置页的一次性请求，设置页消费后由应用清除。 */
 export interface SettingsPageRequest {
   tab: SettingsTab;
-  openRecharge: boolean;
+  focusTextProvider?: boolean;
+  showOfficialOrders?: boolean;
 }
+
+export type TextModelSetupReason = 'startup' | 'balance-insufficient';
 
 export interface SettingsPageState {
   textModel: Omit<TextModelConfig, 'context_length_limit' | 'output_token_limit' | 'concurrency_limit'> & {

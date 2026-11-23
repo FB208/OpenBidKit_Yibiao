@@ -6,6 +6,8 @@ import RequiredOnlineServicesPrompt from './app/RequiredOnlineServicesPrompt';
 import UpdateNotifier from './app/UpdateNotifier';
 import { useTextModelSetupRedirect } from './app/useTextModelSetupRedirect';
 import AppShell from './components/AppShell';
+import OfficialModelSetupDialog from './features/settings/components/OfficialModelSetupDialog';
+import OfficialRechargeDialog from './features/settings/components/OfficialRechargeDialog';
 import { trackAppOpen, trackConfigUsage, trackPageView } from './shared/analytics/analytics';
 import type { SectionId } from './shared/types/navigation';
 
@@ -55,7 +57,9 @@ function App() {
     }
     return allowed;
   };
-  const { settingsRequest, clearSettingsRequest } = useTextModelSetupRedirect(requestSectionChange);
+  const {
+    settingsRequest, clearSettingsRequest, setupDialog, dismissSetup, openSetupRecharge, configureTextProvider, viewOfficialOrders,
+  } = useTextModelSetupRedirect(requestSectionChange);
 
   return (
     <>
@@ -80,6 +84,11 @@ function App() {
           onSettingsRequestHandled={clearSettingsRequest}
         />
       </AppShell>
+      {setupDialog === 'recharge' ? (
+        <OfficialRechargeDialog onClose={dismissSetup} onViewOrders={viewOfficialOrders} />
+      ) : setupDialog && (
+        <OfficialModelSetupDialog reason={setupDialog} onClose={dismissSetup} onRecharge={openSetupRecharge} onConfigure={configureTextProvider} />
+      )}
     </>
   );
 }

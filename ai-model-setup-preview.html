@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设置 AI 文本模型</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, "Microsoft YaHei", sans-serif; color: #182338; background: #e7edf7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { display: grid; place-items: center; min-height: 100svh; padding: 22px; background: radial-gradient(ellipse at 48% 27%, #f8faff, transparent 70%); }
+    .dialog { width: min(488px, 100%); padding: clamp(22px, 5vw, 34px); border: 1px solid #fff; border-radius: 24px; background: #fff; box-shadow: 0 24px 70px -22px #19315a5c, 0 3px 12px #19315a0c; }
+    h1 { margin: 0 0 22px; font-size: 22px; font-weight: 720; letter-spacing: -.035em; }
+    button { font: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #4272e9; outline-offset: 4px; }
+    .official { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 132px; padding: clamp(15px, 4vw, 23px); text-align: left; border: 0; border-radius: 16px; color: #fff; background: radial-gradient(ellipse at 100% 0, #2b56b5, transparent 76%), #172e67; box-shadow: inset 0 1px #ffffff26; }
+    .official:hover { background-color: #1e3a7d; }
+    .official-title { display: block; font-size: clamp(17px, 4.7vw, 25px); line-height: 1.35; font-weight: 760; letter-spacing: -.035em; }
+    .official-meta { display: block; margin-top: 8px; color: #dbe7ff; font-size: 13px; }
+    .arrow { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 50%; background: #ffffff18; }
+    .arrow svg, .custom svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+    .custom { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; margin-top: 11px; padding: 14px 16px; text-align: left; border: 1px solid #e4eaf4; border-radius: 12px; color: #273a5a; background: #f8fafd; font-size: 14px; font-weight: 610; }
+    .custom:hover { background: #edf3fc; }
+    .custom svg { flex: none; color: #5b6f8e; }
+    .later { display: block; margin: 16px auto -5px; padding: 8px 12px; color: #5b6a80; background: transparent; border: 0; border-radius: 8px; font-size: 13px; }
+    .later:hover { background: #f0f4fa; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="title">
+      <h1 id="title">设置 AI 文本模型</h1>
+      <button type="button" class="official">
+        <span>
+          <span class="official-title">没有 API Key 也能用</span>
+          <span class="official-meta">易标官方 API · 充值即用</span>
+        </span>
+        <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></span>
+      </button>
+      <button type="button" class="custom">
+        已有 API Key，自己配置
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
+      <button type="button" class="later">稍后设置</button>
+    </section>
+  </main>
+</body>
+</html>

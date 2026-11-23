@@ -500,6 +500,88 @@ fieldset.settings-list {
   width: min(480px, calc(100vw - 32px));
 }
 
+.official-model-setup-dialog {
+  width: min(488px, calc(100vw - 32px));
+  padding: clamp(20px, 5vw, 32px);
+}
+
+.official-model-setup-choices {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.official-model-setup-official,
+.official-model-setup-custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.official-model-setup-official {
+  min-height: 126px;
+  padding: clamp(14px, 4vw, 22px);
+  color: var(--yb-surface);
+  background: linear-gradient(120deg, var(--yb-primary-deep), var(--yb-violet));
+  border: 0;
+  border-radius: var(--yb-radius-lg);
+}
+
+.official-model-setup-official strong {
+  display: block;
+  font-size: clamp(17px, 4.6vw, 24px);
+  line-height: 1.4;
+}
+
+.official-model-setup-official small {
+  display: block;
+  margin-top: 6px;
+  color: color-mix(in srgb, var(--yb-surface) 90%, transparent);
+  font-size: 13px;
+}
+
+.official-model-setup-arrow {
+  display: grid;
+  flex: 0 0 36px;
+  height: 36px;
+  place-items: center;
+  background: color-mix(in srgb, var(--yb-surface) 16%, transparent);
+  border-radius: var(--yb-radius-pill);
+}
+
+.official-model-setup-official:hover .official-model-setup-arrow {
+  background: color-mix(in srgb, var(--yb-surface) 28%, transparent);
+}
+
+.official-model-setup-custom {
+  padding: 13px 16px;
+  color: var(--yb-text);
+  background: var(--yb-bg);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-md);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.official-model-setup-custom:hover {
+  border-color: var(--yb-primary);
+}
+
+.official-model-setup-official:focus-visible,
+.official-model-setup-custom:focus-visible {
+  outline: 2px solid var(--yb-primary);
+  outline-offset: -3px;
+}
+
+.official-model-setup-later {
+  justify-self: center;
+  color: var(--yb-text-soft);
+}
+
 /* 充值复用支持开源的暖色弹窗及金额卡片，商品内容独立滚动。 */
 .official-recharge-dialog {
   overflow-y: hidden;

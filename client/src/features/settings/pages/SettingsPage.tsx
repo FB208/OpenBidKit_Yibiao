@@ -678,7 +678,7 @@ interface SettingsPageProps {
 function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, registerLeaveGuard }: SettingsPageProps) {
   const [state, setState] = useState<SettingsPageState>(initialState);
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => request?.tab ?? 'general');
-  const [rechargeRequested, setRechargeRequested] = useState(false);
+  const textProviderRef = useRef<HTMLSelectElement>(null);
   const [savedConfig, setSavedConfig] = useState<ClientConfig | null>(null);
   const [officialApiTab, setOfficialApiTab] = useState<OfficialApiTab>('statement');
   const [textModels, setTextModels] = useState<string[]>([]);
@@ -805,20 +805,23 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
     return () => { disposed = true; unsubscribe(); };
   }, [configLoaded]);
 
-  // 应用级跳转请求只消费一次，之后重新进入设置页或切换分类不会再次触发。
+  // 设置分类就绪后再打开订单或聚焦服务商，并消费本次跳转请求。
   useEffect(() => {
     if (!request) return;
-    void changeSettingsTab(request.tab);
-    if (request.openRecharge) setRechargeRequested(true);
-    onRequestHandled?.();
-  }, [request, onRequestHandled, changeSettingsTab]);
-
-  // 充值只在官方文本模型页打开；已切走或当前不是官方服务商时放弃本次请求。
-  useEffect(() => {
-    if (rechargeRequested && configLoaded && (activeTab !== 'text-model' || state.textModel.provider !== 'official')) {
-      setRechargeRequested(false);
+    if (request.tab !== activeTab) {
+      void changeSettingsTab(request.tab);
+      return;
     }
-  }, [activeTab, configLoaded, rechargeRequested, state.textModel.provider]);
+    if (request.showOfficialOrders) setOfficialApiTab('orders');
+    if (request.focusTextProvider) {
+      const frame = requestAnimationFrame(() => {
+        textProviderRef.current?.focus();
+        onRequestHandled?.();
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    onRequestHandled?.();
+  }, [request, activeTab, onRequestHandled, changeSettingsTab]);
 
   // 弹窗中的自动确认开关实时保存后，同步刷新设置页草稿和已保存基准。
   useEffect(() => {
@@ -1893,6 +1896,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 {state.textModel.provider !== 'official' && <span>选择服务商会自动使用预置 Base URL；只有自定义服务商允许修改</span>}
               </div>
               <select
+                ref={textProviderRef}
                 value={state.textModel.provider}
                 onChange={(event) => updateTextModelProvider(event.target.value as TextModelProvider)}
               >
@@ -1918,8 +1922,6 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                   </select>
                 </label>
               )}
-              rechargeRequested={configLoaded && rechargeRequested}
-              onRechargeRequestHandled={() => setRechargeRequested(false)}
             />
           ) : (
             <>
@@ -2247,8 +2249,6 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                   </div>
                 </div>
               )}
-              rechargeRequested={configLoaded && rechargeRequested}
-              onRechargeRequestHandled={() => setRechargeRequested(false)}
             />
           ) : (
             <>
