@@ -1570,6 +1570,28 @@
     rgba(255, 255, 255, 0.94);
 }
 
+/* 技术方案正文页：操作放在标题旁，统计独占一行。 */
+.content-generation-command-bar--stacked {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+
+.content-generation-command-bar--stacked > :first-child {
+  flex: 1 1 22rem;
+}
+
+.content-generation-command-bar--stacked .content-generation-actions {
+  margin-inline-start: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.content-generation-command-bar--stacked .content-generation-stats {
+  flex: 0 0 100%;
+  justify-content: flex-start;
+}
+
 .content-generation-command-bar strong {
   display: block;
   margin: 7px 0 5px;

@@ -4,6 +4,7 @@ const { getConfigFilePath } = require('../utils/paths.cjs');
 const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 const { defaultExportFormat, normalizeExportFormat } = require('./exportFormatDefaults.cjs');
 const { DEFAULT_EXPORT_TEMPLATE_ID } = require('./systemExportTemplates.cjs');
+const { DEFAULT_OFFICIAL_MODEL_BASE_URL, resolveOfficialApiEndpoints } = require('./officialApiEndpoints.cjs');
 
 const textModelProviders = ['official', 'jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const imageModelProviders = ['official', 'jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
@@ -23,7 +24,7 @@ const googleImageSizes = ['512', '1K', '2K', '4K'];
 const agnesImageRatios = ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'];
 
 const textProviderBaseUrls = {
-  official: 'https://v3.yibiao.pro/qhp-ai/anonymous/openai/v1',
+  official: DEFAULT_OFFICIAL_MODEL_BASE_URL,
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
@@ -561,8 +562,24 @@ function normalizeConfig(config) {
   };
 }
 
+// 管理用户配置读写，开发用官方地址只覆盖运行态配置。
 function createConfigStore(app) {
   const configFile = getConfigFilePath(app);
+  const { modelBaseUrl } = resolveOfficialApiEndpoints(app);
+
+  // 在落盘之后为当前进程覆盖官方档案和正在使用的官方地址。
+  function withOfficialModelBaseUrl(config) {
+    if (modelBaseUrl === DEFAULT_OFFICIAL_MODEL_BASE_URL) return config;
+    const officialText = { ...config.text_model_profiles.official, base_url: modelBaseUrl };
+    const officialImage = { ...config.image_model_profiles.official, base_url: modelBaseUrl };
+    return {
+      ...config,
+      text_model_profiles: { ...config.text_model_profiles, official: officialText },
+      base_url: config.text_model_provider === 'official' ? modelBaseUrl : config.base_url,
+      image_model_profiles: { ...config.image_model_profiles, official: officialImage },
+      image_model: config.image_model.provider === 'official' ? officialImage : config.image_model,
+    };
+  }
 
   function persist(config) {
     let tempFile = '';
@@ -600,7 +617,7 @@ function createConfigStore(app) {
       if (!fs.existsSync(configFile)) {
         const config = withAnalyticsIdentity(normalizeConfig());
         persist(config);
-        return config;
+        return withOfficialModelBaseUrl(config);
       }
 
       try {
@@ -611,7 +628,7 @@ function createConfigStore(app) {
         if (JSON.stringify(parsedConfig) !== JSON.stringify(nextConfig)) {
           persist(nextConfig);
         }
-        return nextConfig;
+        return withOfficialModelBaseUrl(nextConfig);
       } catch (error) {
         throw new Error(`配置文件读取失败：${error.message}`);
       }

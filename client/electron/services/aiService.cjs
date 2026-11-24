@@ -45,7 +45,6 @@ const MODEL_INFO_ENDPOINT = 'https://analytics.agnet.top/model-info';
 const OPENAI_IMAGE_PROVIDER_META = {
   official: {
     label: '易标官方API',
-    defaultBaseUrl: 'https://v3.yibiao.pro/qhp-ai/anonymous/openai/v1',
     logProvider: 'official',
     modelLabel: '生图模型名称',
   },
@@ -2721,12 +2720,15 @@ function createAiService({ app, configStore }) {
       };
     },
 
-    // 官方生图测试从 Main 最新配置取得共用密钥。
+    // 官方生图测试从 Main 最新配置取得地址和共用密钥。
     async testImageModel(config) {
       const currentConfig = configStore.load();
       const trackedConfig = {
         ...config,
-        ...(config.image_model.provider === 'official' ? { text_model_profiles: currentConfig.text_model_profiles } : {}),
+        ...(config.image_model.provider === 'official' ? {
+          text_model_profiles: currentConfig.text_model_profiles,
+          image_model: { ...config.image_model, base_url: currentConfig.image_model_profiles.official.base_url },
+        } : {}),
         analytics_client_id: config.analytics_client_id || currentConfig.analytics_client_id,
         analytics_created_at: config.analytics_created_at || currentConfig.analytics_created_at,
       };

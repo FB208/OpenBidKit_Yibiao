@@ -2,8 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getOfficialApiSessionFilePath, getOfficialRechargeQrCachePath } = require('../utils/paths.cjs');
 const { fetchWithRedirect } = require('../utils/fetchWithRedirect.cjs');
+const { resolveOfficialApiEndpoints } = require('./officialApiEndpoints.cjs');
 
-const SERVICE_BASE_URL = 'https://v3.yibiao.pro/qhp-yibiao';
 const OPEN_PATH = '/anonymous/yibiao/open';
 const RECHARGE_PATH = '/anonymous/yibiao/recharge';
 const API_KEY_NAME = '易标开源版';
@@ -60,6 +60,7 @@ function toOrderView(order, qrCode = null) {
 
 // 管理官方账户会话；所有身份变更在 Main 中串行执行，令牌不发送给页面。
 function createOfficialAccountService({ app, configStore, powerMonitor, fetchImpl = fetch }) {
+  const { accountBaseUrl } = resolveOfficialApiEndpoints(app);
   const sessionFile = getOfficialApiSessionFilePath(app);
   const qrCacheFile = getOfficialRechargeQrCachePath(app);
   const listeners = new Set();
@@ -202,7 +203,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     let response;
     try {
       // 服务端以 307 跳转到实际入口，需保留鉴权头。
-      response = await fetchWithRedirect(`${SERVICE_BASE_URL}${endpoint}`, {
+      response = await fetchWithRedirect(`${accountBaseUrl}${endpoint}`, {
         method,
         headers,
         ...(rawBody ? { body: rawBody } : body ? { body: JSON.stringify(body) } : {}),

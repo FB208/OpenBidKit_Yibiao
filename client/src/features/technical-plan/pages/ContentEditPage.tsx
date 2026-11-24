@@ -976,36 +976,11 @@ function ContentEditPage({
 
   return (
     <div className="plan-step-body content-generation-page">
-      <section className="content-generation-command-bar">
+      <section className="content-generation-command-bar content-generation-command-bar--stacked">
         <div>
           <span className="section-kicker">STEP {stepNumber}</span>
           <strong>正文生成</strong>
           <p>对标记为“AI生成”的叶子小节生成正文；存在商务模版时同步填写模版字段，其他模式保留为待处理。</p>
-        </div>
-        <div className="content-generation-stats" aria-label="正文生成统计">
-          <span><strong>{leaves.length}</strong> 个 AI 小节</span>
-          {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
-          <span title={`模板填写 ${modeCounts['template-fill']}，规则和页码 ${modeCounts['rule-page']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
-          {bidTemplateExists && (
-            <span className={`content-business-fill-status${businessFill?.status === 'error' ? ' is-error' : ''}`} title={businessFillTitle}>
-              商务模版 <strong>{businessFillLabel}</strong>
-            </span>
-          )}
-          {hasOriginalPlan && (
-            <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
-              原方案图片 <strong>{originalRestoration && typeof originalRestoration.total_images === 'number'
-                ? `${originalRestoration.restored_images}/${originalRestoration.total_images}` : '待统计'}</strong>
-            </span>
-          )}
-          {hasOriginalPlan && (
-            <span title={originalRestoration
-              ? `已回填 ${originalRestoration.restored_words.toLocaleString()} / 原文共 ${originalRestoration.total_words.toLocaleString()} 字。已还原原文字数 ÷ 原方案总字数，使用相同可读字数口径，不计新增目录标题和结构标记，不代表后续扩写的内容保留率。${originalRestoration.rate === null ? '没有可统计内容。' : ''}`
-              : '原方案还原完成后统计。'}>
-              原方案还原率 <strong>{originalRestoration
-                ? originalRestoration.rate === null ? '—' : `${originalRestoration.rate.toFixed(1)}%`
-                : '待统计'}</strong>
-            </span>
-          )}
         </div>
         <div className="content-generation-actions">
           {bidTemplateExists && (
@@ -1052,6 +1027,31 @@ function ContentEditPage({
             <button type="button" className="primary-action" onClick={handleGenerationButtonClick} disabled={documentWriteBusy || generationSubmitting || sectionSubmitting || pausing || (!leaves.length && !bidTemplateExists)}>
               {generationButtonLabel}
             </button>
+          )}
+        </div>
+        <div className="content-generation-stats" aria-label="正文生成统计">
+          <span><strong>{leaves.length}</strong> 个 AI 小节</span>
+          {typeof contentStats?.word_conversion_completed === 'number' && <span><strong>{contentStats.word_conversion_completed}</strong> 本次 Word 已转换</span>}
+          <span title={`模板填写 ${modeCounts['template-fill']}，规则和页码 ${modeCounts['rule-page']}，人工填写 ${modeCounts['manual-fill']}，其他模式 ${modeCounts.other}`}><strong>{pendingCount}</strong> 待处理</span>
+          {bidTemplateExists && (
+            <span className={`content-business-fill-status${businessFill?.status === 'error' ? ' is-error' : ''}`} title={businessFillTitle}>
+              商务模版 <strong>{businessFillLabel}</strong>
+            </span>
+          )}
+          {hasOriginalPlan && (
+            <span title="按原方案导入的图片引用统计，回填时同时核对本地资源；原图不受新增配图数量设置影响。">
+              原方案图片 <strong>{originalRestoration && typeof originalRestoration.total_images === 'number'
+                ? `${originalRestoration.restored_images}/${originalRestoration.total_images}` : '待统计'}</strong>
+            </span>
+          )}
+          {hasOriginalPlan && (
+            <span title={originalRestoration
+              ? `已回填 ${originalRestoration.restored_words.toLocaleString()} / 原文共 ${originalRestoration.total_words.toLocaleString()} 字。已还原原文字数 ÷ 原方案总字数，使用相同可读字数口径，不计新增目录标题和结构标记，不代表后续扩写的内容保留率。${originalRestoration.rate === null ? '没有可统计内容。' : ''}`
+              : '原方案还原完成后统计。'}>
+              原方案还原率 <strong>{originalRestoration
+                ? originalRestoration.rate === null ? '—' : `${originalRestoration.rate.toFixed(1)}%`
+                : '待统计'}</strong>
+            </span>
           )}
         </div>
       </section>
