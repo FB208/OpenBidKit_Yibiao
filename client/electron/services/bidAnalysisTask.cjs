@@ -302,8 +302,12 @@ function runInvalidBidAndRejectionItemsExtraction({ aiService, fileContent, sect
   return runBidAnalysisPromptTask({ aiService, fileContent, task, sectionHint });
 }
 
+// 按已准备好的投标范围解析本次选中的招标要求。
 async function runBidAnalysisTask({ aiService, workspaceStore, updateTask, checkpointTask, payload }) {
   const storedPlanForHint = workspaceStore.loadTechnicalPlan() || {};
+  if (storedPlanForHint.bidSectionAutoEnabled && storedPlanForHint.bidSectionAutoMode !== storedPlanForHint.bidSectionMode) {
+    throw new Error('请先完成自动识别标段，再开始解析招标文件');
+  }
   const outlineMode = storedPlanForHint.outlineMode;
   const config = normalizeBidAnalysisConfig(payload.mode, payload.selected_task_ids || payload.selectedTaskIds, outlineMode);
   const mode = config.mode;

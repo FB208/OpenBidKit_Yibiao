@@ -502,6 +502,7 @@ function normalizeComponentsState(components?: Partial<ComponentsConfig>): Setti
     },
     mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(components?.mermaid_concurrency_limit),
     html_concurrency_limit: normalizeComponentConcurrencyLimit(components?.html_concurrency_limit),
+    jev_api_key: components?.jev_api_key ?? '',
   };
 }
 
@@ -514,6 +515,7 @@ function componentsFromState(components: SettingsPageState['components']): Compo
     },
     mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(components.mermaid_concurrency_limit),
     html_concurrency_limit: normalizeComponentConcurrencyLimit(components.html_concurrency_limit),
+    jev_api_key: components.jev_api_key.trim(),
   };
 }
 
@@ -656,6 +658,7 @@ const initialState: SettingsPageState = {
     },
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
+    jev_api_key: '',
   },
   general: {
     developer_mode: false,
@@ -688,6 +691,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
   const [loadingModelInfo, setLoadingModelInfo] = useState(false);
   const [testingTextModel, setTestingTextModel] = useState(false);
   const [testingImageModel, setTestingImageModel] = useState(false);
+  const [testingJev, setTestingJev] = useState(false);
   const textModelBusy = loadingModels === 'text' || loadingModelInfo || testingTextModel;
   const [imageTestPreview, setImageTestPreview] = useState<{ src: string; title: string } | null>(null);
   const [appVersion, setAppVersion] = useState('');
@@ -1165,6 +1169,32 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : '打开生图服务 API Key 获取页面失败', 'error');
+    }
+  };
+
+  // 用系统浏览器打开 Jev 的密钥管理页。
+  const openJevApiKeyPage = async () => {
+    try {
+      const result = await window.yibiao?.openExternal('https://console.typesafe.ai/keys');
+      if (result && !result.success) {
+        showToast(result.message || '打开 Jev API Key 获取页面失败', 'error');
+      }
+    } catch {
+      showToast('打开 Jev API Key 获取页面失败', 'error');
+    }
+  };
+
+  // 仅测试当前 Jev 密钥草稿，不保存配置。
+  const testJevConfig = async () => {
+    const apiKey = state.components.jev_api_key.trim();
+    setTestingJev(true);
+    try {
+      await window.yibiao!.ai.testJev(apiKey);
+      showToast('Jev API Key 测试成功', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Jev API Key 测试失败', 'error');
+    } finally {
+      setTestingJev(false);
     }
   };
 
@@ -2489,6 +2519,36 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 }))}
               />
             </label>
+          </div>
+
+          <div className="settings-group-title">Jev</div>
+          <div className="settings-list">
+            <div className="settings-row">
+              <label className="settings-row-copy" htmlFor="jev-api-key"><strong>API Key</strong></label>
+              <div className="settings-control-with-action">
+                <input
+                  id="jev-api-key"
+                  type="password"
+                  value={state.components.jev_api_key}
+                  placeholder="请输入 Jev API Key"
+                  disabled={testingJev}
+                  onChange={(event) => setState((prev) => ({
+                    ...prev,
+                    components: { ...prev.components, jev_api_key: event.target.value },
+                  }))}
+                />
+                <button type="button" className="inline-action" onClick={openJevApiKeyPage}>获取</button>
+                <button
+                  type="button"
+                  className="inline-action"
+                  onClick={testJevConfig}
+                  disabled={testingJev || !state.components.jev_api_key.trim()}
+                >
+                  {testingJev && <InlineSpinner />}
+                  {testingJev ? '测试中' : '测试'}
+                </button>
+              </div>
+            </div>
           </div>
         </section>
       )}

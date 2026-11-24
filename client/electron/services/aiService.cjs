@@ -366,6 +366,44 @@ async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS
   }
 }
 
+// 通过 TypeSafe 请求一个二分类答案，沿用文本请求统计。
+async function fetchJevNoul(app, config, { apiKey, state, question, signal }) {
+  const url = 'https://api.typesafe.ai/v1/systemone';
+  const model = 'jev-latest';
+  const body = JSON.stringify({ model, state, questions: { result: { ...question, type: 'noul' } } });
+  const trackedConfig = { ...config, text_model_provider: 'jev', base_url: url, model_name: model };
+  let usage;
+  try {
+    return await runWithOperationTimeout(async (requestSignal) => {
+      const response = await undiciFetch(url, {
+        method: 'POST',
+        headers: { ...createHeaders(apiKey), 'TypeSafe-Danger-Zone-Long-Context': 'true' },
+        body,
+        signal: requestSignal,
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`Jev 请求失败（HTTP ${response.status}）`);
+      }
+      const data = await response.json();
+      usage = { prompt_tokens: data?.usage?.input_tokens, completion_tokens: data?.usage?.output_tokens };
+      trackedConfig.model_name = data?.model || model;
+      const probability = data?.answers?.result?.noul;
+      if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
+        throw new Error('Jev 未返回有效的判断结果');
+      }
+      return probability;
+    }, AI_REQUEST_TIMEOUT_MS, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    const message = error instanceof SyntaxError ? 'Jev 返回的 JSON 无法读取' : error.message;
+    throw markAiRequestError(new Error(message, { cause: error }), { retryable: false });
+  } finally {
+    recordTextTokenStats(config, usage);
+    trackAiRequest(app, trackedConfig, { ai_request_type: 'text', usage });
+  }
+}
+
 // 构造文本和生图请求头，官方服务附带开源客户端标识。
 function createHeaders(apiKey, provider) {
   return {
@@ -2653,6 +2691,25 @@ function createAiService({ app, configStore }) {
       }, { signal: request?.signal });
     },
 
+    // Jev 与普通文本共用并发队列；不可用时由识别流程决定是否换模型。
+    requestJevNoul(request) {
+      return enqueueTextRequest(request, () => fetchJevNoul(app, configStore.load(), request), {
+        signal: request.signal,
+        maxAttempts: 1,
+      });
+    },
+
+    // 仅测试当前输入的 Key，不修改已保存的组件配置。
+    async testJev(apiKey) {
+      const key = apiKey.trim();
+      if (!key) throw new Error('请填写 Jev API Key');
+      await service.requestJevNoul({
+        apiKey: key,
+        state: '本项目划分为两个独立采购包。',
+        question: { instructions: '本项目是否划分为多个独立采购包？' },
+      });
+    },
+
     async collectJsonResponse(request) {
       return enqueueTextRequest(request, () => {
         const config = configStore.load();
@@ -2704,6 +2761,9 @@ function createAiService({ app, configStore }) {
         },
         requestJson(request) {
           return service.requestJson(withQueueScope(request, scopeId, signal));
+        },
+        requestJevNoul(request) {
+          return service.requestJevNoul(withQueueScope(request, scopeId, signal));
         },
         collectJsonResponse(request) {
           return service.collectJsonResponse(withQueueScope(request, scopeId, signal));

@@ -190,18 +190,18 @@ async function collectJson(aiService, options) {
   throw new Error('AI 服务尚未初始化');
 }
 
+// 从完整原文提取标段及行范围；真正开始提取时才清理原来的范围和下游。
 async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTask, checkpointTask }) {
-  const originalMarkdown = workspaceStore.readOriginalTenderMarkdown?.() || workspaceStore.readTenderMarkdown();
-  const cleanMarkdown = String(originalMarkdown || '').trim();
+  const cleanMarkdown = workspaceStore.readOriginalTenderMarkdown().trim();
   if (!cleanMarkdown) {
     throw new Error('请先上传招标文件，再进行多标段识别');
   }
 
-  if (typeof workspaceStore.prepareBidSectionExtraction === 'function') {
-    workspaceStore.prepareBidSectionExtraction();
-  }
-
-  let logs = [];
+  workspaceStore.prepareBidSectionExtraction();
+  let logs = ['开始识别招标文件中的标段范围。'];
+  checkpointTask({ progress: 5, logs, stats: { bid_section_stage: 'extraction' } }, {}, {
+    technicalPlanPatch: workspaceStore.loadTechnicalPlan(),
+  });
   const log = (message, progress) => {
     logs = pushLog(logs, message);
     updateTask({ status: 'running', progress, logs }, {
@@ -212,7 +212,6 @@ async function runBidSectionExtractionTask({ aiService, workspaceStore, updateTa
   };
 
   try {
-    log('开始识别招标文件中的标段范围。', 5);
     const normalizedMarkdown = String(cleanMarkdown || '').replace(/\r\n?/g, '\n');
     const totalLines = normalizedMarkdown.split('\n').length;
     const numberedMarkdown = numberMarkdownLines(normalizedMarkdown);

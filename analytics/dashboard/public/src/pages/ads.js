@@ -32,6 +32,7 @@ function isBlankNewAdForm() {
   return !state.adId.value.trim() && !state.adLinkUrl.value.trim();
 }
 
+// 渲染广告列表，突出每条广告的启停状态。
 function renderAdsTable() {
   const ads = appState.ads || [];
   if (!ads.length) {
@@ -42,7 +43,13 @@ function renderAdsTable() {
   const rows = ads.map((ad) => `
     <tr>
       <td class="resource-image-cell">${renderAdImage(ad)}</td>
-      <td class="resource-title-cell"><strong>${escapeHtml(truncate(ad.linkUrl, 70) || '-')}</strong><br /><small>${escapeHtml(ad.enabled ? '启用' : '停用')} · 排序 ${escapeHtml(ad.sortOrder)}</small></td>
+      <td class="resource-title-cell">
+        <strong>${escapeHtml(truncate(ad.linkUrl, 70) || '-')}</strong>
+        <div class="ad-row-meta">
+          <span class="ad-status-badge ${ad.enabled ? 'is-enabled' : 'is-disabled'}">${ad.enabled ? '启用' : '停用'}</span>
+          <small>排序 ${escapeHtml(ad.sortOrder)}</small>
+        </div>
+      </td>
       <td>${escapeHtml(ad.updatedAt || '-')}</td>
       <td>${escapeHtml(formatNumber(ad.clickCount))}</td>
       <td class="resource-row-actions">

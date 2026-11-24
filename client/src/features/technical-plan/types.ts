@@ -4,6 +4,18 @@ export type TechnicalPlanStep = 'document-analysis' | 'generation-settings' | 'b
 export type BidAnalysisMode = 'key' | 'full' | 'custom';
 export type BidAnalysisTaskStatus = 'idle' | 'running' | 'success' | 'error';
 export type BidSectionMode = 'single' | 'multiple';
+export type BidSectionChoice = BidSectionMode | 'auto';
+
+export interface BidAnalysisStartRequest {
+  mode: BidAnalysisMode;
+  selected_task_ids: string[];
+  task_ids?: string[];
+  force_rerun: boolean;
+}
+
+export type BidAnalysisLaunchResult =
+  | { phase: 'analysis-started' | 'preparing'; taskId: string }
+  | { phase: 'waiting-selection' };
 export type BidSectionExtractionStatus = 'idle' | 'running' | 'success' | 'error';
 export type BackgroundTaskType = 'bid-section-extraction' | 'bid-analysis' | 'outline-generation' | 'outline-adjustment' | 'bid-template-extraction' | 'rule-page-compile' | 'global-facts-generation' | 'global-facts-adjustment' | 'content-generation' | 'bid-document-adjustment';
 export type BackgroundTaskStatus = 'running' | 'pausing' | 'paused' | 'success' | 'error';
@@ -81,6 +93,7 @@ export interface TechnicalPlanGenerationConfig {
   bidAnalysisMode: BidAnalysisMode;
   bidAnalysisSelectedTaskIds: string[];
   bidSectionMode: BidSectionMode;
+  bidSectionAutoEnabled: boolean;
   outlineMode: OutlineMode;
   outlineExpansionMode: OutlineExpansionMode;
   outlineWordControlOptions: OutlineWordControlOptions;
@@ -548,6 +561,8 @@ export interface TechnicalPlanState {
   bidAnalysisTasks: BidAnalysisTasks;
   bidAnalysisProgress: number;
   bidSectionMode: BidSectionMode;
+  bidSectionAutoEnabled: boolean;
+  bidSectionAutoMode: BidSectionMode | null;
   bidSections: DetectedBidSection[];
   bidSectionExtractionStatus: BidSectionExtractionStatus;
   bidSectionExtractionError?: string;

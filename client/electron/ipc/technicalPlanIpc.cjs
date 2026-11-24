@@ -21,11 +21,7 @@ function registerTechnicalPlanIpc({ technicalPlanStore, taskService, agentServic
   ipcMain.handle('technical-plan:remove-tender-document', (_event, sourceId) => taskService.removeTenderDocument(sourceId));
   ipcMain.handle('technical-plan:import-original-plan-document', (_event, filePaths) => taskService.importOriginalPlanDocument(filePaths));
   ipcMain.handle('technical-plan:remove-original-plan-document', () => taskService.removeOriginalPlanDocument());
-  ipcMain.handle('technical-plan:check-bid-sections', () => technicalPlanStore.checkBidSections());
-  ipcMain.handle('technical-plan:select-bid-section', (_event, selectedSection) => {
-    taskService.assertDocumentMutationIdle();
-    return technicalPlanStore.selectBidSection(selectedSection);
-  });
+  ipcMain.handle('technical-plan:select-bid-section', (_event, selectedSection) => taskService.selectBidSection(selectedSection));
   ipcMain.handle('technical-plan:read-tender-markdown', () => technicalPlanStore.readTenderMarkdown());
   ipcMain.handle('technical-plan:read-content-word', (_event, sectionId) => technicalPlanStore.readContentWord(sectionId));
   ipcMain.handle('technical-plan:preview-content-word', (_event, sectionId) => previewContentSection({ sectionId, agentService, openXmlHelperService }));

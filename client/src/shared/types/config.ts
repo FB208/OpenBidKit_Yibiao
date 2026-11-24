@@ -77,6 +77,7 @@ export interface ComponentsConfig {
   file_parser: FileParserConfig;
   mermaid_concurrency_limit: number;
   html_concurrency_limit: number;
+  jev_api_key: string;
 }
 
 export interface ClientConfig extends AiConfig {

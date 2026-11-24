@@ -13,6 +13,7 @@ function registerTaskIpc({ taskService }) {
     taskService.subscribe(event.sender);
     return taskService.startBidAnalysis(payload);
   });
+  ipcMain.handle('tasks:cancel-pending-bid-analysis', () => taskService.cancelPendingBidAnalysis());
   ipcMain.handle('tasks:start-outline-generation', (event, payload) => {
     taskService.subscribe(event.sender);
     return taskService.startOutlineGeneration(payload);

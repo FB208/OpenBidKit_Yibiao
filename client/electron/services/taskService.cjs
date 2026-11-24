@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
+const { detectBidSectionMode } = require('./bidSectionModeDetection.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask, prepareContentGenerationStart } = require('./contentGenerationTask.cjs');
 const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
@@ -43,7 +44,7 @@ const taskDefinitions = {
     step: 5, lockPolicy: 'group-exclusive', stateKey: 'technicalPlan', field: 'bidDocumentAdjustmentTask',
   },
   'bid-section-extraction': {
-    label: '多标段识别',
+    label: '标段识别',
     group: 'technical-plan',
     groupLabel: '技术方案',
     step: 2,
@@ -288,6 +289,7 @@ function createTechnicalPlanUserSettings(state = {}) {
     'bidAnalysisMode',
     'bidAnalysisSelectedTaskIds',
     'bidSectionMode',
+    'bidSectionAutoEnabled',
     'outlineMode',
     'outlineExpansionMode',
     'outlineWordControlOptions',
@@ -391,6 +393,7 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
   const activeTasks = new Map();
   const activeTaskControls = new Map();
   let exportOccupied = false;
+  let pendingBidAnalysis = null; // 多标段待选时保留本次解析请求，页面离开不影响。
 
   // 正式导出与后台写任务双向互斥；内部转换复核不重复申请占用。
   function beginTechnicalPlanExport() {
@@ -529,6 +532,7 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
     if (task.type === 'bid-section-extraction') {
       copyPatchFields(patch, state, [
         'bidSectionMode',
+        'bidSectionAutoMode',
         'bidSections',
         'bidSectionExtractionStatus',
         'bidSectionExtractionError',
@@ -1149,7 +1153,7 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
     return currentTask;
   }
 
-  // 取消技术方案任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
+  // 取消技术方案任务并等待退出；替换原文或全流程重置也清除待选段解析。
   async function cancelTechnicalPlanTasks(reason, taskTypes) {
     if (exportOccupied) throw new Error('投标文件正在导出，请完成后再操作');
     const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
@@ -1163,6 +1167,7 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
       control.cancel(reason);
     }
     await Promise.all(controls.map((control) => control.waitForSettlement()));
+    if (!typeFilter) pendingBidAnalysis = null;
   }
 
   // 取消废标检查任务并等待退出，避免清空下游后旧任务继续提交 checkpoint。
@@ -1503,7 +1508,8 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
       return;
     }
 
-    const message = '上次多标段识别未完成，请重新识别';
+    const detectingMode = extractionTask.stats?.bid_section_stage === 'detection';
+    const message = detectingMode ? '上次自动识别标段未完成，请重试' : '上次多标段识别未完成，请重新识别';
     const recoveredTask = {
       ...extractionTask,
       status: 'error',
@@ -1515,8 +1521,7 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
     };
     const partial = {
       bidSectionExtractionTask: recoveredTask,
-      bidSectionExtractionStatus: 'error',
-      bidSectionExtractionError: message,
+      ...(detectingMode ? {} : { bidSectionExtractionStatus: 'error', bidSectionExtractionError: message }),
     };
     technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
     emit(recoveredTask, buildSnapshot(getTaskDefinition('bid-section-extraction'), partial, recoveredTask));
@@ -1747,6 +1752,61 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
   recoverInterruptedBlindCheckExtractionTask(blindCheckRecoveryState);
   recoverInterruptedFeasibilityTasks(feasibilityReportRecoveryState);
 
+  // 判断缓存清单及已选范围是否可直接用于本次解析。
+  function getBidSectionReadiness(plan) {
+    const listReady = plan.bidSectionExtractionStatus === 'success' && plan.bidSections.length >= 2;
+    const selected = plan.tenderFile.selectedSectionId;
+    const selectionReady = listReady && Boolean(plan.tenderFile.selectedSectionTitle)
+      && plan.bidSections.some((section) => section.id === selected);
+    return { listReady, selectionReady };
+  }
+
+  // 同一个受管任务准备解析范围；等释放任务锁后再解析或等待选段。
+  function startBidSectionPreparation(payload, originalHash) {
+    let preparedMode;
+    return startManagedTask('bid-section-extraction', payload, async (context) => {
+      const { previousState: plan, workspaceStore, aiService: scopedAiService, checkpointTask, taskControl } = context;
+      let mode = plan.bidSectionAutoEnabled ? plan.bidSectionAutoMode : plan.bidSectionMode;
+      const logs = [];
+      const stats = { bid_section_stage: 'detection' };
+      if (mode === null) {
+        logs.push('正在自动识别单标段或多标段。');
+        checkpointTask({ progress: 5, stats, logs });
+        const markdown = workspaceStore.readOriginalTenderMarkdown().trim();
+        if (!markdown) throw new Error('原始招标文件内容为空，请重新上传');
+        mode = await detectBidSectionMode(markdown, scopedAiService, taskControl.signal);
+        logs.push(mode === 'single' ? '已识别为单标段。' : '已识别为多标段。');
+        checkpointTask({ progress: 30, logs }, { bidSectionAutoMode: mode });
+      }
+
+      preparedMode = mode;
+      const { listReady } = getBidSectionReadiness(plan);
+      if (mode === 'multiple' && (plan.bidSectionMode !== mode || !listReady)) {
+        await runBidSectionExtractionTask(context);
+        return;
+      }
+
+      let eventPatch;
+      if (plan.bidSectionMode !== mode) {
+        workspaceStore.saveGenerationConfig({ bidSectionMode: mode });
+        eventPatch = { technicalPlanPatch: workspaceStore.loadTechnicalPlan() };
+      }
+      checkpointTask({ status: 'success', progress: 100, stats, logs }, {}, eventPatch);
+    }, {}, {
+      afterSettled() {
+        // 标段提取会自行记录失败，不能仅凭 runner 返回判断识别成功。
+        const plan = technicalPlanStore.loadTechnicalPlan();
+        if (plan.bidSectionExtractionTask?.status !== 'success' || plan.tenderFile?.originalContentHash !== originalHash
+          || plan.bidSectionMode !== preparedMode || (plan.bidSectionAutoEnabled && plan.bidSectionAutoMode !== preparedMode)) return;
+        if (preparedMode === 'multiple' && !getBidSectionReadiness(plan).selectionReady) {
+          pendingBidAnalysis = { payload, originalHash };
+        } else {
+          startManagedTask('bid-analysis', payload, runBidAnalysisTask);
+        }
+      },
+    });
+  }
+
   return {
     beginTechnicalPlanExport,
     assertDocumentMutationIdle,
@@ -1756,33 +1816,46 @@ function createTaskService({ app, technicalPlanExport, templateStore, aiService,
     enableDocumentAdjustment,
     subscribe,
     subscribeCallback,
+    // 单独提取标段只更新清单，不启动招标解析。
     startBidSectionExtraction(payload) {
-      return startManagedTask('bid-section-extraction', payload, runBidSectionExtractionTask, {
-        bidSectionMode: 'multiple',
-        bidSections: [],
-        bidSectionExtractionStatus: 'running',
-        bidSectionExtractionError: undefined,
-        bidAnalysisTask: undefined,
-        bidAnalysisTasks: {},
-        bidAnalysisProgress: 0,
-        projectOverview: '',
-        techRequirements: '',
-        outlineData: null,
-        outlineWordControlSnapshot: undefined,
-        outlineGenerationTask: undefined,
-        outlineAdjustmentTask: undefined,
-        bidTemplateExtractionTask: undefined,
-        globalFactsTask: undefined,
-        globalFactsAdjustmentTask: undefined,
-        globalFacts: [],
-        contentGenerationTask: undefined,
-        contentGenerationSections: {},
-        contentGenerationPlans: {},
-        contentGenerationRuntime: undefined,
-      });
+      const task = startManagedTask('bid-section-extraction', payload, runBidSectionExtractionTask);
+      pendingBidAnalysis = null;
+      return task;
     },
+    // 对解析请求统一准备范围；已有选择可直接解析，待选时不占任务锁。
     startBidAnalysis(payload) {
-      return startManagedTask('bid-analysis', payload, runBidAnalysisTask);
+      const plan = technicalPlanStore.loadTechnicalPlan();
+      if (!plan.tenderFile) throw new Error('请先上传招标文件，再开始解析');
+      const { originalContentHash: originalHash } = plan.tenderFile;
+      const mode = plan.bidSectionAutoEnabled ? plan.bidSectionAutoMode : plan.bidSectionMode;
+      const { listReady, selectionReady } = getBidSectionReadiness(plan);
+      const preparing = mode !== plan.bidSectionMode || (mode === 'multiple' && !listReady);
+      if (!preparing && mode === 'multiple' && !selectionReady) {
+        pendingBidAnalysis = { payload, originalHash };
+        return { phase: 'waiting-selection' };
+      }
+      const task = preparing
+        ? startBidSectionPreparation(payload, originalHash)
+        : startManagedTask('bid-analysis', payload, runBidAnalysisTask);
+      pendingBidAnalysis = null;
+      return { phase: preparing ? 'preparing' : 'analysis-started', taskId: task.task_id };
+    },
+    // 保存投标范围后取走同一份原请求，重复确认不会再启动解析。
+    selectBidSection(section) {
+      assertDocumentMutationIdle();
+      const result = technicalPlanStore.selectBidSection(section);
+      if (pendingBidAnalysis) {
+        const { payload, originalHash } = pendingBidAnalysis;
+        pendingBidAnalysis = null;
+        if (technicalPlanStore.loadTechnicalPlan().tenderFile?.originalContentHash === originalHash) {
+          startManagedTask('bid-analysis', payload, runBidAnalysisTask);
+        }
+      }
+      return result;
+    },
+    // 只有显式放弃选段才取消待续接请求，切页不取消。
+    cancelPendingBidAnalysis() {
+      pendingBidAnalysis = null;
     },
     // 生成范围、原方案目录方式、字数和参考知识库只读第 2 步已保存的生成设置，启动时不回写。
     startOutlineGeneration(payload) {

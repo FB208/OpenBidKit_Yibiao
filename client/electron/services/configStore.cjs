@@ -219,6 +219,7 @@ const defaultConfig = {
     },
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
+    jev_api_key: '',
   },
   update_channel: 'atomgit',
   gpu_hardware_acceleration_enabled: true,
@@ -311,7 +312,7 @@ function normalizeComponentConcurrencyLimit(value, fallback = DEFAULT_COMPONENT_
   return Math.min(MAX_COMPONENT_CONCURRENCY_LIMIT, Math.max(MIN_COMPONENT_CONCURRENCY_LIMIT, Math.round(number)));
 }
 
-// 归一化组件设置（文件解析 + Mermaid/HTML 转换并发）。
+// 归一化文件解析、转图并发和 Jev API Key 等组件设置。
 function normalizeComponentsConfig(source) {
   const components = source && typeof source === 'object' ? source : {};
   const fileParser = components.file_parser && typeof components.file_parser === 'object'
@@ -330,6 +331,9 @@ function normalizeComponentsConfig(source) {
       components.html_concurrency_limit,
       defaultConfig.components.html_concurrency_limit,
     ),
+    jev_api_key: typeof components.jev_api_key === 'string'
+      ? components.jev_api_key.trim()
+      : defaultConfig.components.jev_api_key,
   };
 }
 

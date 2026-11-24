@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 45;
+const schemaVersion = 46;
 
 // 保存当前工作区的一份开票信息。
 function createOfficialInvoiceSchema(db) {
@@ -46,6 +46,7 @@ function createInitialSchema(db) {
       pending_tender_total_declared INTEGER,
       pending_tender_created_at TEXT,
       bid_sections_json TEXT,
+      bid_section_auto_result_json TEXT,
       bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
       bid_section_extraction_error TEXT,
       outline_word_control_snapshot_json TEXT,
@@ -150,6 +151,7 @@ function createTechnicalPlanGenerationConfigSchema(db) {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
       bid_section_mode TEXT NOT NULL DEFAULT 'single',
+      bid_section_auto_enabled INTEGER NOT NULL DEFAULT 0,
       outline_mode TEXT NOT NULL DEFAULT 'response-file',
       outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
       minimum_words INTEGER NOT NULL DEFAULT 0,
@@ -1540,6 +1542,8 @@ function removeKnowledgeMigrationMeta(db) {
 }
 
 const schemaHealthColumnGroups = [
+  { version: 46, table: 'technical_plan_meta', columns: { bid_section_auto_result_json: 'TEXT' } },
+  { version: 46, table: 'technical_plan_generation_config', columns: { bid_section_auto_enabled: 'INTEGER NOT NULL DEFAULT 0' } },
   {
     version: 1,
     table: 'technical_plan_meta',
@@ -2098,6 +2102,15 @@ const migrations = [
     version: 45,
     description: '技术方案新增投标文件 AI 调整启用标记',
     up: addTechnicalPlanDocumentAdjustmentFlag,
+  },
+  {
+    version: 46,
+    description: '技术方案新增标段自动判断设置及原文判定结果',
+    // 保留原有生效模式，只新增自动判断所需的两个字段。
+    up(db) {
+      addColumnIfMissing(db, 'technical_plan_meta', 'bid_section_auto_result_json', 'TEXT');
+      addColumnIfMissing(db, 'technical_plan_generation_config', 'bid_section_auto_enabled', 'INTEGER NOT NULL DEFAULT 0');
+    },
   },
 ];
 

@@ -17,7 +17,6 @@ const {
   getWorkspaceTrashDir,
 } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
-const { detectBidSections } = require('../utils/bidSectionDetector.cjs');
 const { compactLogError, createDeveloperLogger } = require('../utils/developerLog.cjs');
 const { forceRemoveSync, isFileLockError } = require('../utils/forceRemove.cjs');
 const {
@@ -83,6 +82,8 @@ const initialState = {
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
   bidSectionMode: 'single',
+  bidSectionAutoEnabled: false,
+  bidSectionAutoMode: null,
   bidSections: [],
   bidSectionExtractionStatus: 'idle',
   bidSectionExtractionError: undefined,
@@ -389,6 +390,7 @@ function createDefaultGenerationConfig(exportTemplateId = defaultExportTemplateI
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: 'single',
+    bidSectionAutoEnabled: false,
     outlineMode,
     outlineExpansionMode: 'ai-complement',
     outlineWordControlOptions: { ...defaultOutlineWordControlOptions },
@@ -411,6 +413,7 @@ function normalizeGenerationConfig(config) {
     bidAnalysisMode: bidAnalysis.mode,
     bidAnalysisSelectedTaskIds: bidAnalysis.selectedTaskIds,
     bidSectionMode: normalizeBidSectionMode(source.bidSectionMode),
+    bidSectionAutoEnabled: source.bidSectionAutoEnabled === true,
     outlineMode,
     outlineExpansionMode: isValidOutlineExpansionMode(source.outlineExpansionMode) ? source.outlineExpansionMode : defaults.outlineExpansionMode,
     outlineWordControlOptions: normalizeOutlineWordControlOptions(source.outlineWordControlOptions),
@@ -699,14 +702,14 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const content = defaults.contentGenerationOptions;
     db.prepare(`
       INSERT INTO technical_plan_generation_config (
-        id, bid_analysis_mode, bid_section_mode, outline_mode, outline_expansion_mode,
+        id, bid_analysis_mode, bid_section_mode, bid_section_auto_enabled, outline_mode, outline_expansion_mode,
         minimum_words, maximum_words, section_words, global_facts_mode, export_template_id, export_template_scope,
         use_ai_images, use_mermaid_images,
         use_html_images, html_image_types, table_requirement, image_quantity, html_image_optimization, word_count_repair, layout_check,
         use_single_image_layout, use_image_text_layout, use_three_images_layout, use_four_images_layout,
         created_at, updated_at
       ) VALUES (
-        1, @bid_analysis_mode, @bid_section_mode, @outline_mode, @outline_expansion_mode,
+        1, @bid_analysis_mode, @bid_section_mode, @bid_section_auto_enabled, @outline_mode, @outline_expansion_mode,
         @minimum_words, @maximum_words, @section_words, @global_facts_mode, @export_template_id, @export_template_scope,
         @use_ai_images, @use_mermaid_images,
         @use_html_images, @html_image_types, @table_requirement, @image_quantity, @html_image_optimization, @word_count_repair, @layout_check,
@@ -716,6 +719,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     `).run({
       bid_analysis_mode: defaults.bidAnalysisMode,
       bid_section_mode: defaults.bidSectionMode,
+      bid_section_auto_enabled: toDbBool(defaults.bidSectionAutoEnabled),
       outline_mode: defaults.outlineMode,
       outline_expansion_mode: defaults.outlineExpansionMode,
       minimum_words: defaults.outlineWordControlOptions.minimumWords,
@@ -764,6 +768,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidAnalysisMode: row.bid_analysis_mode,
       bidAnalysisSelectedTaskIds: loadGenerationBidTaskIds(),
       bidSectionMode: row.bid_section_mode,
+      bidSectionAutoEnabled: fromDbBool(row.bid_section_auto_enabled),
       outlineMode: row.outline_mode,
       outlineExpansionMode: row.outline_expansion_mode,
       outlineWordControlOptions: {
@@ -802,6 +807,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       UPDATE technical_plan_generation_config SET
         bid_analysis_mode = @bid_analysis_mode,
         bid_section_mode = @bid_section_mode,
+        bid_section_auto_enabled = @bid_section_auto_enabled,
         outline_mode = @outline_mode,
         outline_expansion_mode = @outline_expansion_mode,
         minimum_words = @minimum_words,
@@ -828,6 +834,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     `).run({
       bid_analysis_mode: normalized.bidAnalysisMode,
       bid_section_mode: normalized.bidSectionMode,
+      bid_section_auto_enabled: toDbBool(normalized.bidSectionAutoEnabled),
       outline_mode: normalized.outlineMode,
       outline_expansion_mode: normalized.outlineExpansionMode,
       minimum_words: wordControl.minimumWords,
@@ -954,11 +961,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
       throw error;
     }
-  }
-
-  function checkBidSections() {
-    const markdown = readOriginalTenderMarkdown();
-    return detectBidSections(markdown);
   }
 
   function readOriginalPlanMarkdown() {
@@ -1291,9 +1293,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   function saveTask(type, task) {
     if (!task) {
       db.prepare('DELETE FROM technical_plan_tasks WHERE type = ?').run(type);
-      if (type === 'bid-section-extraction') {
-        updateMeta({ bid_section_extraction_status: 'idle', bid_section_extraction_error: null });
-      }
       return;
     }
     const timestamp = now();
@@ -1321,12 +1320,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       updated_at: task.updated_at || timestamp,
     });
     taskLogStore.sync('technical-plan', type, String(task.task_id || ''), task.logs, task.updated_at || timestamp);
-    if (type === 'bid-section-extraction') {
-      updateMeta({
-        bid_section_extraction_status: normalizeBidSectionExtractionStatus(task.status),
-        bid_section_extraction_error: task.error ? String(task.error) : null,
-      });
-    }
   }
 
   function loadTasks() {
@@ -1768,6 +1761,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       pending_tender_sections_json: null,
       pending_tender_total_declared: null,
       pending_tender_created_at: null,
+      bid_section_auto_result_json: null,
       bid_sections_json: null,
       bid_section_extraction_status: 'idle',
       bid_section_extraction_error: null,
@@ -2029,6 +2023,12 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     if (hasOwn(partial, 'bidAnalysisMode')) generationConfigPatch.bidAnalysisMode = partial.bidAnalysisMode;
     if (hasOwn(partial, 'bidAnalysisSelectedTaskIds')) generationConfigPatch.bidAnalysisSelectedTaskIds = partial.bidAnalysisSelectedTaskIds;
     if (hasOwn(partial, 'bidSectionMode')) generationConfigPatch.bidSectionMode = partial.bidSectionMode;
+    if (hasOwn(partial, 'bidSectionAutoMode')) {
+      metaUpdates.bid_section_auto_result_json = JSON.stringify({
+        originalHash: readMetaRow().tender_original_markdown_hash,
+        mode: partial.bidSectionAutoMode,
+      });
+    }
     if (hasOwn(partial, 'bidSections')) metaUpdates.bid_sections_json = jsonOrNull(normalizeBidSections(partial.bidSections));
     if (hasOwn(partial, 'bidSectionExtractionStatus')) metaUpdates.bid_section_extraction_status = normalizeBidSectionExtractionStatus(partial.bidSectionExtractionStatus);
     if (hasOwn(partial, 'bidSectionExtractionError')) metaUpdates.bid_section_extraction_error = partial.bidSectionExtractionError ? String(partial.bidSectionExtractionError) : null;
@@ -2098,7 +2098,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     const outlineData = loadOutlineData(meta);
     const tasks = loadTasks();
     const bidSections = normalizeBidSections(safeJsonParse(meta.bid_sections_json, []));
-    const bidSectionExtractionTask = tasks.bidSectionExtractionTask;
+    const autoResult = safeJsonParse(meta.bid_section_auto_result_json, null);
     const tenderFiles = loadTenderSourceFiles(meta);
     const tenderFile = meta.tender_markdown_path ? {
       fileName: meta.tender_file_name || '技术方案招标文件',
@@ -2107,7 +2107,7 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       contentHash: meta.tender_markdown_hash || '',
       originalMarkdownPath: meta.tender_original_markdown_path || meta.tender_markdown_path,
       originalMarkdownChars: Number(meta.tender_original_markdown_chars || meta.tender_markdown_chars || 0),
-      originalContentHash: meta.tender_original_markdown_hash || meta.tender_markdown_hash || '',
+      originalContentHash: meta.tender_original_markdown_hash || '',
       parserLabel: meta.tender_parser_label || undefined,
       importedAt: meta.tender_imported_at || undefined,
       selectedSectionId: meta.selected_section_id || undefined,
@@ -2139,11 +2139,11 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
       bidAnalysisTasks,
       bidAnalysisProgress: calculateBidProgress(bidAnalysisMode, bidAnalysisTasks, bidAnalysisSelectedTaskIds, generationConfig.outlineMode),
       bidSectionMode: generationConfig.bidSectionMode,
+      bidSectionAutoEnabled: generationConfig.bidSectionAutoEnabled,
+      bidSectionAutoMode: autoResult && autoResult.originalHash === meta.tender_original_markdown_hash ? autoResult.mode : null,
       bidSections,
-      bidSectionExtractionStatus: bidSectionExtractionTask?.status
-        ? normalizeBidSectionExtractionStatus(bidSectionExtractionTask.status)
-        : normalizeBidSectionExtractionStatus(meta.bid_section_extraction_status),
-      bidSectionExtractionError: bidSectionExtractionTask?.error || meta.bid_section_extraction_error || undefined,
+      bidSectionExtractionStatus: normalizeBidSectionExtractionStatus(meta.bid_section_extraction_status),
+      bidSectionExtractionError: meta.bid_section_extraction_error || undefined,
       outlineMode: generationConfig.outlineMode,
       outlineExpansionMode: generationConfig.outlineExpansionMode,
       globalFactsMode: generationConfig.globalFactsMode,
@@ -2266,11 +2266,13 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     });
   }
 
-  function saveBidAnalysisConfig({ mode, selectedTaskIds, bidSectionMode } = {}) {
+  // 保存解析项和范围偏好；选择自动时保留当前生效模式，等后台判定。
+  function saveBidAnalysisConfig({ mode, selectedTaskIds, bidSectionMode, bidSectionAutoEnabled } = {}) {
     const config = normalizeBidAnalysisConfig(mode, selectedTaskIds, loadGenerationConfig().outlineMode);
     saveGenerationConfig({
       bidAnalysisMode: config.mode,
       bidAnalysisSelectedTaskIds: config.selectedTaskIds,
+      ...(bidSectionAutoEnabled === undefined ? {} : { bidSectionAutoEnabled }),
       ...(bidSectionMode === undefined ? {} : { bidSectionMode }),
     });
   }
@@ -2780,6 +2782,9 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
 
     if (aiSections.length >= 2) {
       const matched = aiSections.find((section) => section.id === selected.id) || selected;
+      if (matched.id === meta.selected_section_id) {
+        return { success: true, message: `已选择【${matched.title}】`, markdown: readTenderMarkdown() };
+      }
       const originalMarkdown = readOriginalTenderMarkdown().trim();
       if (!originalMarkdown) {
         throw new Error('原始招标文件内容为空，请重新上传');
@@ -2848,7 +2853,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
     removeTenderDocument,
     importOriginalPlanDocument,
     removeOriginalPlanDocument,
-    checkBidSections,
     prepareBidSectionExtraction,
     selectBidSection,
     readTenderMarkdown,

@@ -1684,6 +1684,33 @@
   border-right: 1px solid var(--yb-border-soft);
 }
 
+.content-generation-workspace--technical {
+  grid-template-columns: var(--content-outline-width) var(--content-outline-splitter-width) minmax(0, 1fr);
+}
+
+.content-generation-workspace--technical > .content-outline-panel {
+  border-right: 0;
+}
+
+.content-outline-resize-handle {
+  display: grid;
+  justify-items: center;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.content-outline-resize-handle::before {
+  width: 1px;
+  background: var(--yb-border-soft);
+  content: '';
+}
+
+.content-outline-resize-handle:is(:hover, :active, :focus-visible)::before {
+  width: 2px;
+  background: var(--yb-primary);
+}
+
 .content-outline-stats {
   display: grid;
   gap: 10px;
@@ -1758,6 +1785,61 @@
 
 .content-outline-node {
   margin-left: calc(var(--content-level) * 16px);
+}
+
+/* 技术方案正文页按行缩进，子树容器不再累加缩进。 */
+.content-generation-workspace--technical .content-outline-node {
+  margin-left: 0;
+}
+
+.content-outline-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  margin-inline-start: calc(min(var(--content-level), 4) * 10px);
+  margin-bottom: 8px;
+}
+
+.content-outline-row > .content-outline-item {
+  grid-column: 2;
+  gap: 8px;
+  margin-bottom: 0;
+  padding-inline: 8px;
+}
+
+.content-outline-row .content-outline-text strong {
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.content-outline-row .content-outline-item em {
+  white-space: nowrap;
+}
+
+.content-outline-toggle {
+  display: grid;
+  width: 100%;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  color: var(--yb-text-soft);
+  background: transparent;
+  border: 0;
+  border-radius: var(--yb-radius-sm);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.content-outline-toggle:hover {
+  color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.1);
+}
+
+.content-outline-toggle[aria-expanded='true'] > span {
+  transform: rotate(90deg);
 }
 
 .content-outline-item {

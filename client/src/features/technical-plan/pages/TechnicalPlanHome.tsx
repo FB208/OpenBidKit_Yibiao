@@ -215,8 +215,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const isBidAnalysisTaskRunning = state.bidAnalysisTask?.status === 'running' || state.bidAnalysisTask?.status === 'pausing';
   const selectedBidSectionValid = state.bidSectionMode !== 'multiple'
     || Boolean(state.tenderFile?.selectedSectionId && state.bidSections.some((section) => section.id === state.tenderFile?.selectedSectionId));
-  const bidSectionReady = state.bidSectionMode !== 'multiple'
-    || (state.bidSectionExtractionStatus === 'success' && !isBidSectionExtractionRunning && selectedBidSectionValid);
+  const autoSectionReady = !state.bidSectionAutoEnabled || state.bidSectionAutoMode === state.bidSectionMode;
+  const bidSectionReady = autoSectionReady && !isBidSectionExtractionRunning && (state.bidSectionMode !== 'multiple'
+    || (state.bidSectionExtractionStatus === 'success' && selectedBidSectionValid));
   const bidAnalysisReady = requiredBidAnalysisReady && !isBidAnalysisTaskRunning && bidSectionReady;
   const technicalScoreMissing = state.bidAnalysisTasks.techRequirements?.status === 'success'
     && isMissingTechnicalScoreItems(state.bidAnalysisTasks.techRequirements.content);
@@ -242,7 +243,7 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     ));
   // 任一技术方案任务进行中（含正文已暂停）都锁定导出；失败不算进行中，导出时由 Main 跳过未完成小节。
   const exportBlockingTask = ([
-    ['多标段识别', state.bidSectionExtractionTask],
+    ['标段识别', state.bidSectionExtractionTask],
     ['招标文件解析', state.bidAnalysisTask],
     ['目录生成', state.outlineGenerationTask],
     ['目录AI调整', state.outlineAdjustmentTask],
@@ -266,7 +267,9 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const nextTooltip = state.step === 'document-analysis' && !state.tenderFile
       ? '上传完招标文件后才能进入下一步'
       : state.step === 'bid-analysis' && isBidSectionExtractionRunning
-          ? '多标段识别任务仍在运行，请等待当前任务结束'
+          ? '标段识别任务仍在运行，请等待当前任务结束'
+          : state.step === 'bid-analysis' && !autoSectionReady
+            ? '请先完成自动识别标段'
           : state.step === 'bid-analysis' && state.bidSectionMode === 'multiple' && state.bidSectionExtractionStatus === 'error'
             ? '请重新识别标段或切回单标段'
             : state.step === 'bid-analysis' && state.bidSectionMode === 'multiple' && !selectedBidSectionValid
@@ -530,9 +533,11 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
             ...prev,
             bidSectionExtractionTask: trimTaskLogs(technicalPlan.bidSectionExtractionTask) || latestTask,
             bidSectionMode: technicalPlan.bidSectionMode ?? prev.bidSectionMode,
+            bidSectionAutoEnabled: technicalPlan.bidSectionAutoEnabled ?? prev.bidSectionAutoEnabled,
+            bidSectionAutoMode: hasOwnField(technicalPlan, 'bidSectionAutoMode') ? technicalPlan.bidSectionAutoMode ?? null : prev.bidSectionAutoMode,
             bidSections: Array.isArray(technicalPlan.bidSections) ? technicalPlan.bidSections : prev.bidSections,
             bidSectionExtractionStatus: technicalPlan.bidSectionExtractionStatus ?? prev.bidSectionExtractionStatus,
-            bidSectionExtractionError: technicalPlan.bidSectionExtractionError ?? prev.bidSectionExtractionError,
+            bidSectionExtractionError: hasOwnField(technicalPlan, 'bidSectionExtractionError') ? technicalPlan.bidSectionExtractionError : prev.bidSectionExtractionError,
             tenderFile: technicalPlan.tenderFile ?? prev.tenderFile,
             bidAnalysisTask: hasOwnField(technicalPlan, 'bidAnalysisTask') ? trimTaskLogs(technicalPlan.bidAnalysisTask) : prev.bidAnalysisTask,
             bidAnalysisTasks: hasOwnField(technicalPlan, 'bidAnalysisTasks') ? (technicalPlan.bidAnalysisTasks || {}) : prev.bidAnalysisTasks,
@@ -1277,6 +1282,8 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
           outlineMode={state.outlineMode}
           selectedTaskIds={state.bidAnalysisSelectedTaskIds}
           bidSectionMode={state.bidSectionMode}
+          bidSectionAutoEnabled={state.bidSectionAutoEnabled}
+          bidSectionAutoMode={state.bidSectionAutoMode}
           bidSections={state.bidSections}
           bidSectionExtractionTask={state.bidSectionExtractionTask}
           bidSectionExtractionStatus={state.bidSectionExtractionStatus}

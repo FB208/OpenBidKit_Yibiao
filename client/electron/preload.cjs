@@ -128,6 +128,7 @@ const bridge = {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
+    testJev: (apiKey) => ipcRenderer.invoke('ai:test-jev', apiKey),
     onHttpError: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('ai:http-error', listener);
@@ -253,7 +254,6 @@ const bridge = {
     removeTenderDocument: (sourceId) => ipcRenderer.invoke('technical-plan:remove-tender-document', sourceId),
     importOriginalPlanDocument: (filePaths) => ipcRenderer.invoke('technical-plan:import-original-plan-document', filePaths),
     removeOriginalPlanDocument: () => ipcRenderer.invoke('technical-plan:remove-original-plan-document'),
-    checkBidSections: () => ipcRenderer.invoke('technical-plan:check-bid-sections'),
     selectBidSection: (selectedSection) => ipcRenderer.invoke('technical-plan:select-bid-section', selectedSection),
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
     readContentWord: (sectionId) => ipcRenderer.invoke('technical-plan:read-content-word', sectionId),
@@ -336,6 +336,7 @@ const bridge = {
   tasks: {
     startBidSectionExtraction: (payload) => ipcRenderer.invoke('tasks:start-bid-section-extraction', payload),
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
+    cancelPendingBidAnalysis: () => ipcRenderer.invoke('tasks:cancel-pending-bid-analysis'),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
     suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
     confirmBusinessFillReview: (payload) => ipcRenderer.invoke('tasks:confirm-business-fill-review', payload),

@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, ProgressBar, useToast } from '../../../shared/ui';
 import { OUTLINE_CONTENT_MODE_LABELS } from '../../../shared/types';
@@ -48,6 +48,8 @@ interface OutlineNodeMeta {
 
 type ContentGenerationAction = 'start' | 'continue' | 'regenerate' | 'regenerate_section';
 
+const OUTLINE_SPLITTER_WIDTH = 8;
+
 // 布局开关只上报当前配图比例档位可用的布局，档位份额为 0 的布局不计入统计。
 function buildImageLayoutUsage(options: ContentGenerationOptions) {
   const defaultShares = getDefaultImageLayoutShares(options.imageQuantity);
@@ -82,16 +84,17 @@ function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
 }
 
-function findItem(items: OutlineItem[], id: string): OutlineItem | null {
+// 查找从目录根节点到目标节点的路径。
+function findItemPath(items: OutlineItem[], id: string): OutlineItem[] | null {
   for (const item of items) {
     if (item.id === id) {
-      return item;
+      return [item];
     }
 
     if (item.children?.length) {
-      const found = findItem(item.children, id);
-      if (found) {
-        return found;
+      const path = findItemPath(item.children, id);
+      if (path) {
+        return [item, ...path];
       }
     }
   }
@@ -250,9 +253,33 @@ function ContentEditPage({
   onBusinessFillReviewSave,
 }: ContentEditPageProps) {
   const { showToast } = useToast();
-  const allLeaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
+  const outline = outlineData?.outline;
+  const allLeaves = useMemo(() => outline ? collectLeafItems(outline) : [], [outline]);
   const leaves = useMemo(() => allLeaves.filter((item) => item.content_mode === 'ai-generate'), [allLeaves]);
   const [selectedItemId, setSelectedItemId] = useState('');
+  const [collapsedOutlineIds, setCollapsedOutlineIds] = useState(() => new Set<string>());
+  const workspaceRef = useRef<HTMLElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState<number>();
+  const [outlineWidth, setOutlineWidth] = useState(360);
+  const outlineDragStart = useRef({ x: 0, width: 0 });
+  const hasOutline = Boolean(outline?.length);
+  const maxOutlineWidth = workspaceWidth === undefined ? 560 : Math.min(560, Math.floor((workspaceWidth - OUTLINE_SPLITTER_WIDTH) / 2));
+  const minOutlineWidth = Math.min(280, maxOutlineWidth);
+  // 显示宽度、指针和键盘共用边界，右侧预览至少保留一半可用宽度。
+  const clampOutlineWidth = (width: number) => Math.min(maxOutlineWidth, Math.max(minOutlineWidth, width));
+  const visibleOutlineWidth = clampOutlineWidth(outlineWidth);
+
+  // 主导航收展或窗口变窄时，按正文工作区的实际尺寸重新限宽。
+  useLayoutEffect(() => {
+    if (!hasOutline) return;
+    const workspace = workspaceRef.current!;
+    const measure = () => setWorkspaceWidth(workspace.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, [hasOutline]);
+
   const [wordPreviewRequest, setWordPreviewRequest] = useState<{ sectionId: string; context: object; version: number }>();
   const [confirmRegenerateItem, setConfirmRegenerateItem] = useState<OutlineItem | null>(null);
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
@@ -277,7 +304,17 @@ function ContentEditPage({
   const [businessReview, setBusinessReview] = useState<BusinessFillReview | null>(null);
   const [businessReviewSaving, setBusinessReviewSaving] = useState(false);
   const firstLeafId = allLeaves[0]?.id || '';
-  const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
+  const selectedItem = useMemo(() => outline && selectedItemId ? findItemPath(outline, selectedItemId)?.at(-1) ?? null : null, [outline, selectedItemId]);
+  // 定位到目录项时展开它的上级；手动折叠不经过这里。
+  const selectOutlineItemById = useCallback((id: string) => {
+    setSelectedItemId(id);
+    setCollapsedOutlineIds((previous) => {
+      if (!previous.size) return previous;
+      const next = new Set(previous);
+      findItemPath(outline!, id)?.slice(0, -1).forEach((item) => next.delete(item.id));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [outline]);
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedIsWord = selectedIsLeaf && selectedItem?.content_mode === 'ai-generate';
   // 清空、目录变化或新任务使旧预览失效；扫描和正式转换进度不触发临时转换。
@@ -602,15 +639,15 @@ function ContentEditPage({
                 : '生成正文';
 
   useEffect(() => {
-    if (!outlineData?.outline?.length) {
+    if (!outline?.length) {
       setSelectedItemId('');
       return;
     }
 
-    if (!selectedItemId || !findItem(outlineData.outline, selectedItemId)) {
-      setSelectedItemId(firstLeafId || outlineData.outline[0].id);
+    if (!selectedItem) {
+      selectOutlineItemById(firstLeafId || outline[0].id);
     }
-  }, [firstLeafId, outlineData, selectedItemId]);
+  }, [firstLeafId, outline, selectedItem, selectOutlineItemById]);
 
   useEffect(() => {
     window.yibiao?.config.load()
@@ -873,7 +910,7 @@ function ContentEditPage({
         consistency_repair_mode: 'agent',
         enable_original_plan_coverage_audit: false,
       }, config);
-      setSelectedItemId(requirementItem.id);
+      selectOutlineItemById(requirementItem.id);
       setRequirementItem(null);
       setRegenerateRequirement('');
       showToast(documentAdjustmentEnabled ? '小节修改已交给 AI 调整，正在后台处理' : '小节重新生成任务已在后台启动', 'success');
@@ -886,7 +923,7 @@ function ContentEditPage({
 
   // 每次明确点击都读取最新正文；重复点击同一小节也生成新的临时 Word。
   const selectOutlineItem = (item: OutlineItem) => {
-    setSelectedItemId(item.id);
+    selectOutlineItemById(item.id);
     if (item.children?.length) return;
     if (item.content_mode === 'ai-generate') {
       setWordPreviewRequest((previous) => ({ sectionId: item.id, context: wordContentContext, version: (previous?.version || 0) + 1 }));
@@ -895,70 +932,91 @@ function ContentEditPage({
     }
   };
 
+  // 每行独立缩进，收起分组时只隐藏目录子树。
   const renderTree = (items: OutlineItem[], level = 0): ReactNode => items.map((item) => {
     const meta = outlineMeta.get(item.id);
     const status = meta?.status || 'idle';
     const isLeaf = !item.children?.length;
+    const isExpanded = !collapsedOutlineIds.has(item.id);
+    const title = formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)]);
     const previewReady = isLeaf && item.content_mode === 'ai-generate' && previewReadySectionIds.has(item.id);
     const leafCount = meta?.leafCount || 0;
     const modeLabel = isLeaf && item.content_mode ? OUTLINE_CONTENT_MODE_LABELS[item.content_mode] : '';
 
     return (
-      <div className="content-outline-node" key={item.id} style={{ '--content-level': level } as CSSProperties}>
-        <button
-          type="button"
-          className={`content-outline-item is-${status}${selectedItemId === item.id ? ' is-active' : ''}`}
-          onClick={() => selectOutlineItem(item)}
-        >
-          <span className="content-outline-dot" aria-hidden="true" />
-          <span className="content-outline-text">
-            <strong>{formatOutlineTitle(item.number, item.title, exportFormat.headings[Math.min(level, 5)])}</strong>
-            <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}`
-              : ruleChapterIds.has(item.id) ? `${modeLabel} · ${rulePageLabel}${rulePage?.phase === 'completed' ? ' · Word 预览' : ''}`
-              : businessChapterIds.has(item.id) ? `${modeLabel} · ${businessPhaseLabel} · Word 预览`
-                : item.content_mode === 'directory-generate' ? `${modeLabel} · 导出时生成` : `${modeLabel || '未标记'} · ${statusLabels[status]}` : `${leafCount} 个小节`}</small>
-          </span>
-          {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
-            <Popover.Root
-              open={!taskBlocksGeneration && confirmRegenerateItem?.id === item.id}
-              onOpenChange={(open) => setConfirmRegenerateItem(open && !taskBlocksGeneration ? item : null)}
+      <div className="content-outline-node" key={item.id}>
+        <div className="content-outline-row" style={{ '--content-level': level } as CSSProperties}>
+          {!isLeaf && (
+            <button
+              type="button"
+              className="content-outline-toggle"
+              aria-label={`${isExpanded ? '折叠' : '展开'} ${title}`}
+              aria-expanded={isExpanded}
+              onClick={() => setCollapsedOutlineIds((previous) => {
+                const next = new Set(previous);
+                if (next.has(item.id)) next.delete(item.id);
+                else next.add(item.id);
+                return next;
+              })}
             >
-              <Popover.Trigger asChild>
-                <em
-                  className={taskBlocksGeneration ? undefined : 'is-clickable'}
-                  aria-disabled={taskBlocksGeneration}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (taskBlocksGeneration) event.preventDefault();
-                  }}
-                >重新生成</em>
-              </Popover.Trigger>
-              <Popover.Portal>
-                <Popover.Content className="content-regenerate-popover" side="top" align="end" sideOffset={8}>
-                  <strong>重新生成此小节？</strong>
-                  <span>{status === 'error' ? '将重新尝试生成失败的小节。' : '将覆盖当前正文内容。'}</span>
-                  <div>
-                    <button
-                      type="button"
-                      className="primary-action"
-                      disabled={taskBlocksGeneration}
-                      onClick={() => {
-                        setRequirementItem(item);
-                        setRegenerateRequirement('');
-                        setConfirmRegenerateItem(null);
-                      }}
-                    >是</button>
-                    <Popover.Close className="secondary-action" type="button">否</Popover.Close>
-                  </div>
-                  <Popover.Arrow className="content-regenerate-popover-arrow" />
-                </Popover.Content>
-              </Popover.Portal>
-            </Popover.Root>
-          ) : (
-            <em>{isLeaf && item.content_mode === 'ai-generate' ? '查看 Word' : statusLabels[status]}</em>
+              <span aria-hidden="true">›</span>
+            </button>
           )}
-        </button>
-        {item.children?.length ? renderTree(item.children, level + 1) : null}
+          <button
+            type="button"
+            className={`content-outline-item is-${status}${selectedItemId === item.id ? ' is-active' : ''}`}
+            onClick={() => selectOutlineItem(item)}
+          >
+            <span className="content-outline-dot" aria-hidden="true" />
+            <span className="content-outline-text">
+              <strong title={title}>{title}</strong>
+              <small>{isLeaf ? item.content_mode === 'ai-generate' ? `${modeLabel} · ${status === 'success' ? '已完成' : statusLabels[status]} · ${previewReady ? '可预览' : 'Word 预览'}`
+                : ruleChapterIds.has(item.id) ? `${modeLabel} · ${rulePageLabel}${rulePage?.phase === 'completed' ? ' · Word 预览' : ''}`
+                : businessChapterIds.has(item.id) ? `${modeLabel} · ${businessPhaseLabel} · Word 预览`
+                  : item.content_mode === 'directory-generate' ? `${modeLabel} · 导出时生成` : `${modeLabel || '未标记'} · ${statusLabels[status]}` : `${leafCount} 个小节`}</small>
+            </span>
+            {isLeaf && item.content_mode === 'ai-generate' && (status === 'success' || status === 'error') ? (
+              <Popover.Root
+                open={!taskBlocksGeneration && confirmRegenerateItem?.id === item.id}
+                onOpenChange={(open) => setConfirmRegenerateItem(open && !taskBlocksGeneration ? item : null)}
+              >
+                <Popover.Trigger asChild>
+                  <em
+                    className={taskBlocksGeneration ? undefined : 'is-clickable'}
+                    aria-disabled={taskBlocksGeneration}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (taskBlocksGeneration) event.preventDefault();
+                    }}
+                  >重新生成</em>
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Content className="content-regenerate-popover" side="top" align="end" sideOffset={8}>
+                    <strong>重新生成此小节？</strong>
+                    <span>{status === 'error' ? '将重新尝试生成失败的小节。' : '将覆盖当前正文内容。'}</span>
+                    <div>
+                      <button
+                        type="button"
+                        className="primary-action"
+                        disabled={taskBlocksGeneration}
+                        onClick={() => {
+                          setRequirementItem(item);
+                          setRegenerateRequirement('');
+                          setConfirmRegenerateItem(null);
+                        }}
+                      >是</button>
+                      <Popover.Close className="secondary-action" type="button">否</Popover.Close>
+                    </div>
+                    <Popover.Arrow className="content-regenerate-popover-arrow" />
+                  </Popover.Content>
+                </Popover.Portal>
+              </Popover.Root>
+            ) : (
+              <em>{isLeaf && item.content_mode === 'ai-generate' ? '查看 Word' : statusLabels[status]}</em>
+            )}
+          </button>
+        </div>
+        {isExpanded && item.children?.length ? renderTree(item.children, level + 1) : null}
       </div>
     );
   });
@@ -1056,8 +1114,15 @@ function ContentEditPage({
         </div>
       </section>
 
-      <section className="content-generation-workspace">
-        <aside className="content-outline-panel">
+      <section
+        className="content-generation-workspace content-generation-workspace--technical"
+        ref={workspaceRef}
+        style={{
+          '--content-outline-width': `${visibleOutlineWidth}px`,
+          '--content-outline-splitter-width': `${OUTLINE_SPLITTER_WIDTH}px`,
+        } as CSSProperties}
+      >
+        <aside className="content-outline-panel" id="technical-content-outline">
           <div className="analysis-result-head">
             <strong>标书目录</strong>
             <span>{leaves.length} 个小节</span>
@@ -1101,6 +1166,41 @@ function ContentEditPage({
             {renderTree(outlineData.outline)}
           </div>
         </aside>
+
+        <div
+          className="content-outline-resize-handle"
+          role="separator"
+          tabIndex={0}
+          aria-label="标书目录宽度"
+          aria-controls="technical-content-outline"
+          aria-orientation="vertical"
+          aria-valuemin={minOutlineWidth}
+          aria-valuemax={maxOutlineWidth}
+          aria-valuenow={visibleOutlineWidth}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            // 捕获指针，移出窄拖柄也能继续拖动；松开或取消时由浏览器释放。
+            event.preventDefault();
+            event.currentTarget.focus({ preventScroll: true });
+            outlineDragStart.current = { x: event.clientX, width: visibleOutlineWidth };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            // 以按下时的宽度和实际位移调整，拖柄不会跳动。
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              const { x, width } = outlineDragStart.current;
+              setOutlineWidth(clampOutlineWidth(width + event.clientX - x));
+            }
+          }}
+          onKeyDown={(event) => {
+            // 分隔线获得焦点后，左右键调整目录宽度。
+            const delta = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0;
+            if (delta) {
+              event.preventDefault();
+              setOutlineWidth(clampOutlineWidth(visibleOutlineWidth + delta));
+            }
+          }}
+        />
 
         <article className="content-reader-panel">
           <div className="content-reader-head">

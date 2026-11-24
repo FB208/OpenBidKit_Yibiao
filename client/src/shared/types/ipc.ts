@@ -5,7 +5,7 @@ import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoRes
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BlindCheckCredentialWord, BlindCheckPreset, BlindCheckProfile, BlindCheckTenderSources, BlindCheckWorkspacePatch, BlindCheckWorkspaceState } from '../../features/blind-check/types';
-import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, BidTemplateInspection, BusinessFillReview, BusinessFillReviewSubmission, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanGenerationConfig, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
+import type { BidAnalysisLaunchResult, BidAnalysisMode, BidAnalysisStartRequest, BidAnalysisTaskState, BidSectionMode, BidTemplateInspection, BusinessFillReview, BusinessFillReviewSubmission, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanGenerationConfig, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
 import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
 import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey, CredentialLibraryImportResult, CredentialLibraryMutationResult, CredentialLibraryProfile, CredentialLibrarySnapshot, CredentialOtherMaterial, CredentialProject, CredentialRecordSavePayload } from '../../features/credential-library/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
@@ -714,6 +714,7 @@ export interface YibiaoBridge {
     chat: (request: ChatCompletionRequest) => Promise<string>;
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
+    testJev: (apiKey: string) => Promise<void>;
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
     /** 易标官方 API 返回余额不足时触发，由主窗口统一跳转充值。 */
     onBalanceInsufficient: (callback: () => void) => () => void;
@@ -823,7 +824,6 @@ export interface YibiaoBridge {
       markdown?: string;
     }>;
     removeOriginalPlanDocument: () => Promise<{ success: boolean; message?: string }>;
-    checkBidSections: () => Promise<{ hasMultiple: boolean; totalDeclared?: number | null }>;
     selectBidSection: (selectedSection: DetectedBidSection) => Promise<{ success: boolean; message?: string; markdown: string }>;
     readTenderMarkdown: () => Promise<string>;
     readContentWord: (sectionId: string) => Promise<Uint8Array | null>;
@@ -831,7 +831,7 @@ export interface YibiaoBridge {
     previewBusinessChapterWord: (nodeId: string) => Promise<Uint8Array | null>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<void>;
-    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;
+    saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode; bidSectionAutoEnabled?: boolean }) => Promise<void>;
     saveOutlineSelection: (payload: SaveOutlineSelectionRequest) => Promise<{ success: boolean }>;
     saveOutline: (payload: SaveOutlineRequest) => Promise<Partial<TechnicalPlanState>>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<Partial<TechnicalPlanState>>;
@@ -909,7 +909,8 @@ export interface YibiaoBridge {
   };
   tasks: {
     startBidSectionExtraction: (payload?: unknown) => Promise<unknown>;
-    startBidAnalysis: (payload: unknown) => Promise<unknown>;
+    startBidAnalysis: (payload: BidAnalysisStartRequest) => Promise<BidAnalysisLaunchResult>;
+    cancelPendingBidAnalysis: () => Promise<void>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
     suppressOutlineSelectionAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
     confirmBusinessFillReview: (payload: { taskId: string } & BusinessFillReviewSubmission) => Promise<{ success: boolean }>;

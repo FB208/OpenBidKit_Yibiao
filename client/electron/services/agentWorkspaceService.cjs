@@ -122,7 +122,7 @@ function createAgentWorkspaceService({ agentService, taskService, technicalPlanS
 
   const technicalPlanTaskLabels = {
     'bid-document-adjustment': '投标文件AI调整',
-    'bid-section-extraction': '多标段识别',
+    'bid-section-extraction': '标段识别',
     'bid-analysis': '招标文件解析',
     'outline-generation': '目录生成',
     'outline-adjustment': '目录AI调整',

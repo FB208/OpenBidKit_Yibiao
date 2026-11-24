@@ -1497,6 +1497,31 @@ button:disabled {
   white-space: nowrap;
 }
 
+.ad-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ad-status-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ad-status-badge.is-enabled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.ad-status-badge.is-disabled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .resource-tag-list span {
   white-space: nowrap;
 }

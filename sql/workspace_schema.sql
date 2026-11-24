@@ -14,7 +14,7 @@ PRAGMA busy_timeout = 5000;
 
 -- 目标完整结构版本。
 -- 运行时代码应通过 PRAGMA user_version 判断是否需要自动升级。
-PRAGMA user_version = 44;
+PRAGMA user_version = 46;
 
 -- ============================================================================
 -- 技术方案 technical_plan_*（v1 已落地）
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_meta (
   pending_tender_total_declared INTEGER,
   pending_tender_created_at TEXT,
   bid_sections_json TEXT,
+  bid_section_auto_result_json TEXT,
   bid_section_extraction_status TEXT NOT NULL DEFAULT 'idle',
   bid_section_extraction_error TEXT,
   -- 目录生成成功时固化的字数控制生效快照；当前可编辑配置在统一生成配置表。
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS technical_plan_generation_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   bid_analysis_mode TEXT NOT NULL DEFAULT 'key',
   bid_section_mode TEXT NOT NULL DEFAULT 'single',
+  bid_section_auto_enabled INTEGER NOT NULL DEFAULT 0,
   outline_mode TEXT NOT NULL DEFAULT 'response-file',
   outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
   minimum_words INTEGER NOT NULL DEFAULT 0,
