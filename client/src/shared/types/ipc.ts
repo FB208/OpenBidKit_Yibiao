@@ -714,7 +714,7 @@ export interface YibiaoBridge {
     chat: (request: ChatCompletionRequest) => Promise<string>;
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
-    testJev: (apiKey: string) => Promise<void>;
+    testJev: (input: { baseUrl: string; modelName: string; apiKey: string }) => Promise<void>;
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
     /** 易标官方 API 返回余额不足时触发，由主窗口统一跳转充值。 */
     onBalanceInsufficient: (callback: () => void) => () => void;

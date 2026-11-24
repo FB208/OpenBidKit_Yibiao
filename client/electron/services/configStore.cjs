@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const jevDefaults = require('../shared/jevDefaults.json');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 const { defaultExportFormat, normalizeExportFormat } = require('./exportFormatDefaults.cjs');
@@ -219,6 +220,8 @@ const defaultConfig = {
     },
     mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
     html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
+    jev_base_url: jevDefaults.baseUrl,
+    jev_model_name: jevDefaults.modelName,
     jev_api_key: '',
   },
   update_channel: 'atomgit',
@@ -312,7 +315,7 @@ function normalizeComponentConcurrencyLimit(value, fallback = DEFAULT_COMPONENT_
   return Math.min(MAX_COMPONENT_CONCURRENCY_LIMIT, Math.max(MIN_COMPONENT_CONCURRENCY_LIMIT, Math.round(number)));
 }
 
-// 归一化文件解析、转图并发和 Jev API Key 等组件设置。
+// 归一化文件解析、转图并发和 Jev 连接设置。
 function normalizeComponentsConfig(source) {
   const components = source && typeof source === 'object' ? source : {};
   const fileParser = components.file_parser && typeof components.file_parser === 'object'
@@ -331,6 +334,8 @@ function normalizeComponentsConfig(source) {
       components.html_concurrency_limit,
       defaultConfig.components.html_concurrency_limit,
     ),
+    jev_base_url: (components.jev_base_url ?? defaultConfig.components.jev_base_url).trim(),
+    jev_model_name: (components.jev_model_name ?? defaultConfig.components.jev_model_name).trim(),
     jev_api_key: typeof components.jev_api_key === 'string'
       ? components.jev_api_key.trim()
       : defaultConfig.components.jev_api_key,

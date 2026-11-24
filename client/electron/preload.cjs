@@ -128,7 +128,7 @@ const bridge = {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
-    testJev: (apiKey) => ipcRenderer.invoke('ai:test-jev', apiKey),
+    testJev: (input) => ipcRenderer.invoke('ai:test-jev', input),
     onHttpError: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('ai:http-error', listener);

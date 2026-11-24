@@ -366,10 +366,8 @@ async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS
   }
 }
 
-// 通过 TypeSafe 请求一个二分类答案，沿用文本请求统计。
-async function fetchJevNoul(app, config, { apiKey, state, question, signal }) {
-  const url = 'https://api.typesafe.ai/v1/systemone';
-  const model = 'jev-latest';
+// 向指定 Jev 端点和模型请求二分类答案，沿用文本请求统计。
+async function fetchJevNoul(app, config, { baseUrl: url, modelName: model, apiKey, state, question, signal }) {
   const body = JSON.stringify({ model, state, questions: { result: { ...question, type: 'noul' } } });
   const trackedConfig = { ...config, text_model_provider: 'jev', base_url: url, model_name: model };
   let usage;
@@ -2699,11 +2697,20 @@ function createAiService({ app, configStore }) {
       });
     },
 
-    // 仅测试当前输入的 Key，不修改已保存的组件配置。
-    async testJev(apiKey) {
+    // 测试当前输入的 Jev 配置，不修改已保存的组件配置。
+    async testJev({ baseUrl, modelName, apiKey }) {
+      const url = baseUrl.trim();
+      const model = modelName.trim();
       const key = apiKey.trim();
+      const protocol = URL.parse(url)?.protocol;
+      if (protocol !== 'http:' && protocol !== 'https:') {
+        throw new Error('请填写有效的 Jev Base URL（HTTP 或 HTTPS）');
+      }
+      if (!model) throw new Error('请填写 Jev 模型名称');
       if (!key) throw new Error('请填写 Jev API Key');
       await service.requestJevNoul({
+        baseUrl: url,
+        modelName: model,
         apiKey: key,
         state: '本项目划分为两个独立采购包。',
         question: { instructions: '本项目是否划分为多个独立采购包？' },

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import jevDefaults from '../../../../electron/shared/jevDefaults.json';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppDialog, AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
@@ -502,6 +503,8 @@ function normalizeComponentsState(components?: Partial<ComponentsConfig>): Setti
     },
     mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(components?.mermaid_concurrency_limit),
     html_concurrency_limit: normalizeComponentConcurrencyLimit(components?.html_concurrency_limit),
+    jev_base_url: components?.jev_base_url ?? '',
+    jev_model_name: components?.jev_model_name ?? jevDefaults.modelName,
     jev_api_key: components?.jev_api_key ?? '',
   };
 }
@@ -515,6 +518,8 @@ function componentsFromState(components: SettingsPageState['components']): Compo
     },
     mermaid_concurrency_limit: normalizeComponentConcurrencyLimit(components.mermaid_concurrency_limit),
     html_concurrency_limit: normalizeComponentConcurrencyLimit(components.html_concurrency_limit),
+    jev_base_url: components.jev_base_url.trim(),
+    jev_model_name: components.jev_model_name.trim(),
     jev_api_key: components.jev_api_key.trim(),
   };
 }
@@ -651,15 +656,7 @@ const initialState: SettingsPageState = {
     ...imageProviderDefaults.jinlong,
   },
   imageModelProfiles: createDefaultImageModelProfiles(),
-  components: {
-    file_parser: {
-      provider: 'local',
-      mineru_token: '',
-    },
-    mermaid_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
-    html_concurrency_limit: DEFAULT_COMPONENT_CONCURRENCY_LIMIT,
-    jev_api_key: '',
-  },
+  components: normalizeComponentsState(),
   general: {
     developer_mode: false,
     developer_token_stats_auto_open: false,
@@ -1184,15 +1181,15 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
     }
   };
 
-  // 仅测试当前 Jev 密钥草稿，不保存配置。
+  // 测试当前 Jev 配置草稿，不保存配置。
   const testJevConfig = async () => {
-    const apiKey = state.components.jev_api_key.trim();
+    const { jev_base_url: baseUrl, jev_model_name: modelName, jev_api_key: apiKey } = state.components;
     setTestingJev(true);
     try {
-      await window.yibiao!.ai.testJev(apiKey);
-      showToast('Jev API Key 测试成功', 'success');
+      await window.yibiao!.ai.testJev({ baseUrl, modelName, apiKey });
+      showToast('Jev 测试成功', 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Jev API Key 测试失败', 'error');
+      showToast(error instanceof Error ? error.message : 'Jev 测试失败', 'error');
     } finally {
       setTestingJev(false);
     }
@@ -2524,9 +2521,47 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
           <div className="settings-group-title">Jev</div>
           <div className="settings-list">
             <div className="settings-row">
+              <label className="settings-row-copy" htmlFor="jev-base-url"><strong>Base URL</strong></label>
+              <InputWithAction
+                id="jev-base-url"
+                type="text"
+                value={state.components.jev_base_url}
+                disabled={testingJev}
+                onChange={(event) => setState((prev) => ({
+                  ...prev,
+                  components: { ...prev.components, jev_base_url: event.target.value },
+                }))}
+                actionLabel="重置"
+                actionDisabled={testingJev || state.components.jev_base_url === jevDefaults.baseUrl}
+                onAction={() => setState((prev) => ({
+                  ...prev,
+                  components: { ...prev.components, jev_base_url: jevDefaults.baseUrl },
+                }))}
+              />
+            </div>
+            <div className="settings-row">
+              <label className="settings-row-copy" htmlFor="jev-model-name"><strong>模型名称</strong></label>
+              <InputWithAction
+                id="jev-model-name"
+                type="text"
+                value={state.components.jev_model_name}
+                disabled={testingJev}
+                onChange={(event) => setState((prev) => ({
+                  ...prev,
+                  components: { ...prev.components, jev_model_name: event.target.value },
+                }))}
+                actionLabel="重置"
+                actionDisabled={testingJev || state.components.jev_model_name === jevDefaults.modelName}
+                onAction={() => setState((prev) => ({
+                  ...prev,
+                  components: { ...prev.components, jev_model_name: jevDefaults.modelName },
+                }))}
+              />
+            </div>
+            <div className="settings-row">
               <label className="settings-row-copy" htmlFor="jev-api-key"><strong>API Key</strong></label>
-              <div className="settings-control-with-action">
-                <input
+              <div className="settings-control-with-action is-single-action">
+                <InputWithAction
                   id="jev-api-key"
                   type="password"
                   value={state.components.jev_api_key}
@@ -2536,8 +2571,9 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                     ...prev,
                     components: { ...prev.components, jev_api_key: event.target.value },
                   }))}
+                  actionLabel="获取"
+                  onAction={openJevApiKeyPage}
                 />
-                <button type="button" className="inline-action" onClick={openJevApiKeyPage}>获取</button>
                 <button
                   type="button"
                   className="inline-action"

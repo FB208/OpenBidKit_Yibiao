@@ -1,0 +1,4 @@
+{
+  "baseUrl": "https://api.typesafe.ai/v1/systemone",
+  "modelName": "jev-latest"
+}

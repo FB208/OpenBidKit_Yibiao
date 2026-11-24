@@ -31,12 +31,12 @@ function splitJevSegments(markdown) {
 // 判断完整原文的单、多标段；Jev 不可用的部分由普通文本模型接手。
 async function detectBidSectionMode(markdown, aiService, signal) {
   const config = aiService.getConfig();
-  const apiKey = config.components.jev_api_key;
+  const { jev_base_url: baseUrl, jev_model_name: modelName, jev_api_key: apiKey } = config.components;
   let textInputs = [markdown];
   if (apiKey) {
     const segments = splitJevSegments(markdown);
     const results = await Promise.allSettled(segments.map((state) => aiService.requestJevNoul({
-      apiKey, state, question: sectionQuestion, signal,
+      baseUrl, modelName, apiKey, state, question: sectionQuestion, signal,
     })));
     signal.throwIfAborted();
     const unexpected = results.find((result) => result.status === 'rejected' && !result.reason?.isAiRequestError);
