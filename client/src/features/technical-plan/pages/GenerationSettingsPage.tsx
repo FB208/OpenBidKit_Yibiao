@@ -119,10 +119,10 @@ const globalFactsModeSummaryLabels: Record<GlobalFactsMode, string> = {
   placeholder: '放着我来',
 };
 const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: string }> = [
-  { value: 'none', label: '不要' },
-  { value: 'light', label: '少量' },
-  { value: 'moderate', label: '适中' },
-  { value: 'heavy', label: '大量' },
+  { value: 'none', label: '无表格' },
+  { value: 'light', label: '20%' },
+  { value: 'moderate', label: '40%' },
+  { value: 'heavy', label: '不设上限' },
 ];
 const imageModelStatusLabels: Record<ImageModelStatus, string> = {
   untested: '未测试',
