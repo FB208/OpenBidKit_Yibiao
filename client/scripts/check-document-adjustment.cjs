@@ -42,15 +42,17 @@ function parseSteps(args) {
   return steps;
 }
 
+// 读取投标文件调整测试专用的文本模型配置。
 function readEnvTest() {
   const file = path.resolve(CLIENT, '..', '.env.test');
   const values = {};
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^\s*([\w.]+)\s*=\s*(.*)\s*$/);
-    if (match) values[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+    const match = line.match(/^\s*(TEXT_API_KEY|TEXT_BASE_URL|TEXT_MODEL_NAME)\s*=(.*)$/);
+    if (match) values[match[1]] = match[2].trim().replace(/^(['"])(.*)\1$/, '$2');
   }
-  if (!values.api_key || !values.base_url || !values.model_name) throw new Error('.env.test 缺少 api_key、base_url 或 model_name');
-  return values;
+  const missing = ['TEXT_API_KEY', 'TEXT_BASE_URL', 'TEXT_MODEL_NAME'].filter((key) => !values[key]);
+  if (missing.length) throw new Error(`请在 .env.test 填写：${missing.join(', ')}`);
+  return { api_key: values.TEXT_API_KEY, base_url: values.TEXT_BASE_URL, model_name: values.TEXT_MODEL_NAME };
 }
 
 // 只复制业务数据和 Agent 运行环境；清掉样本里的调整会话和失败现场，模型配置换成测试模型并清空其他密钥。
