@@ -99,10 +99,10 @@ function isResponseFormatUnsupported(message) {
   ].some((marker) => normalized.includes(marker));
 }
 
-function createModuleDeveloperLogger(app, config, moduleName, request = {}) {
+// 将业务任务信息交给共用模块日志。
+function createModuleDeveloperLogger(app, moduleName, request = {}) {
   return createDeveloperLogger({
     app,
-    config,
     moduleName,
     name: request.name || request.logTitle || moduleName,
     meta: request.meta || {},
@@ -1562,7 +1562,7 @@ async function chatWithConfig(app, config, request) {
   };
   const requestId = createRequestId();
   const logTitle = resolveAiLogTitle(request, '文本请求');
-  const rawLog = createAiRawLog(app, config, requestId, logTitle);
+  const rawLog = createAiRawLog(app, requestId, logTitle);
   const requestMode = normalizeTextRequestMode(config);
   let requestBody = createChatRequestBody(config, preparedRequest, { stream: requestMode === 'stream' });
   let responseData = null;
@@ -1571,7 +1571,7 @@ async function chatWithConfig(app, config, request) {
   const timeoutMs = normalizeRequestTimeoutMs(request);
 
   try {
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat-pending',
@@ -1604,7 +1604,7 @@ async function chatWithConfig(app, config, request) {
       throw new Error('模型输出达到长度上限被截断，本次结果未保存。可在设置-文本模型中提高输出长度上限后重试。');
     }
     const content = result.content || '';
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat',
@@ -1628,7 +1628,7 @@ async function chatWithConfig(app, config, request) {
       trackAiRequest(app, config, { ai_request_type: 'text' });
       analyticsTracked = true;
     }
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat-error',
@@ -1670,13 +1670,13 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
   ensureMultimodalEnabled(config, requestBody.messages);
   const requestMode = requestBody.stream ? 'stream' : 'normal';
   const logTitle = resolveAiLogTitle(request, 'Pi Agent');
-  const rawLog = createAiRawLog(app, config, requestId, logTitle);
+  const rawLog = createAiRawLog(app, requestId, logTitle);
   const rawAttempt = rawLog?.beginAttempt();
   let responseData = null;
   let analyticsTracked = false;
 
   try {
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat-pending',
@@ -1699,7 +1699,7 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
     recordTextTokenStats(config, result?.usage);
     trackAiRequest(app, config, { ai_request_type: 'text', usage: result?.usage });
     analyticsTracked = true;
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat',
@@ -1723,7 +1723,7 @@ async function runAgentChatCompletionWithConfig(app, config, request) {
       recordTextTokenStats(config, null);
       trackAiRequest(app, config, { ai_request_type: 'text' });
     }
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'chat-error',
@@ -1766,7 +1766,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
   );
 
   try {
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-test-pending',
@@ -1810,7 +1810,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
       throw createAiResponseDataError(getOpenAICompatibleImageFailureMessage(responseData, `${meta.label}生图测试未返回图片数据`), responseData);
     }
 
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-test',
@@ -1840,7 +1840,7 @@ async function testOpenAICompatibleImageModel(app, config, provider) {
     const errorMessage = error?.name === 'AbortError'
       ? provider === 'official' ? '官方生图测试超时，请稍后重试' : IMAGE_MODEL_TEST_TIMEOUT_MESSAGE
       : error?.message || '生图模型测试失败';
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-test-error',
@@ -1878,7 +1878,7 @@ async function testGoogleImageModel(app, config) {
   let responseData = null;
 
   try {
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-test-pending',
@@ -1909,7 +1909,7 @@ async function testGoogleImageModel(app, config) {
       throw createAiResponseDataError('Google AI Studio 生图测试未返回图片数据', responseData);
     }
 
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-test',
@@ -1935,7 +1935,7 @@ async function testGoogleImageModel(app, config) {
       trackAiRequest(app, config, { ai_request_type: 'image' });
     }
     const errorMessage = error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || '生图模型测试失败';
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-test-error',
@@ -1970,7 +1970,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
   let analyticsTracked = false;
 
   try {
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-pending',
@@ -2007,7 +2007,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
     }
 
     const saved = saveGeneratedImage(app, image);
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image',
@@ -2024,7 +2024,7 @@ async function generateOpenAICompatibleImage(app, config, request, provider) {
       trackAiRequest(app, config, { ai_request_type: 'image' });
       analyticsTracked = true;
     }
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-error',
@@ -2053,7 +2053,7 @@ async function generateGoogleImage(app, config, request) {
   let analyticsTracked = false;
 
   try {
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-pending',
@@ -2088,7 +2088,7 @@ async function generateGoogleImage(app, config, request) {
       buffer: Buffer.from(inlineData.data, 'base64'),
       mime_type: inlineData.mimeType || inlineData.mime_type || 'image/png',
     });
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image',
@@ -2105,7 +2105,7 @@ async function generateGoogleImage(app, config, request) {
       trackAiRequest(app, config, { ai_request_type: 'image' });
       analyticsTracked = true;
     }
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image-error',
@@ -2483,7 +2483,7 @@ async function runComfyUIImageGeneration(app, config, request, options = {}) {
   try {
     const template = await resolveComfyUIWorkflowTemplate(baseUrl, imageConfig, { signal: request.signal });
     const workflow = buildComfyUIImageWorkflow(template.workflow, prompt, size);
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: logExtra.pendingType || 'image-pending',
@@ -2520,7 +2520,7 @@ async function runComfyUIImageGeneration(app, config, request, options = {}) {
     );
 
     if (options.returnRawImage) {
-      writeAiLog(app, config, {
+      writeAiLog(app, {
         request_id: requestId,
         log_title: logTitle,
         type: logExtra.successType || 'image',
@@ -2535,7 +2535,7 @@ async function runComfyUIImageGeneration(app, config, request, options = {}) {
     }
 
     const saved = saveGeneratedImage(app, image);
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: 'image',
@@ -2552,7 +2552,7 @@ async function runComfyUIImageGeneration(app, config, request, options = {}) {
       trackAiRequest(app, config, { ai_request_type: 'image' });
     }
     const errorMessage = options.isTest && error?.name === 'AbortError' ? IMAGE_MODEL_TEST_TIMEOUT_MESSAGE : error?.message || 'ComfyUI 生图失败';
-    writeAiLog(app, config, {
+    writeAiLog(app, {
       request_id: requestId,
       log_title: logTitle,
       type: logExtra.errorType || 'image-error',
@@ -2823,14 +2823,14 @@ function createAiService({ app, configStore }) {
       return Boolean(configStore.load()?.developer_mode);
     },
 
+    // 技术方案任务使用固定的日志目录。
     createTechnicalPlanDeveloperLogger(request) {
-      const config = configStore.load();
-      return createModuleDeveloperLogger(app, config, 'technical-plan', request);
+      return createModuleDeveloperLogger(app, 'technical-plan', request);
     },
 
+    // 其他受管任务按模块创建诊断日志。
     createDeveloperLogger(moduleName, request) {
-      const config = configStore.load();
-      return createModuleDeveloperLogger(app, config, moduleName, request);
+      return createModuleDeveloperLogger(app, moduleName, request);
     },
 
     async generateImage(request) {

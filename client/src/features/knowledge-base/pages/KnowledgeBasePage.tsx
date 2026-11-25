@@ -1707,7 +1707,7 @@ function KnowledgeAnalysisView({ document, snapshot, startingMatching, onStartMa
 
       {snapshot?.debug_log_path && (
         <div className="knowledge-analysis-debug-log">
-          <strong>开发者日志</strong>
+          <strong>日志目录</strong>
           <code>{snapshot.debug_log_path}</code>
         </div>
       )}

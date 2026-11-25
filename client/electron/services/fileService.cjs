@@ -526,12 +526,12 @@ async function replaceMatchesAsync(text, pattern, createReplacement) {
   return parts.join('');
 }
 
+// 按当前解析器配置解析文档并记录诊断过程。
 async function parseDocumentWithConfig(app, filePath, config, options = {}) {
   const startedAt = Date.now();
   const parser = resolveFileParser(config, filePath);
   const developerLogger = createDeveloperLogger({
     app,
-    config,
     moduleName: 'file-parser',
     name: path.basename(filePath || 'document'),
     meta: summarizeParserForLog(parser, options),

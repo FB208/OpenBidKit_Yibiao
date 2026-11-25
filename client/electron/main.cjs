@@ -7,6 +7,7 @@ const { setupAutoUpdate, checkAndDownloadUpdate, triggerUpdateDownload, isUpdate
 const { getConfigFilePath, getCredentialLibraryDir, getGeneratedImagesDir, getGpuStartupProbePath, getImportedImagesDir, getNoticeCacheDir } = require('./utils/paths.cjs');
 const { createNoticeMediaResponse } = require('./services/noticeMediaResponse.cjs');
 const { ensureDiagnosisSource } = require('./services/diagnosisSourceService.cjs');
+const { startLogCleanup } = require('./utils/logRetention.cjs');
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const iconPath = path.join(__dirname, '../assets/icon.ico');
@@ -527,6 +528,7 @@ app.whenReady().then(() => {
       createMainWindow();
     }
   });
+  startLogCleanup(app);
 });
 
 app.on('child-process-gone', (_event, details) => {

@@ -293,14 +293,6 @@ function normalizeContentConcurrency(value) {
   return Math.max(1, Number.isFinite(concurrency) ? Math.round(concurrency) : DEFAULT_TEXT_CONCURRENCY_LIMIT);
 }
 
-function isDeveloperModeEnabled(aiService) {
-  try {
-    return Boolean(aiService?.isDeveloperMode?.());
-  } catch {
-    return false;
-  }
-}
-
 function textHash(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 }
@@ -1457,7 +1449,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
   const imageQuantity = storedPlan.contentGenerationOptions.imageQuantity;
   const aiConfig = aiService.getConfig ? aiService.getConfig() : {};
   const contentConcurrency = normalizeContentConcurrency(aiConfig.concurrency_limit);
-  const developerModeEnabled = isDeveloperModeEnabled(aiService);
   const tableRequirement = normalizeTableRequirement(generationOptions.tableRequirement ?? generationOptions.table_requirement);
   let maxTables = maxTablesForRequirement(tableRequirement, leaves.length);
   const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(storedPlan);
@@ -1731,14 +1722,6 @@ async function runContentGenerationTask({ aiService, agentService, workspaceStor
       eventPatch,
       { skipWorkspaceReload: true },
     );
-  }
-
-  function appendDeveloperLog(message) {
-    if (!developerModeEnabled) {
-      return;
-    }
-    logs = [...logs, message];
-    publishTaskUpdate({ status: 'running', progress: progressFor(leaves, sections), logs, stats: statsSnapshot() });
   }
 
   if (contentStats.phase === 'planning' && !completedStages.has('planning')) reportWorkflowProgress({ step: 'preparing', label: '正在准备知识资料和编排输入' });

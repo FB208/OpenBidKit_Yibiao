@@ -13,6 +13,7 @@ const {
   getImportedImagesDir,
   getKnowledgeBaseDir,
   getLicenseFilePath,
+  getLogsDir,
   getOfficialApiSessionFilePath,
   getOfficialRechargeQrCachePath,
   getOpenXmlJobsDir,
@@ -131,7 +132,7 @@ async function resolveUpdaterCacheDir() {
 function createStorageSpaceService({ app, db, taskService, agentService, openXmlHelperService, isUpdateCacheInUse }) {
   const userDataDir = getUserDataPath(app);
   const workspaceDir = getWorkspaceDir(app);
-  const logsDir = path.dirname(getAiLogsDir(app));
+  const logsDir = getLogsDir(app);
   const updatesDir = path.join(userDataDir, 'updates');
   const piTempDir = createPiEnvironmentLayout(app).tempDir;
   const updaterCacheDirPromise = resolveUpdaterCacheDir();
@@ -254,13 +255,13 @@ function createStorageSpaceService({ app, db, taskService, agentService, openXml
     {
       id: 'ai-logs',
       label: 'AI 请求日志',
-      description: '开发者模式下记录的每次 AI 请求',
+      description: '本机记录的 AI 请求和响应摘要',
       collect: () => listChildren(getAiLogsDir(app)),
     },
     {
       id: 'developer-logs',
-      label: '其他开发日志',
-      description: '开发者模式下各功能模块的运行日志',
+      label: '其他诊断日志',
+      description: 'AI 接口原始记录和功能模块诊断日志',
       collect: async () => (await listChildren(logsDir)).filter((entryPath) => normalizePathKey(entryPath) !== normalizePathKey(getAiLogsDir(app))),
     },
     {

@@ -246,14 +246,6 @@ function countOutlineContentMetrics(items = []) {
   };
 }
 
-function loadDeveloperConfig(configStore) {
-  try {
-    return configStore?.load?.() || {};
-  } catch {
-    return {};
-  }
-}
-
 function sanitizeFilename(value) {
   return String(value || '标书文档')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
@@ -2746,7 +2738,8 @@ async function buildDocxBuffer(payload, options = {}) {
   return result.buffer;
 }
 
-function createExportService({ configStore, openXmlHelperService, getTechnicalPlanExport } = {}) {
+// 装配 Word 导出和诊断日志。
+function createExportService({ openXmlHelperService, getTechnicalPlanExport } = {}) {
   return {
     // 导出与后台写任务互斥；正式导出的预检和真实转换错误交给独立调整任务。
     async exportWord(payload = {}, onProgress) {
@@ -2762,7 +2755,6 @@ function createExportService({ configStore, openXmlHelperService, getTechnicalPl
         const stats = countOutlineStats(Array.isArray(payload.outline) ? payload.outline : []);
         const developerLogger = createDeveloperLogger({
           app,
-          config: loadDeveloperConfig(configStore),
           moduleName: 'export',
           name: 'word-export',
           meta: {

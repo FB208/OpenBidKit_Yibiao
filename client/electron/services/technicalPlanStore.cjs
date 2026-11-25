@@ -558,7 +558,6 @@ function createTechnicalPlanStore({ app, db, fileService, agentService, taskLogS
   const workspaceDir = path.dirname(path.dirname(tenderMarkdownPath));
   const tenderOriginalLogger = createDeveloperLogger({
     app,
-    config: configStore?.load?.() || {},
     moduleName: 'technical-plan',
     name: 'tender-original-files',
   });

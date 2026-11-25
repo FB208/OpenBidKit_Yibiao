@@ -18,8 +18,7 @@ function serializeRawLogError(error) {
 }
 
 // 同一请求的原始数据按时间追加到独立文件；日志异常不影响模型调用。
-function createAiRawLog(app, config, requestId, logTitle) {
-  if (!config?.developer_mode) return null;
+function createAiRawLog(app, requestId, logTitle) {
   const fileName = buildAiLogFileName({ request_id: requestId, log_title: logTitle }).replace(/\.json$/, '.jsonl');
   const filePath = path.join(getAiRawLogsDir(app), fileName);
   const startedAt = Date.now();

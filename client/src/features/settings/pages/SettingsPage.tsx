@@ -1854,7 +1854,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>开发者模式</strong>
-                <span>会打乱既有工作流，生成大量日志占用磁盘空间，<strong>非专业人士请勿开启</strong></span>
+                <span>会改变部分工作流，<strong>非专业人士请勿开启</strong></span>
               </div>
               <AppSwitch checked={state.general.developer_mode} onCheckedChange={(checked) => updateDeveloperMode(checked)} />
             </label>
@@ -1899,7 +1899,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 <div className="settings-row">
                   <div className="settings-row-copy">
                     <strong>配置文件夹</strong>
-                    <span>打开本机配置、工作区缓存和开发者日志所在目录</span>
+                    <span>打开本机配置、工作区缓存和诊断日志所在目录</span>
                   </div>
                   <div className="settings-action-cell">
                     <button type="button" className="inline-action" onClick={openConfigFolder}>

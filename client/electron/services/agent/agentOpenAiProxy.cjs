@@ -3,7 +3,7 @@ const net = require('node:net');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('../../utils/paths.cjs');
-const { enqueueJsonLine } = require('../../utils/silentFileLog.cjs');
+const { enqueueDailyJsonLine } = require('../../utils/silentFileLog.cjs');
 const { getAiRequestActivity, runWithAiRequestActivity, notifyAiResponse } = require('../../utils/aiRequestActivity.cjs');
 const {
   markAiRequestError,
@@ -81,18 +81,14 @@ function createPromptHash(body) {
   }));
 }
 
-function appendProxyDeveloperLog(app, config, runtimeMeta, payload) {
-  if (!config?.developer_mode) return;
-
+// 按天记录代理请求摘要，不影响代理链路。
+function appendProxyDeveloperLog(app, runtimeMeta, payload) {
   try {
     const logDir = getDeveloperLogsDir(app, runtimeMeta.logModule);
-    const fileName = `${new Date().toISOString().slice(0, 10)}.jsonl`;
-    enqueueJsonLine(path.join(logDir, fileName), {
-      created_at: new Date().toISOString(),
-      ...payload,
-    });
+    const at = new Date().toISOString();
+    enqueueDailyJsonLine(path.join(logDir, 'proxy.jsonl'), at, { created_at: at, ...payload });
   } catch {
-    // 开发日志不能影响主流程。
+    // 日志不能影响主流程。
   }
 }
 
@@ -757,7 +753,7 @@ function createUsageCapturingStream(source, onDone, options = {}) {
 function recordAgentAiSuccess({ app, config, runtimeMeta, requestId, requestBody, response, responseData, content, usage, startedAt, stream, attempt, diagnostics }) {
   const normalizedUsage = normalizeTokenUsage(usage);
 
-  appendProxyDeveloperLog(app, config, runtimeMeta, {
+  appendProxyDeveloperLog(app, runtimeMeta, {
     request_id: requestId,
     type: 'chat',
     stream: Boolean(stream),
@@ -787,7 +783,7 @@ function recordAgentAiSuccess({ app, config, runtimeMeta, requestId, requestBody
 
 function recordAgentAiFailure({ app, config, runtimeMeta, requestId, requestBody, error, response, responseData, usage, startedAt, attempt, diagnostics }) {
   const errorMessage = safeErrorMessage(error);
-  appendProxyDeveloperLog(app, config, runtimeMeta, {
+  appendProxyDeveloperLog(app, runtimeMeta, {
     request_id: requestId,
     type: 'chat-error',
     attempt,
@@ -1058,7 +1054,7 @@ async function requestAgentChatCompletion({ app, aiService, runtimeMeta, openAiB
             activity: true,
             meta: { request_id: requestId, attempt, queue_wait_ms: queueWaitMs },
           });
-          appendProxyDeveloperLog(app, config, runtimeMeta, {
+          appendProxyDeveloperLog(app, runtimeMeta, {
             request_id: requestId,
             type: 'chat-pending',
             stream: Boolean(requestBody.stream),

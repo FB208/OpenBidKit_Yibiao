@@ -51,12 +51,9 @@ function buildAiLogFileName(payload) {
   return `${requestId}-${logTitle}.json`;
 }
 
-function writeAiLog(app, config, payload) {
+// 按请求 ID 写入或更新 AI 请求摘要。
+function writeAiLog(app, payload) {
   try {
-    if (!config?.developer_mode) {
-      return;
-    }
-
     const logsDir = getAiLogsDir(app);
     const logTitle = sanitizeAiLogTitle(payload.log_title);
     const logPayload = {

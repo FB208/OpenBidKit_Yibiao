@@ -120,7 +120,7 @@ function createServices() {
   const licenseService = service('licenseService.cjs').createLicenseService({ app, configStore });
   const agentService = service('agentService.cjs').createAgentService({ app, configStore, aiService, licenseService, autoConfirmationService });
   const fileService = service('fileService.cjs').createFileService({ app, configStore });
-  const openXmlHelperService = service('openXmlHelperService.cjs').createOpenXmlHelperService({ app, configStore });
+  const openXmlHelperService = service('openXmlHelperService.cjs').createOpenXmlHelperService({ app });
   const sqliteDatabase = service('sqliteDatabase.cjs').createSqliteDatabase(app, { onStatus: () => {} });
   const db = sqliteDatabase.db;
   const taskLogStore = service('taskLogStore.cjs').createTaskLogStore({ db });

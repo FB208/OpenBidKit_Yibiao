@@ -1,7 +1,7 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDeveloperLogsDir } = require('./paths.cjs');
-const { enqueueJsonLine } = require('./silentFileLog.cjs');
+const { enqueueDailyJsonLine, enqueueJsonLine } = require('./silentFileLog.cjs');
 
 const MAX_LOG_TITLE_LENGTH = 64;
 
@@ -44,10 +44,6 @@ function createNoopDeveloperLogger() {
   return { enabled: false, filePath: '', logId: '', write() {} };
 }
 
-function normalizeDeveloperConfig(config) {
-  return config && typeof config === 'object' ? config : {};
-}
-
 function compactErrorMessage(error) {
   return String(error?.message || error || '')
     .replace(/\s+/g, ' ')
@@ -55,12 +51,8 @@ function compactErrorMessage(error) {
     .slice(0, 500);
 }
 
-function createDeveloperLogger({ app, config, moduleName, name, meta } = {}) {
-  const normalizedConfig = normalizeDeveloperConfig(config);
-  if (!normalizedConfig.developer_mode) {
-    return createNoopDeveloperLogger();
-  }
-
+// 创建固定文件或按天追加的模块诊断日志。
+function createDeveloperLogger({ app, moduleName, name, meta, daily = false } = {}) {
   const scope = sanitizeDeveloperLogModule(moduleName);
   const logName = sanitizeDeveloperLogTitle(name || scope);
   const logId = createDeveloperLogId();
@@ -68,23 +60,21 @@ function createDeveloperLogger({ app, config, moduleName, name, meta } = {}) {
   let filePath = '';
   try {
     const logsDir = getDeveloperLogsDir(app, scope);
-    filePath = path.join(logsDir, buildDeveloperLogFileName({ log_id: logId, log_title: logName }));
+    const fileName = daily ? `${scope}.jsonl` : buildDeveloperLogFileName({ log_id: logId, log_title: logName });
+    filePath = path.join(logsDir, fileName);
   } catch {
     return createNoopDeveloperLogger();
   }
 
+  // 统一保留事件字段，按日模式用同一时间选择文件。
   function write(event, payload = {}) {
     try {
-      const entry = {
-        at: new Date().toISOString(),
-        scope,
-        log_id: logId,
-        event: String(event || 'event'),
-        ...payload,
-      };
-      enqueueJsonLine(filePath, entry);
+      const at = new Date().toISOString();
+      const entry = { at, scope, log_id: logId, event: String(event || 'event'), ...payload };
+      if (daily) enqueueDailyJsonLine(filePath, at, entry);
+      else enqueueJsonLine(filePath, entry);
     } catch {
-      // 开发者日志不能影响主流程。
+      // 日志不能影响主流程。
     }
   }
 

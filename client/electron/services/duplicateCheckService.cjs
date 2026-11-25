@@ -2216,14 +2216,6 @@ function summarizeContentExtractionResults(results = []) {
   };
 }
 
-function loadDeveloperConfig(configStore) {
-  try {
-    return configStore?.load?.() || {};
-  } catch {
-    return {};
-  }
-}
-
 function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) {
   function analysisProgress(value) {
     if (!value) return 0;
@@ -2778,7 +2770,6 @@ function createDuplicateCheckService({ app, configStore, workspaceStore } = {}) 
       const tenderFiles = getTenderFilesFromPayload(payload);
       const developerLogger = createDeveloperLogger({
         app,
-        config: loadDeveloperConfig(configStore),
         moduleName: 'duplicate-check',
         name: 'duplicate-analysis',
         meta: {

@@ -33,6 +33,7 @@ function enqueueFileOperation(filePath, operation) {
         fileOperationTails.delete(target.queueKey);
       }
     });
+    return current;
   } catch {
     // 诊断日志不能影响主流程。
   }
@@ -82,13 +83,37 @@ function enqueueJsonReplace(filePath, payload, options = {}) {
   }
 }
 
-// 在已有写入完成后异步删除日志文件。
-function enqueueLogRemoval(filePath) {
-  enqueueFileOperation(filePath, (targetPath) => fs.rm(targetPath, { force: true }));
+// 根据同一条记录的 UTC 时间计算分日文件名。
+function getDailyLogPath(baseFilePath, at) {
+  const ext = path.extname(baseFilePath);
+  return `${baseFilePath.slice(0, -ext.length)}.${at.slice(0, 10)}${ext}`;
+}
+
+// 按天追加仍走普通日志的文件队列。
+function enqueueDailyJsonLine(baseFilePath, at, entry) {
+  enqueueJsonLine(getDailyLogPath(baseFilePath, at), entry);
+}
+
+// 在已有写入后删除日志；定时清理只删扫描后未更新的文件。
+async function enqueueLogRemoval(filePath, snapshot) {
+  return (await enqueueFileOperation(filePath, async (targetPath) => {
+    if (snapshot) {
+      const stats = await fs.lstat(targetPath).catch((error) => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      });
+      if (!stats) return true;
+      if (!stats.isFile() || stats.mtimeMs !== snapshot.mtimeMs || stats.size !== snapshot.size) return false;
+    }
+    await fs.rm(targetPath, { force: true });
+    return true;
+  })) === true;
 }
 
 module.exports = {
+  enqueueDailyJsonLine,
   enqueueJsonLine,
   enqueueJsonReplace,
   enqueueLogRemoval,
+  getDailyLogPath,
 };

@@ -358,7 +358,7 @@ function createHelperRunner({ app, writeLog, ensureExecutable, name }) {
 }
 
 /** 拉起 Open XML 助手，按任务目录提交动作并等待完成信号。 */
-function createOpenXmlHelperService({ app, configStore } = {}) {
+function createOpenXmlHelperService({ app } = {}) {
   let debugBuildPromise = null;
   let previewAssetPromise = null;
   let previewActive = null;
@@ -369,9 +369,9 @@ function createOpenXmlHelperService({ app, configStore } = {}) {
   const previewCache = new Map();
   const logger = createDeveloperLogger({
     app,
-    config: configStore?.load?.() || {},
     moduleName: 'openxml-helper',
     name: 'openxml-helper',
+    daily: true,
   });
 
   function writeLog(event, payload = {}) {

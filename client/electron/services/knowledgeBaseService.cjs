@@ -3,9 +3,9 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { dialog } = require('electron');
-const { getKnowledgeBaseDir } = require('../utils/paths.cjs');
+const { getDeveloperLogsDir, getKnowledgeBaseDir } = require('../utils/paths.cjs');
 const { deleteImportedImageBatches } = require('../utils/importedImages.cjs');
-const { enqueueJsonLine, enqueueLogRemoval } = require('../utils/silentFileLog.cjs');
+const { enqueueDailyJsonLine, enqueueLogRemoval, getDailyLogPath } = require('../utils/silentFileLog.cjs');
 const { splitUserTextByContextLimit } = require('../utils/userTextSplitter.cjs');
 const { warmPromptPrefix } = require('../utils/promptPrefixCache.cjs');
 const { parseDocumentWithConfig } = require('./fileService.cjs');
@@ -45,12 +45,33 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// 知识库文档日志共用的模块目录。
 function getDebugLogsDir(app) {
-  return path.join(app.getPath('userData'), 'logs', 'knowledge-base');
+  return getDeveloperLogsDir(app, 'knowledge-base');
 }
 
+// 返回用于日切的文档日志基路径。
 function getDebugLogPath(app, documentId) {
   return path.join(getDebugLogsDir(app), `${safeName(documentId)}.jsonl`);
+}
+
+// 删除文档时清理所属的日志，文件夹内多个文档只列一次日志目录。
+async function removeDocumentLogs(app, documentIds) {
+  const docNames = new Set(documentIds.map((id) => safeName(id)));
+  const dir = getDebugLogsDir(app);
+  const at = now();
+  const todayPaths = new Set(documentIds.map((id) => getDailyLogPath(getDebugLogPath(app, id), at)));
+  for (const filePath of todayPaths) void enqueueLogRemoval(filePath);
+
+  try {
+    for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl') || !docNames.has(entry.name.split('.', 1)[0])) continue;
+      const filePath = path.join(dir, entry.name);
+      if (!todayPaths.has(filePath)) void enqueueLogRemoval(filePath);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn('[knowledge-base] 清理文档日志失败', error.message);
+  }
 }
 
 function fromRelative(baseDir, relativePath) {
@@ -1057,22 +1078,13 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
     }
   }
 
+  // 按文档和 UTC 日期追加诊断记录。
   function debugLog(documentId, event, payload = {}) {
-    if (!isDeveloperMode()) {
-      return;
-    }
-
     try {
-      const logPath = getDebugLogPath(app, documentId || 'unknown');
-      const entry = {
-        time: now(),
-        event,
-        ...payload,
-      };
-      enqueueJsonLine(logPath, entry);
-      console.info(`[knowledge-base] ${event}`, entry);
+      const time = now();
+      enqueueDailyJsonLine(getDebugLogPath(app, documentId || 'unknown'), time, { time, event, ...payload });
     } catch {
-      // 调试日志不能影响知识库主流程。
+      // 诊断日志不能影响知识库主流程。
     }
   }
 
@@ -2101,10 +2113,10 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       for (const document of documentsToDelete) {
         deleteImportedImageBatches(app, `knowledge-${document.id}`);
         fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
-        enqueueLogRemoval(getDebugLogPath(app, document.id));
       }
       fs.rmSync(fromRelative(baseDir, path.join('folders', folderId)), { recursive: true, force: true });
       knowledgeBaseStore.deleteFolder(folderId);
+      if (documentsToDelete.length) void removeDocumentLogs(app, documentsToDelete.map((document) => document.id));
       return { success: true, message: `已删除文件夹“${folder.name}”及 ${documentsToDelete.length} 个文档` };
     },
 
@@ -2116,8 +2128,8 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
 
       deleteImportedImageBatches(app, `knowledge-${documentId}`);
       fs.rmSync(fromRelative(baseDir, document.document_dir), { recursive: true, force: true });
-      enqueueLogRemoval(getDebugLogPath(app, documentId));
       knowledgeBaseStore.deleteDocument(documentId);
+      void removeDocumentLogs(app, [documentId]);
       return { success: true, message: `已删除文档“${document.file_name}”` };
     },
 
@@ -2277,8 +2289,9 @@ function createKnowledgeBaseService({ app, aiService, configStore, knowledgeBase
       return knowledgeBaseStore.readItems(documentId);
     },
 
+    // 开发者分析页指向文档日志所在目录，不扫描分日文件。
     readAnalysis(documentId) {
-      return knowledgeBaseStore.readAnalysis(documentId, { debugLogPath: isDeveloperMode() ? getDebugLogPath(app, documentId) : '' });
+      return knowledgeBaseStore.readAnalysis(documentId, { debugLogPath: isDeveloperMode() ? getDebugLogsDir(app) : '' });
     },
   };
 }

@@ -154,17 +154,24 @@ function getCredentialLibraryDir(app) {
   return path.join(getWorkspaceDir(app), 'credential-library');
 }
 
+// 本地日志写入和保留策略共用的根目录。
+function getLogsDir(app) {
+  return path.join(getUserDataPath(app), 'logs');
+}
+
+// AI 请求摘要目录。
 function getAiLogsDir(app) {
-  return path.join(getUserDataPath(app), 'logs', 'ai');
+  return getDeveloperLogsDir(app, 'ai');
 }
 
 // 完整接口日志与现有 AI 摘要日志分目录保存。
 function getAiRawLogsDir(app) {
-  return path.join(getUserDataPath(app), 'logs', 'ai-raw');
+  return getDeveloperLogsDir(app, 'ai-raw');
 }
 
+// 模块日志目录。
 function getDeveloperLogsDir(app, moduleName) {
-  return path.join(getUserDataPath(app), 'logs', String(moduleName || 'app'));
+  return path.join(getLogsDir(app), String(moduleName || 'app'));
 }
 
 function getTechnicalPlanLogsDir(app) {
@@ -282,6 +289,7 @@ module.exports = {
   getImportedImagesDir,
   getKnowledgeBaseDir,
   getLicenseFilePath,
+  getLogsDir,
   getNoticeCacheDir,
   getOfficialApiSessionFilePath,
   getOfficialRechargeQrCachePath,
